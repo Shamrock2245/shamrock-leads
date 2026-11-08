@@ -416,6 +416,69 @@ async def test_recovery_rejects_unbound_or_unsafe_submitter(monkeypatch, listed,
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "embed_src",
+    [
+        "https://evil.example/s/TEST-SLUG",
+        "http://sign.shamrockbailbonds.biz/s/TEST-SLUG",
+        "https://sign.shamrockbailbonds.biz/s/TEST-SLUG?next=1",
+        "https://sign.shamrockbailbonds.biz/s/TEST-SLUG#section",
+        "https://user:pass@sign.shamrockbailbonds.biz/s/TEST-SLUG",
+        "https://sign.shamrockbailbonds.biz/s/OTHER-SLUG",
+        "https://sign.shamrockbailbonds.biz/pay",
+        "https://pay.swipesimple.com/s/TEST-SLUG",
+    ],
+)
+async def test_initial_hostile_embed_src_is_not_a_signing_url(monkeypatch, embed_src):
+    """The create response is an external effect. A bad embed is not signed,
+    not compensated, and not submitted again.
+    """
+    db = FakeDB()
+    _install(monkeypatch, db)
+    db["bond_cases"].docs.append(_case())
+    calls = {"n": 0}
+    external_id = f"{_packet_id()}:indemnitor"
+
+    async def _create(self, **kwargs):
+        calls["n"] += 1
+        return {
+            "id": 55,
+            "submitters": [{
+                "id": 9,
+                "submission_id": 55,
+                "role": "indemnitor",
+                "slug": "TEST-SLUG",
+                "email": EMAIL,
+                "phone": PHONE,
+                "status": "awaiting",
+                "external_id": external_id,
+                "embed_src": embed_src,
+            }],
+        }
+
+    async def _list(self, **kwargs):
+        return _page([_open_row(embed_src=embed_src, submission_id=55)])
+
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.create_submission", _create)
+    monkeypatch.setattr("dashboard.services.docuseal_service.DocuSealService.list_submitters", _list)
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        await _build()
+    with pytest.raises(RuntimeError, match="recovery_required"):
+        await _build()
+    packet = db["paperwork_packets"].docs[0]
+    assert calls["n"] == 1
+    assert packet["status"] == "recovery_required"
+    assert packet["status"] != "compensated"
+    assert packet["docuseal_started"] is True
+    assert packet.get("sign_url", "") == ""
+    assert packet["recovery_reason"] == "sign_url_rejected"
+    stored = packet["docuseal_submitters"][0]
+    assert stored["sign_url"] == ""
+    assert stored.get("embed_src", "") == ""
+    assert embed_src not in str(packet)
+
+
+@pytest.mark.asyncio
 async def test_provider_lookup_error_does_not_create_another_submission(monkeypatch):
     db = FakeDB()
     _install(monkeypatch, db)

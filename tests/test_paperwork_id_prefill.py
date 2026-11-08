@@ -1029,6 +1029,102 @@ async def test_different_phone_does_not_overwrite_the_role(monkeypatch):
     assert len(db["bond_cases"].docs) == 1
 
 
+@pytest.mark.asyncio
+async def test_foreign_booking_phone_does_not_restamp_the_chain(monkeypatch):
+    """The real ensure_match_bondcase is not stubbed.
+
+    A client booking whose stored indemnitor phone differs must not change
+    the match, case source or status, or POA assignment.
+    """
+    import copy
+    from dashboard.services.staff_chain_service import ensure_self_serve_bondcase
+
+    foreign = "2395550199"
+    booking = "TEST-BOOK-1"
+    db = FakeDB()
+    _install(monkeypatch, db)
+    db["arrests"].docs.append({
+        "_id": "arr-test",
+        "booking_number": booking,
+        "first_name": "Test",
+        "last_name": "Defendant",
+        "county": "Lee",
+    })
+    db["active_bonds"].docs.append({
+        "_id": "act-test",
+        "booking_number": booking,
+        "case_number": "TEST-CASE-1",
+        "surety_id": "palmetto",
+        "bond_amount": 5000,
+        "premium": 500,
+        "poa_number": "TEST-POA-1",
+        "poa_numbers": ["TEST-POA-1"],
+        "indemnitor_name": NAME,
+        "indemnitor_email": EMAIL,
+        "indemnitor_phone": foreign,
+        "bond_case_id": "BC-TEST-FOREIGN",
+        "status": "active",
+    })
+    db["bond_cases"].docs.append({
+        "_id": "BC-TEST-FOREIGN",
+        "bond_case_id": "BC-TEST-FOREIGN",
+        "booking_number": booking,
+        "case_number": "TEST-CASE-1",
+        "surety_id": "palmetto",
+        "bond_amount": 5000,
+        "premium": 500,
+        "poa_number": "TEST-POA-1",
+        "poa_numbers": ["TEST-POA-1"],
+        "indemnitor_id": "IND-FOREIGN",
+        "indemnitor_name": NAME,
+        "indemnitor_phone": foreign,
+        "indemnitor_email": EMAIL,
+        "indemnitor_dob": DOB,
+        "match_id": "MATCH-FOREIGN",
+        "status": "active",
+        "source": "staff",
+    })
+    db["matches"].docs.append({
+        "_id": "MATCH-FOREIGN",
+        "match_id": "MATCH-FOREIGN",
+        "bond_case_id": "BC-TEST-FOREIGN",
+        "status": "validated",
+        "source": "staff",
+    })
+    db["poa_inventory"].docs.append({
+        "_id": "poa-test",
+        "poa_number": "TEST-POA-1",
+        "status": "assigned",
+        "bond_case_id": "BC-TEST-FOREIGN",
+        "assigned_to": "BC-TEST-FOREIGN",
+    })
+    before = {
+        "case": copy.deepcopy(db["bond_cases"].docs[0]),
+        "active": copy.deepcopy(db["active_bonds"].docs[0]),
+        "match": copy.deepcopy(db["matches"].docs[0]),
+        "poa": copy.deepcopy(db["poa_inventory"].docs[0]),
+        "audits": len(db["audit_events"].docs),
+    }
+    result = await ensure_self_serve_bondcase(
+        phone=PHONE,
+        name=NAME,
+        dob=DOB,
+        role="indemnitor",
+        email=EMAIL,
+        identity=_indemnitor_fields(),
+        scan_blob={"scan_id": "SCAN-TEST-FOREIGN", "full_name": NAME, "dl_state": "FL"},
+        booking_number=booking,
+        actor="auto",
+    )
+    assert result["success"] is False
+    assert result["error"] == "role_phone_mismatch"
+    assert db["bond_cases"].docs[0] == before["case"]
+    assert db["active_bonds"].docs[0] == before["active"]
+    assert db["matches"].docs[0] == before["match"]
+    assert db["poa_inventory"].docs[0] == before["poa"]
+    assert db["audit_events"].docs[before["audits"]:] == []
+
+
 def test_failed_scan_stays_and_a_later_success_can_verify(monkeypatch):
     db = FakeDB()
     db["portal_pins"].docs.append(_session())

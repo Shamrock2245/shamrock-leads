@@ -778,15 +778,21 @@ def _complete_submitter_page(payload: Any) -> Tuple[List[Dict[str, Any]], str]:
 
 
 def _provider_sign_url(item: Dict[str, Any], origin: str) -> str:
-    """Use embed_src when DocuSeal sent one. Otherwise build it from the slug.
+    """Accept a provider URL only when it is the configured signing link.
 
-    A present embed_src that is not the approved origin is rejected. It is
-    not replaced with a constructed URL.
+    ``normalize_create_response`` copies ``embed_src`` into ``sign_url`` and
+    drops ``embed_src``. A present ``embed_src`` or ``sign_url`` is that
+    provider value. If it is not HTTPS on the configured origin with path
+    ``/s/{slug}``, it is rejected. It is not replaced with a URL built from
+    the slug. The slug is used only when the provider sent no URL.
     """
+    if item.get("embed_rejected") is True:
+        return ""
     embed = _text(item.get("embed_src"))
+    provided = embed or _text(item.get("sign_url"))
     slug = _text(item.get("slug"))
-    if embed:
-        return approved_docuseal_sign_url(embed, slug=slug, origin=origin)
+    if provided:
+        return approved_docuseal_sign_url(provided, slug=slug, origin=origin)
     if not slug:
         return ""
     return approved_docuseal_sign_url(
@@ -1346,7 +1352,19 @@ async def _build_self_serve_packet_locked(
         if recovered:
             return recovered
         raise RuntimeError("recovery_required") from None
-    submitters = list(result.get("submitters") or [])
+    submitters = []
+    origin = _text(getattr(svc, "public_url", "")) or _docuseal_origin()
+    for item in result.get("submitters") or []:
+        if not isinstance(item, dict):
+            continue
+        cleaned = dict(item)
+        provided = _text(cleaned.get("embed_src")) or _text(cleaned.get("sign_url"))
+        approved = _provider_sign_url(cleaned, origin)
+        cleaned["sign_url"] = approved
+        if provided and not approved:
+            cleaned["embed_src"] = ""
+            cleaned["embed_rejected"] = True
+        submitters.append(cleaned)
     from dashboard.services.paperwork_signers import normalize_role
 
     want = normalize_role(role)
@@ -1362,9 +1380,9 @@ async def _build_self_serve_packet_locked(
     if _signer_blocked(signer):
         await _mark_packet_build_failed(packet_id)
         raise RuntimeError("signer_not_verified")
-    url = _safe_sign_url((signer or {}).get("sign_url") or "")
+    url = _provider_sign_url(signer, origin) if isinstance(signer, dict) else ""
     if not url:
-        await _mark_recovery_required(packet_id, case_id, "signing_link_missing")
+        await _mark_recovery_required(packet_id, case_id, "sign_url_rejected")
         raise RuntimeError("recovery_required")
     try:
         await _before_url_save(packet_id)

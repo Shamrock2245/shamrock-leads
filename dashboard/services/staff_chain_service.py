@@ -1039,9 +1039,11 @@ async def ensure_self_serve_bondcase(
 ) -> Dict[str, Any]:
     """Reuse one BondCase for this phone + name + DOB, or insert one draft.
 
-    ``ensure_match_bondcase`` runs first when a booking number is already
-    on the session. It still refuses a missing arrest, POA, premium, or bond
-    amount, and this function does not fill those in. A miss inserts one
+    A booking already on the session is checked against the stored role
+    phone, name, and date of birth before ``ensure_match_bondcase``. A
+    mismatch does not call that function. A booking that passes is offered
+    to it. It still refuses a missing arrest, POA, premium, or bond amount,
+    and this function does not fill those in. A miss inserts one
     draft with ``source=self_serve`` and ``status=pending_owner_review``.
     A second call with the same dedupe key returns the same case.
     """
@@ -1094,6 +1096,19 @@ async def _ensure_self_serve_locked(
     walk_in_channel: str = "",
 ) -> Dict[str, Any]:
     if booking:
+        blocked = await _booking_role_blocked(
+            booking=booking,
+            role=role,
+            phone=phone,
+            name=name,
+            dob=dob,
+        )
+        if blocked:
+            return {
+                "success": False,
+                "error": blocked,
+                "case_created": False,
+            }
         chain_kwargs: Dict[str, Any] = {
             "booking_number": booking,
             "actor_email": actor or "auto",
@@ -1160,6 +1175,37 @@ async def _ensure_self_serve_locked(
     )
 
 
+def _role_slot_block(case: Dict[str, Any], role: str, phone: str, name: str, dob: str) -> str:
+    """Empty when this role slot can take the signer. No writes."""
+    from dashboard.services.identity_verification_service import names_match
+
+    _person_id, slot_phone, slot_name, slot_dob = _slot_identity(case, role)
+    if slot_phone and _digits_phone(slot_phone) != _digits_phone(phone):
+        return "role_phone_mismatch"
+    if slot_name and not names_match(name, slot_name):
+        return "role_conflict"
+    if slot_dob and _normalize_dob(slot_dob) != dob:
+        return "role_conflict"
+    return ""
+
+
+async def _booking_role_blocked(*, booking: str, role: str, phone: str, name: str, dob: str) -> str:
+    """Stop before ensure_match_bondcase when the booking's role slot disagrees.
+
+    That ensure restamps match, case source and status, and POA assignment.
+    The phone gate has to run first, on the stored booking, for every role.
+    """
+    booking_query = {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
+    for collection in ("bond_cases", "active_bonds"):
+        doc = await get_collection(collection).find_one(booking_query)
+        if not isinstance(doc, dict):
+            continue
+        blocked = _role_slot_block(doc, role, phone, name, dob)
+        if blocked:
+            return blocked
+    return ""
+
+
 async def _attach_signer_to_case(
     case: Dict[str, Any],
     *,
@@ -1175,21 +1221,17 @@ async def _attach_signer_to_case(
     reused: bool,
     actor: str,
 ) -> Dict[str, Any]:
-    from dashboard.services.identity_verification_service import names_match
-
     case_id = _case_id_of(case)
-    slot_id, slot_phone, slot_name, slot_dob = _slot_identity(case, role)
-    if slot_phone and _digits_phone(slot_phone) != _digits_phone(phone):
+    blocked = _role_slot_block(case, role, phone, name, dob)
+    if blocked:
         return {
             "success": False,
-            "error": "role_phone_mismatch",
+            "error": blocked,
             "bond_case_id": case_id,
             "case_created": False,
         }
-    if slot_name and not names_match(name, slot_name):
-        return {"success": False, "error": "role_conflict", "bond_case_id": case_id, "case_created": False}
-    if slot_dob and _normalize_dob(slot_dob) != dob:
-        return {"success": False, "error": "role_conflict", "bond_case_id": case_id, "case_created": False}
+    _person_id, slot_phone, slot_name, slot_dob = _slot_identity(case, role)
+    slot_id = _person_id
     now_iso = _now_iso()
     person_id = slot_id or str(uuid.uuid4())
     patch = _identity_patch(role, identity, phone, email)
