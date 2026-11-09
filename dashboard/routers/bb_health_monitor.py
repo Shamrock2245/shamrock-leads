@@ -359,12 +359,27 @@ async def api_update_bb_url(request: Request):
         from dashboard.extensions import BB_CONFIG_API_KEY, update_bb_url, BB_SERVERS
         data = await request.json() or {}
 
-        # Auth check: admin session, machine auth, or configured BB_CONFIG_API_KEY
-        provided_key = (data.get("api_key") or request.headers.get("X-BB-Config-Key") or "").strip()
+        # Auth check: admin session, machine auth, or configured BB_CONFIG_API_KEY.
+        # A non-string body key is an attempt, not a parse error: fail closed.
+        # A valid admin session or machine key still wins over a junk body key.
+        raw_key = data.get("api_key")
+        if raw_key is None or raw_key == "":
+            raw_key = request.headers.get("X-BB-Config-Key") or ""
         configured_key = (os.getenv("BB_CONFIG_API_KEY") or BB_CONFIG_API_KEY or "").strip()
-        key_valid = bool(configured_key and provided_key and secrets.compare_digest(provided_key, configured_key))
+        key_valid = False
+        presented = False
+        if isinstance(raw_key, str):
+            provided_key = raw_key.strip()
+            presented = bool(provided_key)
+            key_valid = bool(
+                configured_key
+                and provided_key
+                and secrets.compare_digest(provided_key, configured_key)
+            )
+        elif raw_key is not None:
+            presented = True
         if not (session_is_admin(request) or is_machine_auth_valid(request) or key_valid):
-            if not configured_key and provided_key:
+            if not configured_key and presented:
                 return JSONResponse({"success": False, "error": "BB_CONFIG_API_KEY not configured"}, status_code=503)
             return JSONResponse({"success": False, "error": "Unauthorized"}, status_code=401)
 
