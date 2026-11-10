@@ -47,10 +47,16 @@ legacy_bp = APIRouter(prefix="/api", tags=["legacy"])
 
 @legacy_bp.post("/config/bluebubbles-url")
 async def update_bluebubbles_url(request: Request):
-    """Accept a new ngrok tunnel URL from the iMac sync script."""
-    auth = request.headers.get("X-API-Key", "")
-    if auth != BB_CONFIG_API_KEY:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    """Accept a new tunnel URL from the iMac sync script (requires BB_CONFIG_API_KEY, machine auth, or admin session)."""
+    from dashboard.auth.pin_middleware import is_machine_auth_valid, session_is_admin
+
+    auth = (request.headers.get("X-API-Key") or request.headers.get("X-BB-Config-Key") or "").strip()
+    configured_key = (os.getenv("BB_CONFIG_API_KEY") or BB_CONFIG_API_KEY or "").strip()
+    if not (session_is_admin(request) or is_machine_auth_valid(request)):
+        if not configured_key:
+            return JSONResponse({"error": "BB_CONFIG_API_KEY not configured"}, status_code=503)
+        if not auth or not secrets.compare_digest(auth, configured_key):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
 
     body = await request.json()
     suffix = body.get("suffix", "0178")

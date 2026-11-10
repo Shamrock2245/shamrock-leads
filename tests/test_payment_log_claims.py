@@ -940,8 +940,13 @@ def test_clean_poller_charge_posts_leads_note_once_after_commit(db, slack_alerts
 PHONE = "2395550199"
 
 
-def _receipt_app(db, monkeypatch):
+def _receipt_app(db, monkeypatch, live=True):
     monkeypatch.setenv("ENV", "development")
+    # Receipt texts follow SWIPESIMPLE_DISPATCH_LIVE. The send is mocked.
+    if live:
+        monkeypatch.setenv("SWIPESIMPLE_DISPATCH_LIVE", "1")
+    else:
+        monkeypatch.delenv("SWIPESIMPLE_DISPATCH_LIVE", raising=False)
     monkeypatch.delenv("SWIPESIMPLE_WEBHOOK_SECRET", raising=False)
     monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
     monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
@@ -1760,3 +1765,22 @@ def test_booking_regex_is_escaped(db, slack_alerts):
     recorded = _run(_record(db, kind="charge", booking="BK.1"))
     assert recorded["stamped"] is False
     assert db["bond_cases"].docs[0].get("last_transaction_id") is None
+
+
+def test_bb_receipt_is_dry_run_when_dispatch_live_is_off(db, monkeypatch):
+    """SWIPESIMPLE_DISPATCH_LIVE off: the charge records, no receipt is claimed or sent."""
+    db["bond_cases"].docs.append(_bond())
+    sent = []
+
+    async def fake_send(phone, message):
+        sent.append(phone)
+
+    app = _receipt_app(db, monkeypatch, live=False)
+    with patch("dashboard.services.bb_client.send_message_universal", new=fake_send), \
+            patch("dashboard.routers.events.publish_event", new=AsyncMock()):
+        response = _post_paid_webhook(app, "TX-DRY")
+    assert response.status_code == 200
+    assert sent == []
+    claim = db["payment_log_claims"].docs[0]
+    assert claim.get("bb_receipt_sent") is not True
+    assert claim.get("bb_receipt_sending") is not True
