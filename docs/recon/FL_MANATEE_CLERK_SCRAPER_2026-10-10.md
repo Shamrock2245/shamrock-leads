@@ -40,8 +40,29 @@ The site keeps search state per session (a second case-type search in the same s
 - DOB and sex come only from the detail Defendant whose name matches the list row (the list prints LAST, FIRST and the detail FIRST LAST, so names are compared as token sets). No match, or more than one, leaves them blank (counted in the run log, never names), so a co-defendant's identity is never copied.
 - `case_number` = the Clerk case number; `obts_number` = the OBTS number(s); `filing_date`, `case_status`, `source_label` are their own fields.
 - Charges verbatim (Charge Description, joined with ` | `); `charge_details` per charge: offense date, statute, description, degree, citation, Arrest Summons Served.
-- `Arrest_Date` = the earliest Arrest Summons Served date; `Booking_Date` stays blank (a filing date is not a booking date). `Court_Date` / `Court_Time` / `Court_Location` = the next scheduled event. `Agency` = the arresting agency code(s). `Status` = `Unknown` (custody is not published). `Detail_URL` is blank (the detail is a token POST).
+- `Arrest_Date` = the earliest Arrest Summons Served date; `Booking_Date` stays blank (a filing date is not a booking date). `Court_Date` / `Court_Time` / `Court_Location` = the next scheduled event. `Agency` = the arresting agency code(s). `Status` = `""` (custody is not published; #256, 2026-10-16. `MongoWriter` leaves a blank status out of `$set`, so it never overwrites a stored one). `Detail_URL` is blank (the detail is a token POST).
 - **Bond** only from the Bonds table's bond rows (sum of Active Amount). The `N Bond(s)` totals row is ignored, so the common `0 Bond(s) / $0.00` shape gives `""` (unknown), never `"0"`. A bond row the Clerk publishes as `$0.00` counts (`"0.00"`).
+
+## Leads Ops write smoke (hydrate-ready check, 2026-11-03)
+
+The scraper is on main (#177, #256) and registered every 120 min in `main.py`. Health stays `unverified` until this smoke passes and a separate PR adds the source state. It runs once a VPS deploy goes through, wherever Leads Ops has `MONGODB_URI`:
+
+```
+python main.py "Manatee Clerk"          # copy the final 'Result: {...}' log line
+python scripts/smoke_evidence_check.py --county "Manatee Clerk" --state FL --hours 24
+```
+
+`smoke_evidence_check.py` prints aggregates only, with no names, DOBs, keys, case numbers or OBTS numbers. Expected:
+- `booking_number_blank` is 0, and `booking_key_internal` == `internal_key_valid` == `internal_key_matches_case` == `rows`. Each stored key is the sha256 of that row's normalised case number. `booking_number_shapes` shows only `mc_case_v1:<sha256>`. The key and the case number are not printed.
+- `with_case_number` == `rows`, and `booking_equals_case_number` is 0.
+- `with_obts_number` counts the rows where the Clerk lists an OBTS.
+- `with_charges` == `rows`.
+- Bond buckets are only `empty`, `zero`, or `positive`, and they sum to `rows`. `negative` and `text` fail the gate.
+- `with_booking_date` is 0, and status is blank. Only `None` or a blank string counts as blank. `0`, `false`, `[]` and `{}` are `malformed` and fail the gate.
+
+These are enforced (Codex 11/4, tightened 11/5 and 11/10): for `--county "Manatee Clerk"` the check adds `identity_gate` (`pass`/`fail`) and `identity_problems` (counter names only), and a failed gate prints `result: identity_failed` and exits 3. A padded state such as `--state " FL "` still selects the gate. A key that is a valid `mc_case_v1` digest of a different case number does not count. `scripts/build_recon_matrix.py` applies the same gate (`IDENTITY_GATES` in `smoke_evidence_check.py`) to any `passed` Manatee Clerk write row, for both `prod_mongo_aggregate` and `one_shot_run`. A missing or non-integer counter fails closed. `booking_number_shapes` must be exactly `{mc_case_v1:<sha256>: rows}` (a valid Miami-Dade `md_dedupe_v2` key must not certify this smoke). `status_buckets` must be exactly `{"": rows}` with an integer count.
+
+Record the result as the `passed` (or `failed`) Manatee Clerk row in `docs/recon/smoke_evidence.json`.
 
 ## Live read (2026-10-10, from the agent box)
 
