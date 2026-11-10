@@ -1317,7 +1317,7 @@ async def portal_id_ocr(request: Request):
     extracted = result.get("extracted") if isinstance(result.get("extracted"), dict) else {}
     pushed = False
     scan_id = ""
-    if _self_serve_flag() and result.get("success") and extracted:
+    if _self_serve_flag() and session.get("auth_method") != "handoff" and result.get("success") and extracted:
         from dashboard.services.paperwork_self_serve import ocr_snapshot
 
         record = _id_upload_record(session, extracted, True)
@@ -1847,7 +1847,8 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
         session, denial = await _id_upload_session(req.session_token)
         if denial or session is None:
             return _id_upload_denied(denial or "token_invalid")
-        return await _self_serve_remaining_fields(session, req)
+        if session.get("auth_method") != "handoff":
+            return await _self_serve_remaining_fields(session, req)
 
     session = await _load_verified_session(req.session_token)
     if not session:

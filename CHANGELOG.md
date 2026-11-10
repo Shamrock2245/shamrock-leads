@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Portal handoff + self-serve prefill coexistence guard)
+
+### Fixed
+- **Handoff sessions (`auth_method == "handoff"`) stay on the bound handoff path when `PAPERWORK_SELF_SERVE_PREFILL=true`.** In `dashboard/routers/pin_portal.py`, `portal_id_ocr` and `portal_remaining_fields` now check `session.get("auth_method") != "handoff"` before taking the phone-based self-serve prefill branch, so enabling both `PAPERWORK_HANDOFF_ENABLED` and `PAPERWORK_SELF_SERVE_PREFILL` simultaneously preserves `append_signer_scan` and `save_handoff_fields` for Wix portal handoff sessions.
+- **Secrets audit manifest (`scripts/check_ecosystem_secrets.py`).** Added `SELF_INDEMNITOR_PIN` and `PAPERWORK_HANDOFF_SECRET` to `LEADS_RECOMMENDED` and `LEADS_API_KEY / PORTAL_HANDOFF_SECRET` to `PORTAL_DOCUMENTED`.
+
+### Tests
+- Added `test_handoff_ocr_and_remaining_fields_work_when_self_serve_prefill_is_enabled` in `tests/test_paperwork_handoff_token.py`.
+
 ## [Unreleased] — 2026-10-29 (auth hardening follow-ups: no hardcoded PIN, admin guards and SECRET_KEY fail closed)
 
 Merged onto main `e79aab52` (merge commit only). Payment, ID prefill, and scraper commits on main are unchanged. The fail-closed rules below still apply.

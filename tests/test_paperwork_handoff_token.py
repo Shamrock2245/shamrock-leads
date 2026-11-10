@@ -730,3 +730,39 @@ def test_concurrent_consume_is_single_use(monkeypatch):
     assert sorted(item["ok"] for item in results) == [False, True]
     assert len(db.rows("paperwork_handoff_jti")) == 1
     assert len([row for row in db.rows("portal_pins") if row.get("auth_method") == "handoff"]) == 1
+
+
+def test_handoff_ocr_and_remaining_fields_work_when_self_serve_prefill_is_enabled(monkeypatch):
+    """When both PAPERWORK_HANDOFF_ENABLED and PAPERWORK_SELF_SERVE_PREFILL are active,
+    handoff sessions (auth_method == 'handoff') must still route ID OCR and remaining-fields
+    through the bound handoff handlers rather than the phone-based self-serve prefill branch."""
+    _enable(monkeypatch)
+    monkeypatch.setenv("PAPERWORK_SELF_SERVE_PREFILL", "true")
+    db = _world(role="coindemnitor")
+    token = _token(role="coindemnitor", mode="add-cosigner")
+    scanned = AsyncMock(return_value={"success": True, "extracted": {"full_name": "TEST CO SIGNER", "success": True}})
+    docuseal = MagicMock()
+    docuseal.update_submitter = AsyncMock(return_value={"id": 8})
+    with _db_patch(db), \
+         patch("dashboard.services.id_scanner_service.IDScannerService.scan_id_image", scanned), \
+         patch("dashboard.services.docuseal_service.DocuSealService", return_value=docuseal):
+        opened = client.post("/api/portal/handoff/consume", json={
+            "ht": token, "role": "coindemnitor", "case": CASE,
+        }).json()
+        ocr_resp = client.post(
+            "/api/portal/id-ocr",
+            data={"session_token": opened["session_token"]},
+            files={"file": ("id.jpg", b"\xff\xd8\xff", "image/jpeg")},
+        )
+        assert ocr_resp.status_code == 200
+        assert ocr_resp.json()["success"] is True
+        saved = client.post("/api/portal/remaining-fields", json={
+            "session_token": opened["session_token"],
+            "scan_id": "SYNTHETIC-SCAN-ID",
+            "staff_review_acknowledged": True,
+            "fields": {"coindemnitor_name": "TEST CO SIGNER"},
+        })
+    assert saved.status_code == 200
+    assert saved.json()["signing_link"].endswith("/s/test-coindemnitor")
+    assert saved.json()["pushed_to_docuseal"] is True
+
