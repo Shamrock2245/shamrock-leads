@@ -197,6 +197,9 @@ class PriorReadFailed(Exception):
 PLACE_CONFLICT = "county_state_conflict"
 PLACE_NOT_REGISTERED = "county_not_in_registry"
 PLACE_PROBLEMS = frozenset({PLACE_CONFLICT, PLACE_NOT_REGISTERED})
+# An explicit county/state was given, but the booking already belongs to a
+# different arrest. Not a manual lead. Nothing is written.
+BOOKING_SCOPE_CONFLICT = "booking_scope_conflict"
 
 
 def place_problem(county: Any, state: Any) -> str:
@@ -320,15 +323,26 @@ async def _legacy_booking_only_docs(contacts: Any, identity: Dict[str, str]) -> 
     return found
 
 
-async def _booking_is_unique(arrests: Any, booking_number: str) -> bool:
-    """True only when exactly one arrest has this booking number. Unknown = False."""
+async def _booking_is_unique(arrests: Any, booking_number: str, identity: Dict[str, str]) -> bool:
+    """True only when exactly one arrest has this booking and it is this place.
+
+    A sole arrest in another county or state is not this identity. Unknown
+    (no arrests collection, a failed read, or a place that does not match)
+    is False, so the caller fails closed.
+    """
     if arrests is None:
         return False
     try:
         rows = await _find_list(arrests, {"booking_number": booking_number}, limit=2)
     except Exception:
         return False
-    return len([row for row in rows if isinstance(row, dict)]) == 1
+    rows = [row for row in rows if isinstance(row, dict)]
+    if len(rows) != 1:
+        return False
+    from dashboard.services.place_identity import place_from_doc, places_match
+
+    county, state = place_from_doc(rows[0])
+    return places_match(county, state, identity.get("county"), identity.get("state"))
 
 
 async def find_contact_doc(
@@ -349,7 +363,7 @@ async def find_contact_doc(
     legacy = await _legacy_booking_only_docs(contacts, identity)
     if not legacy:
         return None
-    if len(legacy) != 1 or not await _booking_is_unique(arrests, identity["booking_number"]):
+    if len(legacy) != 1 or not await _booking_is_unique(arrests, identity["booking_number"], identity):
         log.warning("[indemnitor_discovery] contacts write skipped code=%s", ContactsLegacyAmbiguous.code)
         raise ContactsLegacyAmbiguous()
     return legacy[0]
@@ -1991,6 +2005,25 @@ async def run_discovery(
             return _arrest_read_failed_result()
         if isinstance(found, dict):
             stored = dict(found)
+        elif county and state:
+            # Explicit scope missed. A booking that already exists under
+            # another county/state is not a manual lead. Codex 11/10 on #280.
+            try:
+                others = await _find_list(
+                    db["arrests"], {"booking_number": booking_number}, limit=1,
+                )
+            except Exception as exc:
+                log.warning("[indemnitor_discovery] arrest read failed code=%s error_type=%s",
+                            ARREST_READ_FAILED, type(exc).__name__)
+                return _arrest_read_failed_result()
+            if any(isinstance(row, dict) for row in others):
+                log.warning("[indemnitor_discovery] discovery refused code=%s", BOOKING_SCOPE_CONFLICT)
+                return {
+                    "cached": False,
+                    "contacts": [],
+                    "discovery_status": BOOKING_SCOPE_CONFLICT,
+                    "providers_run": [],
+                }
     # A resolved arrest's own identity fields win. Caller input (a drawer or
     # manual request, possibly stale) only fills a field the arrest does not
     # have, e.g. a MANUAL-* lead with no arrest row. A caller name never
@@ -2376,7 +2409,7 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
                 error = str(result.get("discovery_error") or "providers_failed")
                 retrying = await _mark_retry_or_failed(arrests, arrest, marker, error, now)
                 summary["retry" if retrying else "failed"] += 1
-            elif outcome in {"identity_ambiguous", ContactsLegacyAmbiguous.code, *PLACE_PROBLEMS}:
+            elif outcome in {"identity_ambiguous", BOOKING_SCOPE_CONFLICT, ContactsLegacyAmbiguous.code, *PLACE_PROBLEMS}:
                 # Cannot be resolved by retrying. Terminal, so a "running"
                 # marker is not re-claimed forever. Code only, no booking.
                 await _mark_terminal(arrests, arrest, str(outcome))

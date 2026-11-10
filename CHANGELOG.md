@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex 11/10 findings on #280)
+
+### Changed
+- **Merged `origin/main` at `12c64e8`.** Merge commit only. Main's optional GPS compose profile is taken as-is. This file had no conflict.
+
+### Fixed
+- **A booking-only contacts doc is adopted only when the unique arrest is that place (P1).** `_booking_is_unique` counted arrests and ignored county and state, so a scoped request could adopt a legacy contacts doc for a different arrest and a review could rewrite it onto the caller's identity. The sole arrest's place must match. A mismatch, a failed read, or more than one arrest fails closed (`contacts_legacy_ambiguous`) and nothing is written.
+- **An explicit scope that misses, while the booking exists elsewhere, is not a manual lead (P1).** `run_discovery` used the caller's name and address and wrote a new contacts doc. It now returns `booking_scope_conflict` with no providers and no write. The discover route answers 409. A booking with no arrest is still a manual lead. The Lee queue passes the claimed arrest, so arrest writes are unchanged.
+
+### Tests
+- `test_codex_1110_p1_*` in `tests/test_lee_indemnitor_discovery.py` (already on the CI list). Four fail on `adae38c`. The absent-booking guard passes on both.
+
 ## [Unreleased] — 2026-11-09 (merge origin/main into #280)
 
 ### Changed

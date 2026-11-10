@@ -879,6 +879,7 @@ window.SLProspective = (function () {
 
   function contactsErrorMessage(action, status, code) {
     if (code === 'county_and_state_required') return action + ' not done: more than one arrest has this booking number, so the county and state are required.';
+    if (code === 'booking_scope_conflict') return action + ' not done: this booking already belongs to a different county or state. Nothing was saved.';
     if (code === 'legacy_contacts_ambiguous') return action + ' not done: more than one stored contact record matches this booking. It needs manual review; nothing was saved.';
     if (code === 'stale_revision') return action + ' not done: the candidates changed since they were loaded. The list was reloaded; check it and try again.';
     if (code === 'audit_unavailable' || code === 'audit_failed') return action + ' not done: the audit record could not be saved, so the review was not applied. Try again shortly.';

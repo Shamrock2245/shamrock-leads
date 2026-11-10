@@ -3841,3 +3841,111 @@ async def test_codex_1107_p2_clerk_provider_still_queries_lee_florida(monkeypatc
     )
     assert any("matrix.leeclerk.org" in url for url in urls)
     assert any(row.get("source") == "lee_clerk_parties" for row in result["contacts"])
+
+
+@pytest.mark.asyncio
+async def test_codex_1110_p1_legacy_doc_requires_the_unique_arrest_place():
+    """A booking-only contacts doc is not adopted for a different county.
+
+    One Collier arrest plus a state-less contacts doc must not satisfy a
+    Lee, FL request, and a review must not rewrite that doc.
+    """
+    from dashboard.services.contact_discovery import ContactsLegacyAmbiguous, find_contact_doc
+
+    db = AsyncDB()
+    db.arrests = db["arrests"]
+    other = _booking()
+    other["county"] = "Collier"
+    db["arrests"].docs.append(other)
+    db["contacts"].docs.append({
+        "_id": "legacy",
+        "booking_number": "B-100",
+        "discovery_rev": 1,
+        "discovered_contacts": [{
+            "candidate_id": "c1", "name": "Jordan Sample", "review_status": "unreviewed",
+            "source": "prior_shamrock", "phone": "5550100100",
+        }],
+    })
+    before = copy.deepcopy(db["contacts"].docs)
+    with pytest.raises(ContactsLegacyAmbiguous):
+        await find_contact_doc(db["contacts"], {"state": "FL", "county": "Lee", "booking_number": "B-100"},
+                               arrests=db["arrests"])
+    assert db["contacts"].docs == before
+
+    # The matching place still adopts the legacy doc.
+    db["arrests"].docs[0]["county"] = "Lee"
+    found = await find_contact_doc(db["contacts"], {"state": "FL", "county": "Lee", "booking_number": "B-100"},
+                                   arrests=db["arrests"])
+    assert found["_id"] == "legacy"
+
+
+def test_codex_1110_p1_scoped_get_and_review_do_not_rewrite_the_other_arrest(monkeypatch):
+    db = AsyncDB()
+    db.arrests = db["arrests"]
+    other = _booking()
+    other["county"] = "Collier"
+    db["arrests"].docs.append(other)
+    db["contacts"].docs.append({
+        "_id": "legacy",
+        "booking_number": "B-100",
+        "discovery_rev": 1,
+        "discovered_contacts": [{
+            "candidate_id": "c1", "name": "Jordan Sample", "review_status": "unreviewed",
+            "source": "prior_shamrock",
+        }],
+    })
+    before = copy.deepcopy(db["contacts"].docs)
+    client = _review_client(monkeypatch, db, _STAFF)
+    got = client.get("/api/contacts/B-100?county=Lee&state=FL")
+    assert got.status_code == 409
+    assert got.json()["error"] == "legacy_contacts_ambiguous"
+    rev = client.post(_review_url("c1"), json={
+        "county": "Lee", "state": "FL", "decision": "approve", "rev": 1,
+    })
+    assert rev.status_code == 409
+    assert rev.json()["error"] == "legacy_contacts_ambiguous"
+    assert db["contacts"].docs == before
+
+
+@pytest.mark.asyncio
+async def test_codex_1110_p1_explicit_scope_conflict_is_not_a_manual_lead():
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    before_contacts = copy.deepcopy(db["contacts"].docs)
+    before_arrests = copy.deepcopy(db["arrests"].docs)
+    result = await run_discovery(
+        db, booking_number="B-100", full_name="Stale Person",
+        county="Collier", state="FL", address="999 Else Rd", force=True,
+    )
+    assert result["discovery_status"] == "booking_scope_conflict"
+    assert result["contacts"] == [] and result["providers_run"] == []
+    assert db["contacts"].docs == before_contacts
+    assert db["arrests"].docs == before_arrests
+
+
+def test_codex_1110_p1_discover_route_rejects_a_conflicting_scope(monkeypatch):
+    db = AsyncDB()
+    db["arrests"].docs.append(_booking())
+    before = copy.deepcopy(db["contacts"].docs)
+    client = _review_client(monkeypatch, db, _STAFF)
+    got = client.post("/api/contacts/discover", json={
+        "booking_number": "B-100", "full_name": "Stale Person",
+        "county": "Collier", "state": "FL",
+    })
+    assert got.status_code == 409
+    assert got.json()["error"] == "booking_scope_conflict"
+    assert db["contacts"].docs == before
+
+
+@pytest.mark.asyncio
+async def test_codex_1110_p1_absent_booking_still_uses_caller_identity():
+    """Guard: a booking with no arrest is still a manual lead."""
+    db = AsyncDB()
+    result = await run_discovery(
+        db, booking_number="MANUAL-9", full_name="Casey Sample",
+        county="Lee", state="FL", force=True,
+    )
+    assert result["discovery_status"] != "booking_scope_conflict"
+    assert db["contacts"].docs[0]["defendant_name"] == "Casey Sample"
+    assert db["contacts"].docs[0]["county"] == "Lee"
+    assert db["contacts"].docs[0]["state"] == "FL"

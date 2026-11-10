@@ -15,6 +15,7 @@ from dashboard.services.contact_discovery import (
     CandidateReviewError,
     ContactDiscoveryService,
     ContactsLegacyAmbiguous,
+    BOOKING_SCOPE_CONFLICT,
     PLACE_PROBLEMS,
     canonical_place,
     contact_identity,
@@ -61,6 +62,11 @@ async def discover_contacts(request: Request):
         if result.get("discovery_status") in PLACE_PROBLEMS:
             status = result["discovery_status"]
             return JSONResponse({"error": status, "discovery_status": status}, status_code=400)
+        if result.get("discovery_status") == BOOKING_SCOPE_CONFLICT:
+            return JSONResponse(
+                {"error": BOOKING_SCOPE_CONFLICT, "discovery_status": BOOKING_SCOPE_CONFLICT},
+                status_code=409,
+            )
         if result.get("discovery_status") == "identity_ambiguous":
             return JSONResponse(
                 {"error": "county_and_state_required", "discovery_status": "identity_ambiguous"},
