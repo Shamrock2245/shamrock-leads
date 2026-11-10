@@ -16,6 +16,9 @@
 
 ---
 
+## Codex 11/5 Manatee Clerk smoke (PR #308)
+- Write-smoke gate now requires Manatee-only `booking_number_shapes` (`mc_case_v1:<sha256>` only) and exact blank `status_buckets` `{"": rows}` with integer count. Miami-Dade keys and empty/zero/non-int blank buckets fail closed. Codex 11/10: `internal_key_matches_case` must equal `rows` (the stored key is the digest of that row's case number), and a padded state still selects the gate. Only `None` or a blank string counts as the blank status bucket; `0`, `false`, `[]` and `{}` are `malformed` and fail the gate. Bond buckets may only be `empty`, `zero`, or `positive` and must sum to `rows`. `--state Florida` is the same gate as `FL`. The row stays `requested`.
+
 ## Lee (FL) co-signer discovery queue (2026-10-29)
 
 PR #280. A new Lee (FL) booking is queued for co-signer discovery by an `indemnitor_discovery: queued` field in the arrest upsert's own `$setOnInsert`. There is no second write, thread, or wait, so the Lee write is never blocked or delayed. If building the marker fails, the error type is logged and the arrest is still written. Lee (GA/SC) and other counties are not queued.

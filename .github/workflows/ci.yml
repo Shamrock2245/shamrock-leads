@@ -281,6 +281,8 @@ jobs:
             tests/test_kiosk_privacy_and_confirm.py \
             tests/test_indemnitor_id_scan.py \
             tests/test_fastapi_starlette_upgrade.py \
+            tests/test_dependabot_config.py \
+            tests/test_prod_readiness_runbooks.py \
             tests/test_ingestion_log_wiring.py \
             tests/test_indemnitor_self_pay.py \
             tests/test_bb_config_key_fail_closed.py \

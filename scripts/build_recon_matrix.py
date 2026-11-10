@@ -44,6 +44,17 @@ REQUIRED_COLUMNS = [
 ]
 
 
+def _identity_gate(label: str, result: dict) -> list[str] | None:
+    """Per-source identity gate from scripts/smoke_evidence_check.py (pure)."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "smoke_evidence_check.py"
+    spec = importlib.util.spec_from_file_location("_smoke_evidence_check", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.identity_gate(label, result)
+
+
 def _table_rows(text: str) -> list[dict[str, str]]:
     lines = text.splitlines()
     for index, raw_header in enumerate(lines):
@@ -241,6 +252,13 @@ def _smoke_rows(path: Path | None, runtime_states: dict[str, str]) -> list[dict]
                                 f"{where}: a passed write needs status ok, a Mongo writer result "
                                 "and at least one new or updated row"
                             )
+                    problems = _identity_gate(label, result)
+                    if problems:
+                        # Codex 11/4 on #308: an internal-key source must prove
+                        # its identity counters whatever the method.
+                        raise RuntimeError(
+                            f"{where}: identity gate failed for {label}: " + "; ".join(problems)
+                        )
                 if kind == "relay_read":
                     if result.get("status") != "ok" or int(result.get("bookings") or 0) < 1:
                         raise RuntimeError(f"{where}: a passed relay read needs status ok and bookings >= 1")
