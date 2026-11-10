@@ -37,6 +37,31 @@ _STATE_VALUES = {
 }
 
 
+# The 67 Florida counties, matching the "(FL)" entries of
+# dashboard.extensions.REGISTERED_COUNTIES minus the non-county source scopes
+# (tests/test_lee_indemnitor_discovery.py checks they stay equal). Kept here,
+# pure, so callers that must stay import-light can check a county.
+FL_COUNTIES = (
+    "Alachua", "Baker", "Bay", "Bradford", "Brevard", "Broward", "Calhoun",
+    "Charlotte", "Citrus", "Clay", "Collier", "Columbia", "DeSoto", "Dixie",
+    "Duval", "Escambia", "Flagler", "Franklin", "Gadsden", "Gilchrist",
+    "Glades", "Gulf", "Hamilton", "Hardee", "Hendry", "Hernando", "Highlands",
+    "Hillsborough", "Holmes", "Indian River", "Jackson", "Jefferson",
+    "Lafayette", "Lake", "Lee", "Leon", "Levy", "Liberty", "Madison",
+    "Manatee", "Marion", "Martin", "Miami-Dade", "Monroe", "Nassau",
+    "Okaloosa", "Okeechobee", "Orange", "Osceola", "Palm Beach", "Pasco",
+    "Pinellas", "Polk", "Putnam", "Santa Rosa", "Sarasota", "Seminole",
+    "St. Johns", "St. Lucie", "Sumter", "Suwannee", "Taylor", "Union",
+    "Volusia", "Wakulla", "Walton", "Washington",
+)
+_FL_COUNTY_KEYS = frozenset(" ".join(c.lower().split()) for c in FL_COUNTIES)
+
+
+def fl_county_registered(name: Any) -> bool:
+    """True when ``name`` (bare, any case) is one of the 67 Florida counties."""
+    return " ".join(str(name or "").lower().split()) in _FL_COUNTY_KEYS
+
+
 def normalize_state(value: Any) -> str:
     raw = str(value or "").strip().upper()
     raw = re.sub(r"\s+", " ", raw)
