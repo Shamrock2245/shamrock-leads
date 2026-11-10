@@ -432,8 +432,13 @@ def _raise_if_conflict(rows: list, *, cents: int, status: Any, booking: str) -> 
         )
 
 
-async def _read_rows(db, txn_key: str, session=None, kind: Optional[str] = None) -> list:
-    rows = await _docs(db["payments"], {"transaction_id": txn_key}, session)
+async def _read_rows(
+    db, txn_key: str, session=None, kind: Optional[str] = None,
+    query: Optional[dict] = None,
+) -> list:
+    """Rows for ``txn_key``. ``query`` adds filters (the co-signer tenant scope)."""
+    flt = {**(query or {}), "transaction_id": txn_key}
+    rows = await _docs(db["payments"], flt, session)
     if kind is None:
         return rows
     return [row for row in rows if row_kind(row) == kind]
@@ -690,6 +695,202 @@ async def _stamp_bonds(db, booking: str, group: list, payment_update: dict, sess
     return audits
 
 
+PREMIUM_PAID_SOURCE = "payments_total"
+
+
+def _confirmed_premium_cents(group: list) -> Optional[int]:
+    """The one staff/auto-confirmed full premium across the case, else None."""
+    from dashboard.services.premium_confirmation_service import (
+        PREMIUM_CONFIRMED_AMOUNT_FIELD,
+        confirmation_complete,
+        non_negative_cents,
+    )
+
+    values = set()
+    for _name, doc in group:
+        if confirmation_complete(doc):
+            values.add(non_negative_cents(doc.get(PREMIUM_CONFIRMED_AMOUNT_FIELD)))
+    if len(values) != 1:
+        return None
+    cents = values.pop()
+    return cents if isinstance(cents, int) and cents > 0 else None
+
+
+async def _net_collected_cents(db, booking: str, session) -> int:
+    """Clean charges minus refunds recorded for this booking (cents).
+
+    A charge held for review does not count. Every refund is subtracted.
+    Failures count for nothing.
+    """
+    net = 0
+    for row in await _docs(db["payments"], {"booking_number": booking}, session):
+        # A plan installment is undone by rewriting that same row to
+        # ``reversed``. It is not a second refund row, so it counts as zero
+        # rather than a subtraction on top of a charge that no longer exists.
+        if (
+            str(row.get("type") or "").strip().lower() == "installment"
+            and str(row.get("status") or "").strip().lower() == "reversed"
+        ):
+            continue
+        kind = row_kind(row)
+        cents = row.get("amount_cents")
+        if not isinstance(cents, int) or isinstance(cents, bool):
+            cents = _row_cents(row)
+        if cents is None:
+            continue
+        if kind == "charge" and not row.get("needs_review"):
+            net += abs(cents)
+        elif kind == "refund":
+            net -= abs(cents)
+    return net
+
+
+def _down_payment_invoice_reference(extra: dict, booking: str) -> str:
+    """The down-payment invoice reference when this charge settles that invoice.
+
+    The down-payment invoice number is the booking. An installment reference
+    (``{booking}-I{n}``) does not settle it. A blank reference is not guessed.
+    """
+    custom = extra.get("custom_fields") if isinstance(extra.get("custom_fields"), dict) else {}
+    raw = extra.get("raw_payload") if isinstance(extra.get("raw_payload"), dict) else {}
+    raw_custom = raw.get("custom_fields") if isinstance(raw.get("custom_fields"), dict) else {}
+    reference = str(
+        extra.get("reference_id")
+        or custom.get("reference_id")
+        or raw.get("reference_id")
+        or raw_custom.get("reference_id")
+        or ""
+    ).strip()
+    booking = str(booking or "").strip()
+    if not reference or not booking or reference != booking or "-I" in reference:
+        return ""
+    return reference
+
+
+_SETTLED_INVOICE_STATUSES = frozenset({
+    "paid", "collected", "complete", "completed", "approved", "received",
+})
+
+
+async def _reopen_settled_invoice(db, booking: str, txn_key: str, session) -> None:
+    """Mark the down-payment invoice unsettled when its charge is reversed.
+
+    Writes ``settled_invoice_status: reversed`` so a historical
+    ``last_payment_status`` no longer keeps that invoice hidden. Does nothing
+    when the bond's settlement transaction is a different id.
+    """
+    if not booking or not txn_key:
+        return
+    groups = _logical_bond_groups(await _matching_bonds(db, booking, session))
+    if len(groups) != 1:
+        return
+    for name, doc in groups[0]:
+        settled_txn = str(doc.get("settled_invoice_transaction_id") or "").strip()
+        last_txn = str(doc.get("last_transaction_id") or "").strip()
+        if settled_txn:
+            if settled_txn != txn_key:
+                continue
+        elif last_txn != txn_key:
+            continue
+        elif str(doc.get("last_payment_status") or "").strip().lower() not in _SETTLED_INVOICE_STATUSES:
+            continue
+        number = str(
+            doc.get("settled_invoice_number")
+            or doc.get("swipesimple_invoice_number")
+            or booking
+        ).strip()
+        await db[name].update_one(
+            _bond_filter(booking, doc),
+            {"$set": {
+                "settled_invoice_number": number,
+                "settled_invoice_status": "reversed",
+                "settled_invoice_transaction_id": txn_key,
+            }},
+            **_sess(session),
+        )
+
+
+async def _refresh_premium_paid(db, booking: str, kind: str, txn_key: str, session) -> list:
+    """Set ``premium_paid`` once payments reach the full confirmed premium.
+
+    Writes ``bond_cases`` and the matching ``active_bonds`` mirror (one
+    logical case only; every write must match its document or the ones
+    already made are put back and nothing is reported). Idempotent: no
+    write when the flag already says the same thing. A refund that drops
+    the net below the premium reopens it; a charge never clears a flag
+    staff set. Returns one audit entry per document written.
+    """
+    if not booking:
+        return []
+    groups = _logical_bond_groups(await _matching_bonds(db, booking, session))
+    if len(groups) != 1:
+        return []
+    group = groups[0]
+    premium = _confirmed_premium_cents(group)
+    if premium is None:
+        return []
+    collected = await _net_collected_cents(db, booking, session)
+    paid = collected >= premium
+    now_iso = datetime.now(timezone.utc).isoformat()
+    changes = []
+    for name, doc in group:
+        current = doc.get("premium_paid") is True
+        if paid and not current:
+            update = {"$set": {
+                "premium_paid": True,
+                "premium_paid_at": now_iso,
+                "premium_paid_source": PREMIUM_PAID_SOURCE,
+                "premium_paid_transaction_id": txn_key,
+            }}
+        elif not paid and current and (
+            kind in REVERSAL_KINDS or doc.get("premium_paid_source") == PREMIUM_PAID_SOURCE
+        ):
+            update = {"$set": {
+                "premium_paid": False,
+                "premium_paid_reopened_at": now_iso,
+                "premium_paid_reopened_transaction_id": txn_key,
+            }}
+        else:
+            continue
+        changes.append((name, doc, update))
+    if not changes:
+        return []
+    done = []
+    for name, doc, update in changes:
+        result = await db[name].update_one(_bond_filter(booking, doc), update, **_sess(session))
+        if not _write_matched(result):
+            logger.warning("[payment_log] premium_paid write matched no document collection=%s", name)
+            for done_name, done_doc in done:
+                restore = {"$set": {"premium_paid": done_doc.get("premium_paid")}} \
+                    if "premium_paid" in done_doc else {"$unset": {"premium_paid": ""}}
+                await db[done_name].update_one(_bond_filter(booking, done_doc), restore, **_sess(session))
+            return []
+        done.append((name, doc))
+    return [
+        {
+            "collection": name,
+            "record_id": "" if doc.get("_id") is None else str(doc["_id"]),
+            "booking_number": booking,
+            "old_premium_paid": doc.get("premium_paid"),
+            "new_premium_paid": update["$set"]["premium_paid"],
+            "collected_cents": collected,
+            "premium_cents": premium,
+        }
+        for name, doc, update in changes
+    ]
+
+
+async def refresh_premium_paid(db, booking: str, kind: str, txn_key: str, session) -> list:
+    """Set or reopen ``premium_paid`` from collected payments.
+
+    Plan installment posting calls this inside its own transaction, after the
+    installment row is written. ``record_provider_payment`` calls the same
+    helper. A handled installment never reaches that recorder, so without
+    this call the last installment can leave ``premium_paid`` false.
+    """
+    return await _refresh_premium_paid(db, booking, kind, txn_key, session)
+
+
 async def _enrich_blank_charge(
     db, *, row: dict, txn_key: str, amount: float, status: str, booking: str,
     source: str, extra: dict, session,
@@ -777,6 +978,9 @@ async def _enrich_blank_charge(
     }
     if len(stamp_audits) > 1:
         audit["stamped_bonds"] = stamp_audits
+    premium_paid_change = await _refresh_premium_paid(db, booking, "charge", txn_key, session)
+    if premium_paid_change:
+        audit["premium_paid_change"] = premium_paid_change
     try:
         await db["audit_events"].insert_one(audit, **_sess(session))
     except DuplicateKeyError:
@@ -877,6 +1081,14 @@ async def _apply(
                 "last_transaction_id": txn_key,
                 "last_payment_source": source,
             }
+            # The down-payment invoice number is the booking. Record that
+            # this reference settled, separate from premium_paid (a financed
+            # balance can still be open).
+            reference = _down_payment_invoice_reference(extra, booking)
+            if reference and event_kind(status, None) == "charge":
+                payment_update["settled_invoice_number"] = reference
+                payment_update["settled_invoice_status"] = str(status or "approved").strip().lower()
+                payment_update["settled_invoice_transaction_id"] = txn_key
             try:
                 stamp_all = await _stamp_bonds(
                     db, booking, _logical_bond_groups(bonds)[0], payment_update, session,
@@ -932,6 +1144,7 @@ async def _apply(
             flag_booking = sibling_bookings[0]
         if flag_booking:
             bond_review = await _flag_bond(db, flag_booking, flag, session)
+            await _reopen_settled_invoice(db, flag_booking, txn_key, session)
         plan_id = _one_plan_id(siblings)
         if plan_id:
             plan_review = await _flag_plan(db, plan_id, flag, session)
@@ -974,6 +1187,13 @@ async def _apply(
     if plan_review:
         audit["plan_id"] = plan_review["plan_id"]
         audit["plan_review"] = plan_review
+    premium_paid_booking = booking if stamped else (flag_booking if bond_review else "")
+    if premium_paid_booking:
+        premium_paid_change = await _refresh_premium_paid(
+            db, premium_paid_booking, kind, txn_key, session,
+        )
+        if premium_paid_change:
+            audit["premium_paid_change"] = premium_paid_change
     try:
         await db["audit_events"].insert_one(audit, **_sess(session))
     except DuplicateKeyError:

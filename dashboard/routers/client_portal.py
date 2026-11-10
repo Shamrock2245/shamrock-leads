@@ -9,9 +9,13 @@ Routes:
   GET  /api/portal/<token>/status    — Case status (JSON)
   GET  /api/portal/<token>/payments  — Payment history (JSON)
   POST /api/portal/<token>/checkin   — Submit check-in (GPS + selfie)
-  GET  /api/portal/<token>/payment-link — SwipeSimple link
+  GET  /api/portal/<token>/payment-link — the bond's own verified invoice link
+                                       (never a static link; null → call us)
+  POST /api/portal/<token>/invoice-link — indemnitor self-pay: create or
+                                       return the bond's locked invoice link
 
-Staff-only (session-authed):
+Staff-only (staff session or machine key, checked in each route because
+pin_middleware leaves the /api/portal prefix open for the token routes):
   POST /api/portal/generate          — Generate a new portal token
   GET  /api/portal/tokens/<booking>  — List active tokens for a bond
   POST /api/portal/revoke            — Revoke a token
@@ -127,9 +131,39 @@ async def portal_status(token: str):
     )
 
     if "error" in status:
-        return JSONResponse(status, status_code=404)
+        code = 409 if status.get("error") == "bond_ambiguous" else 404
+        return JSONResponse(status, status_code=code)
     status["role"] = token_data["role"]
     return status
+
+
+@portal_bp.post("/api/portal/{token}/invoice-link")
+async def portal_invoice_link(request: Request, token: str):
+    """Indemnitor self-pay: the bond's own locked invoice link (§2.2).
+
+    The amount always comes from the bond's confirmed premium / down
+    payment; anything in the body is ignored. Errors never carry a URL.
+    """
+    from dashboard.services.portal_invoice_service import (
+        rate_limited,
+        request_invoice_link,
+    )
+
+    token_data = await validate_token(token)
+    if not token_data:
+        return JSONResponse({"ok": False, "error": "token_invalid_or_expired"}, status_code=401)
+    if rate_limited(token):
+        return JSONResponse(
+            {"ok": False, "error": "rate_limited"},
+            status_code=429,
+            headers={"Retry-After": "60"},
+        )
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    status, payload = await request_invoice_link(token_data, body)
+    return JSONResponse(payload, status_code=status, headers={"Cache-Control": "no-store"})
 
 
 @portal_bp.post("/api/portal/{token}/checkin")
@@ -166,31 +200,24 @@ async def portal_checkin(request: Request, token: str):
 
 @portal_bp.get("/api/portal/{token}/payment-link")
 async def portal_payment_link(token: str):
-    """Return the SwipeSimple payment link for this bond."""
+    """Return the bond's own verified invoice link, or null with the call-us number.
+
+    Never a static / per-source link: those carry no amount, so the portal
+    shows "Call (239) 332-2245" instead.
+    """
     token_data = await validate_token(token)
     if not token_data:
         return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
 
-    from dashboard.services.payment_links import payment_link_for
+    from dashboard.services.portal_invoice_service import portal_payment_view
 
-    # The bond's own staged SwipeSimple invoice link (locked amount) wins;
-    # otherwise the per-source static link (same as every other source).
-    bond = None
-    try:
-        bond = await get_collection("active_bonds").find_one(
-            {"booking_number": token_data["booking_number"]}
-        )
-    except Exception:
-        bond = None
-    swipesimple_link = payment_link_for(
-        token_data.get("intake_source") or token_data.get("source"),
-        bond if isinstance(bond, dict) else None,
-    )
-
+    view = await portal_payment_view(token_data["booking_number"])
     return {
-        "payment_link": swipesimple_link,
+        "payment_link": view.get("payment_link"),
+        "amount_due": view.get("amount_due"),
+        "call_phone": view.get("call_phone"),
         "booking_number": token_data["booking_number"],
-        "defendant_name": token_data["defendant_name"],
+        "defendant_name": token_data.get("defendant_name", ""),
     }
 
 
@@ -198,13 +225,51 @@ async def portal_payment_link(token: str):
 # STAFF ROUTES — Session-authed (behind PIN gate)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _staff_actor(request: Request) -> str | None:
+    """Staff session user (or ``machine`` for a valid machine key), else None.
+
+    Never the request body. Recovery sessions are refused.
+    """
+    from dashboard.auth.pin_middleware import (
+        get_session_from_request,
+        is_machine_auth_valid,
+    )
+    from dashboard.auth.recovery_scope import STAFF_ROLES
+
+    try:
+        sess = get_session_from_request(request)
+    except Exception:
+        sess = None
+    if sess and sess.get("auth"):
+        role = str(sess.get("role") or "")
+        if role != "recovery" and role in (set(STAFF_ROLES) | {"sub_agent"}):
+            actor = str(sess.get("email") or sess.get("agent_name") or "").strip()
+            if actor:
+                return actor
+    try:
+        if is_machine_auth_valid(request):
+            return "machine"
+    except Exception:
+        pass
+    return None
+
+
+def _staff_required() -> JSONResponse:
+    return JSONResponse({"error": "staff_auth_required"}, status_code=401)
+
+
 @portal_bp.post("/api/portal/generate")
 async def generate_token_endpoint(request: Request):
-    """Generate a new portal magic link for a bond case."""
+    """Generate a new portal magic link for a bond case.
+
+    ``created_by`` is the session user (never the request body).
+    """
+    created_by = _staff_actor(request)
+    if not created_by:
+        return _staff_required()
     data = await request.json() or {}
-    booking_number = data.get("booking_number", "").strip()
-    role = data.get("role", "indemnitor").strip().lower()
-    created_by = data.get("created_by", "staff")
+    booking_number = str(data.get("booking_number") or "").strip()
+    role = str(data.get("role") or "indemnitor").strip().lower()
 
     if not booking_number:
         return JSONResponse({"error": "booking_number is required"}, status_code=400)
@@ -226,8 +291,10 @@ async def generate_token_endpoint(request: Request):
 
 
 @portal_bp.get("/api/portal/tokens/{booking_number}")
-async def list_tokens(booking_number: str):
+async def list_tokens(request: Request, booking_number: str):
     """List all active portal tokens for a bond (staff view)."""
+    if not _staff_actor(request):
+        return _staff_required()
     tokens = await get_portal_tokens_for_bond(booking_number)
     return {"tokens": tokens, "count": len(tokens)}
 
@@ -235,6 +302,8 @@ async def list_tokens(booking_number: str):
 @portal_bp.post("/api/portal/revoke")
 async def revoke_token_endpoint(request: Request):
     """Revoke a portal token."""
+    if not _staff_actor(request):
+        return _staff_required()
     data = await request.json() or {}
     token = data.get("token", "").strip()
     if not token:
@@ -249,6 +318,9 @@ async def revoke_token_endpoint(request: Request):
 @portal_bp.post("/api/portal/send-link")
 async def send_portal_link(request: Request):
     """Generate a portal link and send it via iMessage/SMS (staff-gated)."""
+    actor = _staff_actor(request)
+    if not actor:
+        return _staff_required()
     data = await request.json() or {}
     booking_number = data.get("booking_number", "").strip()
     role = data.get("role", "indemnitor").strip().lower()
@@ -266,7 +338,7 @@ async def send_portal_link(request: Request):
         result = await send_checkin_link(
             booking_number,
             phone=phone,
-            actor=data.get("created_by") or data.get("actor") or "staff",
+            actor=actor,
         )
         status = 200 if result.get("success") else 400
         return JSONResponse(result, status_code=status)
@@ -274,7 +346,7 @@ async def send_portal_link(request: Request):
     token_result = await generate_portal_token(
         booking_number=booking_number,
         role=role,
-        created_by="staff_send",
+        created_by=f"staff_send:{actor}",
     )
 
     if not token_result.get("success"):

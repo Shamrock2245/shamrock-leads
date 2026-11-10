@@ -13,6 +13,397 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - Added `tests/test_prod_readiness_runbooks.py` (wired into `.github/workflows/ci.yml`).
 
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of d31e06a on #280)
+
+### Fixed
+- **A blank state on a Florida county still opens that tracking card (P2).** `history_place_query` treated a missing state as no place, so a legacy Lee card shared with another booking returned `booking_scope_ambiguous`. A blank state is Florida only when the county is a registered Florida county. A blank state on any other county still refuses a shared booking.
+- **Tracking pings and court dates follow the selected card (P2).** Location history, check-ins, devices, and court reminders were still read by booking number after the bond itself was scoped, so the second card showed the first arrest's records. Those lookups now use the same county and state.
+
+### Tests
+- `test_codex_1110_d_legacy_florida_history_stays_on_that_card` in `tests/test_lee_indemnitor_discovery.py` (already on the CI list). It fails on `d31e06a`.
+
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of c4e0098 on #280)
+
+### Fixed
+- **A missing DOB or ZIP digest is not a match (P1).** `review_pin` hashed the `uncompared` sentinel, and `review_pin_matches` then compared that digest with the word `uncompared`, so an approved phone-plus-DOB row with no anchor evidence still cleared outreach. The sentinel is stored as itself and is rejected.
+- **Tracking history follows the selected card (P2).** Two bonds that share a booking number both opened the first bond, and Discover Contacts then used that bond's county and state. The card passes its county and state into the history lookup. A booking-only request with more than one bond returns 409.
+
+### Tests
+- `test_codex_1110_c_uncompared_anchor_is_not_an_outreach_match` and `test_codex_1110_c_tracking_history_uses_the_selected_card` in `tests/test_lee_indemnitor_discovery.py` (already on the CI list). The tracking sim checks the history URL. Both fail on `c4e0098`.
+
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of 0815522 on #280)
+
+### Fixed
+- **Adding an arrest keeps its state (P1).** `addFromArrest` posted booking, name and county only. A Lee, GA lead then fell through the Florida fallback. The search result's state is posted and stored, and the arrest snapshot for a posted county and state does not read another state's row.
+- **An approval pins the DOB and ZIP values, not just the anchor labels (P1).** The same phone with a different DOB kept the old approval because the pin recorded `dob` as a label. The candidate now stores a digest of the DOB and ZIP that justified those anchors. A different digest, or an anchor with no digest, resets the review. The values are not stored or logged.
+
+### Tests
+- `test_codex_1110_b_arrest_snapshot_query_pins_state`, `test_codex_1110_b_dob_digest_change_resets_review`, and the `from_arrest` case in `tests/js/add_lead_discover_sim.js`. They fail on `0815522`.
+
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex 11/10 findings on #280)
+
+### Changed
+- **Merged `origin/main` at `12c64e8`.** Merge commit only. Main's optional GPS compose profile is taken as-is. This file had no conflict.
+
+### Fixed
+- **A booking-only contacts doc is adopted only when the unique arrest is that place (P1).** `_booking_is_unique` counted arrests and ignored county and state, so a scoped request could adopt a legacy contacts doc for a different arrest and a review could rewrite it onto the caller's identity. The sole arrest's place must match. A mismatch, a failed read, or more than one arrest fails closed (`contacts_legacy_ambiguous`) and nothing is written.
+- **An explicit scope that misses, while the booking exists elsewhere, is not a manual lead (P1).** `run_discovery` used the caller's name and address and wrote a new contacts doc. It now returns `booking_scope_conflict` with no providers and no write. The discover route answers 409. A booking with no arrest is still a manual lead. The Lee queue passes the claimed arrest, so arrest writes are unchanged.
+
+### Tests
+- `test_codex_1110_p1_*` in `tests/test_lee_indemnitor_discovery.py` (already on the CI list). Four fail on `adae38c`. The absent-booking guard passes on both.
+
+## [Unreleased] — 2026-11-09 (merge origin/main into #280)
+
+### Changed
+- **Merged `origin/main` at `93ab053`.** Merge commit only (no rebase). Conflicts were only this file. Every entry from both sides is kept. `ci.yml` merged with both test lists kept.
+
+## [Unreleased] — 2026-11-04 (Paperwork self-serve ID prefill)
+
+### Fixed
+- **In-person ID confirm can open the signer's packet.** On `paperwork.shamrockbailbonds.biz`, Step 1 stored the scan on the PIN session and Step 2 looked for a packet by phone. With no packet, the parsed ID never reached the indemnitor, co-indemnitor, or defendant, and the page stopped. `PAPERWORK_SELF_SERVE_PREFILL` (default off) keeps that behavior. When it is on, a confirmed scan reuses a BondCase for the same phone, name, and date of birth, or inserts one draft (`source=self_serve`, `status=pending_owner_review`, actor `auto`). Bond, premium, and POA stay empty unless they were already on the case. The packet is built with `DocuSealService.prefill_values_from_bond` and `create_submission` (`send_email` and `send_sms` false). A validated case that already has a POA, case number, and premium still uses `create_submission_for_packet`. If that build fails, the confirmed fields stay on the case and no signing URL is returned. `get_pending_id_prefill(case_id, role, person_id)` is the fallback read for the later auto-packet builder. The flag is not added to compose or deploy env files.
+
+- **A self-serve draft still opens signing, and the packet is marked pending owner review.** The draft path is unchanged: no validated match, case number, or POA is required before the signing URL. The packet is stored as `pending_owner_review` with `self_serve_unvalidated_draft`, and an audit row records that a signing URL was issued. A voided or unverified signer, a missing scan, and a pay link still produce no URL.
+- **An existing packet is reused only for the same signer.** The exact `self_serve_packet_key` wins. Otherwise the packet must match the person id and, when those values are already on the packet, the phone and email. A role match alone does not return another person's URL.
+- **Reusing a BondCase writes an identity audit.** The event records the actor, the prior contact fields, and the reason. Older audit rows stay in place.
+- **A person is matched only in the role they are scanning as.** A defendant on one bond does not become the indemnitor on that bond when they later scan as an indemnitor.
+- **A signed or completed packet is not edited.** A new packet is inserted and the replacement is audited. The finalized packet is left as it was.
+- **A defendant or co-indemnitor scan does not overwrite the primary indemnitor's phone or email** when a booking is sent through `ensure_match_bondcase`.
+- **Two workers share one draft and one packet.** The draft ``_id`` and the packet ``_id`` are deterministic. The second insert loses on the collection's existing unique ``_id`` index and finishes that row. No index is created. A legacy case is reused when the role lookup sees it. A DocuSeal submission that was started and never stored is not started again. Confirmed fields stay.
+- **A stored role phone that differs from the verified phone is not overwritten.** The case is left as it was and no signing URL is returned.
+- **The first DocuSeal response uses the same signing-URL rule as recovery.** A hostile `embed_src` is not kept or returned. The call already happened, so the packet stays `recovery_required` instead of being compensated or submitted again.
+- **A client booking is phone-checked before `ensure_match_bondcase`.** A different phone on that booking does not restamp the match, case source or status, or POA.
+- **A recovered signing URL is not granted from a provider id that merely exists.** Submitter id and submission id are compared only after this packet stored them from an accepted response. Before that, they are not a pre-dispatch identity. A lookup row with a different external id, or a signing URL with a query, fragment, userinfo, or a different `/s/{slug}` path, stays `recovery_required`.
+- **A recovered signing URL has to be one open, bound DocuSeal submitter.** Recovery uses `list_submitters(external_id=...)` only when `pagination.count` equals the page and `pagination.next` is null. The row must match the role, email, phone, and external id stored before the call, use status `awaiting`, `sent`, or `opened`, and use this server's `https` `/s/{slug}` URL. Anything else stays `recovery_required`. A packet that becomes signed or completed during the lookup is not rewritten.
+- **A failed self-serve handoff compensates only what that attempt created.** A packet shell is marked compensated before DocuSeal is called, and only a saga-owned draft case moves to compensated with an audit. Scans, audits, signed packets, and preexisting cases stay. After DocuSeal may have accepted a submission, the packet is `recovery_required` and is not submitted again. A later retry can store the signing URL only when `list_submitters` returns exactly one matching `external_id`. No message is sent and no payment is refunded.
+- **A new walk-in draft with no surety uses OSI.** The session channel has to be `inperson`, `ipad`, or `kiosk`, recorded by the server from a signed launch proof or a handoff token. An existing case is left alone, including an unassigned one and one already on Palmetto or OSI. An explicit invalid carrier is not replaced. A remote or ambiguous session still gets no surety and no packet. Bond, premium, POA, and booking stay empty.
+- **The fully bound packet path requires a positive bond amount and a positive premium separately.** A case that has the other binding ids but no bond amount stays on the owner-review path.
+- **A later successful ID scan is visible to the identity check.** The older failed `id_scan` stays. The new row is appended to `id_scan_records`, which the verifier now reads.
+
+### Tests
+- `tests/test_paperwork_id_prefill.py` (on the CI list). Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed. No DocuSeal send and no SwipeSimple charge.
+- `tests/test_self_serve_multiprocess_claim.py` runs two OS processes. The shared store is SQLite `PRIMARY KEY` plus `BEGIN IMMEDIATE`, and the test records the duplicate-key conflict. It does not start mongod. The production path is the same ``_id`` insert.
+- `tests/test_self_serve_mongo_workers.py` runs the same production functions against an isolated loopback MongoDB when `SHAMROCK_TEST_MONGODB_URI` is set, and skips otherwise. It does not read `MONGODB_URI`.
+- `tests/test_self_serve_saga.py` covers compensation, recovery, and a second-submission block. No DocuSeal send.
+
+## [Unreleased] — 2026-11-07 (BB_CONFIG_API_KEY fail-closed contract test)
+
+### Security
+- No new credential and no fallback key. `0d5534a` already removed the hardcoded `BB_CONFIG_API_KEY`. `POST /api/config/bluebubbles-url` and `PATCH /api/bb-health/update-url` still require an admin session, machine auth (`GAS_API_KEY` / `LEADS_INTERNAL_TOKEN`), or an explicitly configured `BB_CONFIG_API_KEY` compared with `secrets.compare_digest`. A presented key when that setting is unset is `503`. A non-string `api_key` on the health route is the same denial (`503` when unset, `401` when a key is configured) instead of a `500`. An admin session or machine key still wins over a junk body key.
+
+### Tests
+- Added `tests/test_bb_config_key_fail_closed.py` to the CI contract list. It covers the unset-key `503`, a wrong key `401`, a matching configured key, machine auth, an admin session with no frontend key, and the absence of a fallback key in the dashboard script and URL-sync files.
+
+## [Unreleased] — 2026-11-07 (Lee co-signer discovery: Codex 11/7 findings on #280)
+
+### Fixed
+- **The Lee clerk provider stays on Lee, FL (P2).** With public HTTP on, `_provider_clerk` sent any arrest's case number to `matrix.leeclerk.org` without checking county or state. Case numbers are not unique, so a matching Lee case could add unrelated parties to a Collier or Lee (GA) contact document. The provider now uses the same Lee, FL guard as the property appraiser (`is_lee_florida`, blank state only as the legacy Florida default) and returns `skipped` before any request. Lee arrest writes and the queue are unchanged.
+- **A blank bond state is Florida only for a Florida county (P2).** `_samePlaceBond` treated a missing state as a match for every requested state, so an explicit Lee, GA card could open a state-less Lee row, show that defendant, and (for a manual booking with no arrest) use that name under the GA scope. A blank state now matches an explicit `FL` request only when the bond's county is one of the 67 Florida counties. Any other explicit state fails closed. Booking-only fallbacks in the drawer, the prospective-bond search, and discovery run only when the caller gave no place.
+
+### Tests
+- `test_codex_1107_p2_clerk_provider_skips_non_lee_florida` (Collier FL, Lee GA, Lee SC) and `test_codex_1107_p2_clerk_provider_still_queries_lee_florida` in `tests/test_lee_indemnitor_discovery.py`. The skip cases fail on `6a27f7f` (the clerk URL is requested). The Lee, FL guard passes on both.
+- `test_codex_1107_p2_blank_state_is_florida_only_for_a_registry_county` + `tests/js/candidate_scope_sim.js`. On `6a27f7f` a state-less Lee row resolves for Lee, GA (including a search result) and a state-less Chatham row resolves for GA and FL. After the fix, Lee, FL still opens the state-less Lee row and Lee, GA opens only an explicit GA row.
+
+## [Unreleased] — 2026-11-07 (merge origin/main into #280)
+
+### Changed
+- **Merged `origin/main` at `1efc45d`.** Merge commit only (no rebase). The only conflict was this file. Every entry from both sides is kept.
+
+## [Unreleased] — 2026-11-05 (Auto-send indemnitor only; ambiguous staff premium)
+
+### Fixed
+- **The automatic pay-link text after signing goes only to the indemnitor.** With both `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` on, DocuSeal `auto_send` called `dispatch_invoice` without `indemnitor_only`, so a bond with no indemnitor phone and a `defendant_phone` texted the defendant. It now uses the same indemnitor-only path as portal `send_copy`. A missing or conflicting indemnitor contact is `needs_review` (`dispatch_missing_indemnitor` or `indemnitor_contact_mismatch`), nothing is claimed or sent, and the defendant is never the recipient. The 2026-11-04 owner exception is unchanged: one text, both switches default off, no retry.
+- **Auto-confirm does not overwrite ambiguous staff premium fields.** `PREMIUM_AUTO_CONFIRM` treated every `resolve_locked_premium` error as "no premium" because `_bond_premium` returns None. Differing `premium_cents` and `premium_amount` (or a non-numeric, fractional, zero, or negative staff amount) was then replaced by the auto 10%. Those cases now skip as `staff_premium_ambiguous`: nothing is confirmed, signing stamps `needs_review`, and the portal returns `409 needs_review`. A blank premium and an intake estimate still auto-confirm. One readable staff premium still waits as `staff_premium_unconfirmed`.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py`: auto-send indemnitor-only (defendant not texted; conflict not texted), ambiguous and malformed staff premiums not auto-confirmed, estimate still auto-confirmed. No SwipeSimple session, no live send.
+
+## [Unreleased] — 2026-11-05 (Indemnitor self-pay P1: recipient, case id, paid status)
+
+### Fixed
+- **`send_copy` texts only the validated indemnitor.** With `SWIPESIMPLE_DISPATCH_LIVE` on, `POST /api/portal/{token}/invoice-link` no longer falls back to `defendant_phone` or `defendant_email` when the indemnitor contact is missing. The recipient is the indemnitor phone or email on the bond (both spellings and the nested `indemnitor` map). Two different indemnitor values is `409 indemnitor_contact_mismatch`. None is `409 dispatch_missing_indemnitor`. Neither path sends. A dry run with the dispatch switch off is unchanged and still sends nothing.
+- **Legacy `Bond_Case_ID` mismatches fail closed.** Bond lookup reads `bond_case_id` and legacy `Bond_Case_ID` on each document. A populated disagreement, including one document that stores both spellings with different values, or `bond_cases` holding only `Bond_Case_ID: A` while `active_bonds` holds only `Bond_Case_ID: B`, is `bond_case_id_mismatch`. `Bond_Case_ID` is read only.
+- **A handled installment refreshes `premium_paid`.** Plan posting (`post_gateway_event` → `apply_plan_payment`) does not call `record_provider_payment`, so the last installment left `premium_paid` false. The plan-payment transaction now refreshes it after the installment row is written, and a plan refund refreshes it again. `premium_paid` is set only when clean collected cents reach the confirmed premium. A partial installment does not set it. A reversed installment row counts as zero (it is the same row, not a second refund).
+- **A settled down-payment invoice is not offered again.** After the down payment, `premium_paid` stays false and `payment_status` can stay `sent` while `last_payment_status` is `approved`. The portal no longer returns that invoice link, and it does not create another one for the same reference (`409 invoice_settled`). An unpaid invoice is still returned. A charge whose reference is the booking stamps `settled_invoice_number` / `settled_invoice_status` / `settled_invoice_transaction_id`. A reversal of that transaction marks the invoice `reversed`.
+
+### Security
+- **The one automatic pay-link text after signing stays.** Brendan O'Neal approved it on 2026-11-04. `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` and `SWIPESIMPLE_DISPATCH_LIVE` both default off. When both are on, DocuSeal completion texts the staged invoice link once through `dispatch_invoice`'s one-send claim. A failure is `needs_review` and is not retried. Documented in `AGENTS.md` (prime directive 6 and the env table) and on `step_auto_send`. It does not authorize any other automated client outreach.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py`: legacy case-id mismatch, indemnitor-only `send_copy` (defendant never chosen; missing contact does not send), settled vs unpaid down-payment invoice, partial vs final installment `premium_paid`. No SwipeSimple session, no live send.
+
+## [Unreleased] — 2026-11-04 (Indemnitor self-pay invoice link from the portal)
+
+### Added
+- **`POST /api/portal/{token}/invoice-link` (indemnitor self-pay, §2.2).** An indemnitor token gets the bond's own locked SwipeSimple invoice link. The amount comes only from the bond's confirmed premium (`premium_confirmed_amount`, or the confirmed down payment on a financed plan); anything in the body is ignored. An existing verified link (`/invoices/` path on swipesimple.com, bound to this bond, matching cents) is returned as is; otherwise one invoice is created through the existing one-invoice-per-bond claim. Errors are `{ok:false, error}` and never carry a URL: 401 `token_invalid_or_expired`, 403 `role_not_indemnitor`, 404 `bond_not_found`, 409 `bond_ambiguous` / `missing_booking_number` / `premium_unconfirmed` / `premium_estimate_unconfirmed` / `amount_mismatch` / `already_paid` / `needs_review` / `staff_test_case_invoice_disabled`, 202 `in_progress`, 503 `invoicing_unavailable` / `session_expired`, 429 `rate_limited` (5 per minute per token, `Retry-After: 60`). `send_copy` texts the link only when `SWIPESIMPLE_DISPATCH_LIVE` is on and otherwise logs a dry run.
+- **`PREMIUM_AUTO_CONFIRM` (default off).** When on, the invoice-link endpoint confirms an unconfirmed premium at max($100, 10% of the filed bond) with `premium_confirmed_by: "auto"`, paid in full, through the same transaction and audit as staff confirmation. It never overwrites a staff confirmation and is idempotent.
+- **Auto-confirm at signing (same `PREMIUM_AUTO_CONFIRM` switch).** New DocuSeal completion step `auto_confirm`, run before `share_invoice`, confirms the same max($100, 10%) premium, paid in full (`confirmed_by: "auto"`, audit reason `auto_10pct`, audit source `auto_10pct_signing`). The after-signing link text therefore no longer depends on the portal being opened. It never overwrites a staff confirmation (`skipped` / `already_confirmed`) and is idempotent with the completion lease: guarded writes plus a lease-owned step stamp. If the bond is not found, ambiguous, or does not match the packet's bond id, or the bond amount is missing, zero or negative, unparseable, or disagrees across the bond case, active bond, and packet, the step is stamped `needs_review`. In that case the premium stays unconfirmed, so no invoice is staged and no text is sent. Transient write errors retry up to 3 times, and `share_invoice` waits for them, before the step goes to `needs_review`. With the switch off the step writes nothing. It is not a required step, and staff test packets and historical packets skip it.
+- **New auto-confirm skip codes** `bond_amount_unparseable` and `bond_amount_ambiguous`, for both the portal endpoint and signing. Before, an unparseable amount was treated as missing, and only the first non-blank amount was used. On the portal endpoint, either code now returns `409 needs_review` instead of `premium_unconfirmed`.
+- **`confirmed_by` in the invoice-link response is now `"auto"` or `"staff"`**, never the staff member's name or email.
+- **`SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING` (default off).** New DocuSeal completion step `auto_send`: after signing and the share step, text the bond's invoice link once. It runs only when this switch and `SWIPESIMPLE_DISPATCH_LIVE` are both on, uses the existing one-send dispatch claim, and moves a failed send to `needs_review` (never retried automatically). `DOCUSEAL_COMPLETION_LEGACY_PAYMENT_LINK` is unchanged and stays off.
+- **`premium_paid` from recorded payments.** When clean recorded charges minus refunds for a booking reach the single agreed confirmed premium, `premium_paid` is set on `bond_cases` and the `active_bonds` mirror (`premium_paid_at`, `premium_paid_source: "payments_total"`, `premium_paid_transaction_id`) inside the payment-log transaction, and the audit event records `premium_paid_change`. A refund that drops the total below the premium reopens it (`premium_paid_reopened_at`, `premium_paid_reopened_transaction_id`); a charge never clears a flag staff set. Audit history is kept.
+- **`scripts/installment_invoices_pause.py` (read only).** Reads the `installment_invoices` automation switch and counts due installments with `SHAMROCK_MONGO_RO_URI`, then prints the staff toggle (`POST /api/automation/toggle/installment_invoices`) that pauses or resumes installment invoices and texts. It writes nothing.
+
+### Changed
+- **The client portal never shows a static payment link.** `GET /api/portal/{token}/payment-link` and the portal status return only the bond's own verified invoice link with the confirmed amount due; with no link the portal shows "Call (239) 332-2245". The portal's Pay button calls the new invoice-link endpoint.
+- **Bond lookup by booking number is alias-aware.** `_load_bond_by_id` and the portal read `booking_number` and, only when it is blank, the legacy `Booking_Number` (read only, never written), match whitespace-padded values, dedupe by `_id`, and fail closed with `bond_ambiguous` on more than one match.
+- **The dispatch text quotes the invoice amount due**, and a dispatch held as `needs_review` is never re-claimed or resent (`dispatch_needs_review`).
+- **Payment-webhook receipt texts are dry runs unless `SWIPESIMPLE_DISPATCH_LIVE` is on.**
+
+### Security
+- **Staff portal routes need a staff session or machine key.** `POST /api/portal/generate`, `GET /api/portal/tokens/{booking}`, `POST /api/portal/revoke` and `POST /api/portal/send-link` answer `401 {"error": "staff_auth_required"}` otherwise (`pin_middleware` leaves `/api/portal` open for the token routes). Recovery sessions are refused. `created_by` comes from the session, never the body.
+
+### Tests
+- `tests/test_indemnitor_self_pay.py` (added to the CI list): lookup, link verification, every endpoint error, rate limit, create-once, auto-confirm (portal and at signing: 10% and the $100 floor, never over staff, idempotent rerun, every needs_review path, transient retry, no invoice or text on review), the auto-send step, staff auth, `premium_paid` set/reopen/idempotent, and the read-only pause script.
+- `tests/test_payment_log_claims.py`: receipt text is a dry run with `SWIPESIMPLE_DISPATCH_LIVE` off. `tests/test_swipesimple_locked_amount_e2e.py`: portal prefers the staged invoice and never falls back to a static link.
+- `tests/_fake_mongo.py`: `$regex`/`$options`, `sort`, `to_list`, and `insert_one(session=...)`.
+
+## [Unreleased] — 2026-11-04 (Paperwork /done shows the pay step)
+
+### Added
+- **The paperwork completion page is no longer a dead end.** `/done` on paperwork.shamrockbailbonds.biz loads the packet and bond and shows what this role finished, which roles still need to sign (role only), and the next steps after release. Office contact stays on the page as a supplement: call (239) 332-2245, text (239) 955-0178, walk-in Mon-Fri 9-5, phones 24/7.
+- **The pay button uses the existing locked-amount SwipeSimple invoice.** It is rendered only when that role's signature is recorded, the signer is not voided or unverified, identity verification passes, and the payments-code invoice checks accept the stored link (amount, booking, bond id, host). The dollars shown are the confirmed down payment on the bond. Query-string amounts are ignored. A missing packet, a database error, or a bond lookup failure shows a generic message and no pay link. The page does not call SwipeSimple or send DocuSeal email or SMS.
+
+### Tests
+- `tests/test_paperwork_done.py`: pay step hidden when unsigned, unverified, or voided; shown with the server amount when allowed; pending co-signers listed by role; load-failure path. No SwipeSimple charge and no DocuSeal send.
+
+## [Unreleased] — 2026-11-04 (Paperwork handoff token skips the second PIN)
+
+### Added
+- **A verified indemnitor, co-indemnitor, or defendant can open paperwork with a single-use handoff token instead of a second PIN.** The portal opens `paperwork.shamrockbailbonds.biz/?role=&case=&mode=&ht=<token>`. `POST /api/portal/handoff/consume` checks the signature, the 15-minute window, the case, and the signer, then consumes the `jti` once. The signed claims are authoritative. A `role` or `case` query hint that disagrees falls back to the PIN and grants nothing. `mode=add-cosigner` opens the existing co-indemnitor ID step and does not revoke a co-signer link or a DocuSeal packet. `mode=id-upload` is passed through only when that handler is already present. Contract: `docs/contracts/paperwork-handoff-token.md`.
+- **The path is off unless `PAPERWORK_HANDOFF_ENABLED` is on.** The HMAC key is `PAPERWORK_HANDOFF_SECRET`. Neither value is added to compose, deploy, or `.env`. Minting stays `POST /api/portal/handoff-token` (`{case_id, role, person_id}` → `{token, expires_at}`) and is not implemented in this change. A POA number is not part of the token. Signer ID scans are insert-only. Handoff audits are insert-only and do not store a name, phone, email, or the token. No ID scan means no DocuSeal URL. A voided or unverified signer gets no session and no DocuSeal URL. This response never includes a pay link.
+
+### Tests
+- `tests/test_paperwork_handoff_token.py` (on the CI list): bad signature, expired, over-long lifetime, missing secret, flag off, replay, voided signer, unverified identity, unverified submitter, person mismatch, role hint mismatch, case hint mismatch, mode hint ignored, happy path for each role, no scan means no DocuSeal URL, POA change, add-cosigner routing, id-upload passthrough, OCR only after a consumed token, insert-only scans, audit retention, PIN fallback, and query params without `ht`.
+
+## [Unreleased] — 2026-11-05 (id-upload attempt cap and persist gate)
+
+### Fixed
+- **An id-upload that loses its session during OCR is not saved.** The scan row is written only when the portal pin is still verified, not voided, not revoked, and `expires_at` is still later than the write. A revocation or expiration while OCR is running appends nothing and returns no signing URL.
+- **Id-upload OCR uses the co-signer attempt cap and cooldown.** `SCAN_ATTEMPT_CAP` and `SCAN_COOLDOWN` are reserved with one conditional update before the scanner runs. The next try is `429` `scan_attempt_cap` or `scan_cooldown`, and that try does not call OCR. A read that finds no name still consumes the attempt and does not save a row.
+- **Audit counts come from the update that stored the row.** Each `id_upload_saved` event uses the array length returned by that update, so two overlapping uploads record `0→1` and `1→2` rather than two copies of `0→1`. Events are inserted. Earlier audit rows are not removed.
+- **A PDF is rasterized before OCR.** The first page is turned into a PNG with PyMuPDF, which this repo already depends on. A PDF that cannot be read, and any upload that yields no name, returns `scan_unreadable` with `saved: false` and does not append a scan. The page says to upload a photo of the ID.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: revocation and expiration during OCR, the attempt cap and the `429`, an unreadable scan that still counts, a PDF rasterized before OCR, and concurrent uploads whose audit transitions match the stored rows. No DocuSeal send and no SwipeSimple charge.
+
+## [Unreleased] — 2026-11-05 (id-upload fails closed on bad sessions)
+
+### Fixed
+- **An id-upload session with a missing or unparsable `expires_at` is refused before OCR.** `POST /api/portal/id-upload` no longer treats a `ValueError` from `datetime.fromisoformat` as a still-valid bearer, and a session with no expiration is expired. Neither case runs OCR or appends a scan.
+- **A superseded packet is closed for id-upload.** The check uses the same closed-packet rule as the co-signer lifecycle (`superseded: true`, or `status` / `docuseal_status` / `packet_status` of `superseded`). OCR does not run, and the obsolete packet does not gain a scan. The packet is still matched by `packet_id`, so a POA number change does not void the link.
+- **The id-upload audit records the session count and the packet count separately.** `old_state` and `new_state` store `session_id_scan_records` and `packet_id_scan_records`. The event also stores `session_id` from the portal pin `_id`, not the bearer token. A packet that already has another signer's scan is not described as `0→1`. The audit row is inserted. Earlier audit rows are not removed.
+
+### Tests
+- `tests/test_paperwork_id_upload.py`: `test_garbage_or_missing_expiration_is_rejected_before_ocr`, `test_superseded_packet_is_rejected_before_ocr`, `test_audit_records_session_and_packet_scan_counts_separately`. No DocuSeal send and no SwipeSimple charge.
+
+## [Unreleased] — 2026-11-04 (Paperwork launch mode id-upload)
+
+### Added
+- **`mode=id-upload` on the paperwork launchpad opens only the ID upload step.** `paperwork.shamrockbailbonds.biz` (`dashboard/routers/pin_portal.py`) treats `mode=id-upload` as its own page. The page posts the photo to `POST /api/portal/id-upload`. It does not show the phone PIN, the signing-link box, the in-person signer, or a completion screen. `inperson`, `ipad`, and `kiosk` are unchanged. Any other `mode` still opens the normal flow.
+- **Each upload is inserted.** A verified portal session is required before the server runs OCR. A missing, unverified, expired, voided, or revoked session is refused, and so is a session whose packet is voided. The photo is read on the server. A JSON body is not a scan. The new row is appended to `id_scan_records` on the session and, when the packet is still active, on that packet. `id_scan`, `id_ocr`, `id_extracted`, `id_scan_history`, and other signers' scans are left as they were. An `id_upload_saved` audit row is inserted. Older audit rows are not removed. The packet is matched by `packet_id`. A POA number change does not void the link.
+- **This mode does not issue a signing URL or a pay link.** The page and the JSON response do not include a DocuSeal URL or a SwipeSimple URL. Client-supplied name or ID number fields are ignored. The stored row keeps the scanned name and issuing state only. No DocuSeal send and no SwipeSimple charge.
+
+### Tests
+- `tests/test_paperwork_id_upload.py` (on the CI list): id-upload shows only the ID step, a second upload appends, invalid and voided tokens are refused before OCR, no DocuSeal URL or pay link is returned, a POA change still accepts the upload, and an unknown mode falls back. Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed.
+
+## [Unreleased] — 2026-11-05 (Lee co-signer discovery: Codex 11/5 findings on #280)
+
+### Fixed
+- **Drawer scopes candidates to the selected arrest (P1).** When two pipeline bonds share a booking number across counties, `loadCandidates` used a booking-only `_data.find()`, so opening either card loaded and approved against the first bond's county/state. Cards now carry `data-county` / `data-state`; `openDetailFromCard` passes that identity into `_currentScope`. Bond lookup prefers the place match (`_findBondByIdentity`), candidate GETs include that county/state, and the scope cache is keyed by booking|county|state. Approval still posts the returned county/state, so it can no longer validate against the wrong contact doc. Lee arrest writes and the queue are unchanged.
+
+### Tests
+- `test_codex_1105_p1_drawer_scopes_candidates_to_selected_arrest` + `tests/js/candidate_scope_sim.js` (on the CI list via `test_lee_indemnitor_discovery.py`). Fails on `fa76e88`.
+
+## [Unreleased] — 2026-11-04 (Lee co-signer discovery: Codex 11/4 findings on #280)
+
+### Fixed
+- **Contact retention runs when discovery is off (P2).** `purge_unreviewed_candidates` was only called from the `lee_indemnitor_discovery` batch, so disabling that service stopped the purge and expired unreviewed/rejected rows on mixed docs (no doc-level TTL) kept PII. A new `contact_candidate_retention` cron (hourly) runs the purge on its own. It is `always_on` (a new `CronDef` field, default `False`) and is not gated by `automation_config` or `INDEMNITOR_DISCOVERY`. Every other cron keeps its gate. The batch still purges too (idempotent).
+- **Same-address provider matches the address before capping (P2).** The ZIP-only query was limited to 25 unsorted rows before the normalized-address check, so a household row outside the first 25 in a busy ZIP was missed. `_same_address_rows()` now scans the ZIP in `_id` order, keeps only rows whose `address_key` matches, and caps the matches at 25. The scan is bounded at 5,000 rows so a huge ZIP cannot stall the worker.
+- **The discover wrapper propagates a typed failure (P2).** `ContactDiscoveryService.discover()` always returned `success: true` and dropped `discovery_error`, so `POST /api/contacts/discover` answered 200 and the UI said "Discovery finished" when nothing ran. A `failed` run now returns `success: false`, `discovery_error` and `error` (the typed code, e.g. `ARREST_READ_FAILED`), and the route returns 503 with the code only. Both UIs already show an error when `error` is set. Complete runs are unchanged.
+
+### Tests
+- 9 `test_codex_1104_*` cases in `tests/test_lee_indemnitor_discovery.py` (already on the CI list). 7 fail on `e15d78b`; the 2 guards (gated crons still skip when disabled; a complete run stays `success: true`) pass on both.
+
+## [Unreleased] — 2026-11-04 (Lee co-signer discovery: Codex 11/3 findings on #280)
+
+### Fixed
+- **A failed arrests read no longer falls through to caller identity (P1).** `_resolve_arrest()` returned `None` for both "no arrest" and "the read failed", so a transient arrests read error on a real booking ran providers with the caller's name and address and stored them under that arrest. A failed read now raises `ArrestReadFailed`. `run_discovery` returns `failed` / `ARREST_READ_FAILED` with no provider run and no write, and the log carries the code only. The ambiguous no-county path previously returned terminal `identity_ambiguous` here; it now also returns retryable `failed`. A genuinely absent arrest (a `MANUAL-*` lead) still uses caller input. The Lee cron passes the claimed arrest, so arrest writes and the queue are unchanged.
+- **Status-less legacy candidate rows expire (P2).** `unreviewed_expire_at()`, `_expired_row_conditions()` and `_row_is_expired()` treated a row with no `review_status` as non-expiring, so pre-review rows could keep PII indefinitely. A missing, `null` or `""` status now counts as unreviewed. The `$pull` matches `review_status: {$in: [rejected, unreviewed, null, ""]}`, and Mongo's `null` also matches a missing field. Reviewed and approved rows are never purged. No migration and no data change outside the normal purge.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`:
+  - `test_codex_1103_p1_failed_arrest_read_fails_closed` (with county + state, county only, and no place)
+  - `test_codex_1103_p1_failed_arrest_read_logs_no_identity`
+  - `test_codex_1103_p1_route_with_failed_arrest_read_writes_nothing`
+  - `test_codex_1103_p1_absent_manual_arrest_still_uses_caller_identity` (guard)
+  - `test_codex_1103_p2_status_less_legacy_rows_expire`
+  - `test_codex_1103_p2_status_less_rows_get_a_ttl_and_reviewed_never_do`
+  - `test_purge_removes_only_expired_unreviewed_rows` is updated: it had asserted the old keep-status-less behavior.
+
+## [Unreleased] — 2026-11-03 (Lee co-signer discovery: Codex 11/2 findings on #280)
+
+### Changed
+- **Merged `origin/main` at `d9f3760` (#283 co-signer bond mirror fields and blocked down payment).** It is a merge commit with no rebase. The only conflict was this file, and both entries are kept.
+
+### Fixed
+- **P1: the resolved arrest's defendant name is kept (`run_discovery`, `_fill_blank_identity`).** When county and state resolve a stored arrest, the arrest's `full_name`/`defendant_name`, `address`, `dob` and `zip` win. A caller value (drawer, manual request, Add Lead) fills a field only when the arrest leaves it blank, for example a `MANUAL-*` lead with no arrest row. A blank caller value never clears anything. When a caller value differs, it is dropped and only the code `caller_identity_ignored` and the field names are logged, never values. The property, skip-trace and prior searches and the saved candidates therefore always belong to the arrest's own defendant. Address is included because the 10/30 `defendant_link` anchor is the booking address. County, state and booking handling is unchanged.
+- **P2: transient public-provider failures are retried, not marked complete.** The property appraiser, clerk and skip-trace providers now return typed statuses: `source_timeout`, `source_connection_error` and `source_http_5xx` (transient), and `source_http_4xx`. Before, a 5xx page was parsed as an empty result. When any provider is transient, the run is `failed` with error `public_source_transient`. A public provider that raised something unexpected gives `public_source_failed`. Both use the existing bounded retry: `status: retry` with 15/30 min backoff, then terminal `failed` after `MAX_DISCOVERY_ATTEMPTS` (3). Earlier rows from that provider are kept, and the contacts doc is not cached as complete, so a manual refresh runs again. Hard 4xx, `egress_block` (401/403/429 or a challenge page) and `tls_cert_invalid` stay visible in `providers_run`. They are not retried or worked around: there are no proxies, UA changes or CAPTCHA.
+- **P2: booking matches are read before the name-match limit (`_provider_prior`).** Each prior collection is read twice: first exact-booking clauses (`PRIOR_READ_LIMIT` = 25), then name clauses (25), de-duplicated by `_id`. A common name with more than 25 historical rows can no longer push the booking-linked co-signer out of the result. Family collections are still read by booking only. A failed read still raises `prior_read_failed`.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`, `test_codex_1102_*` (18 cases):
+  - **P1:** a caller name never replaces the arrest name (route, cron and direct); a caller address can't link a stranger; blank caller values never clear the arrest; a caller name is used only when no arrest exists.
+  - **P2 transient:** timeout, connection error and 503 give `retry`, not `complete`; retries are bounded and then terminal; transient-then-success completes; a manual refresh after a transient failure is not served from cache; 404 and 403 blocks are visible and not retried; an unexpected provider error is retried.
+  - **P2 prior:** a booking match survives 30 name-only rows in `indemnitors` and in `intakes`; booking reads run first and name reads stay bounded.
+- Against the `5963871` sources (with only the three new constant names shimmed in), 15 of the 18 fail on assertions. The 3 that pass are guards for behavior that was already correct: blank caller values, the `MANUAL-*` name, and the 403 block.
+- All Lee arrest-write stall and failure tests stay green.
+
+## [Unreleased] — 2026-11-02 (Lee co-signer discovery: Codex 10/30 findings on #280)
+
+### Fixed
+- **P1: public-record candidates must be tied to the defendant (`dashboard/services/contact_discovery.py`).** A property-appraiser or clerk page can list many people. A person on it is kept only when their published address is the defendant's own: same house number and street, same ZIP as the booking address. The row then carries `defendant_link: "shared_address_zip"`. The candidate's own phone or address is no longer treated as a link. Without a defendant address and ZIP on the booking, these providers return no candidates. Each person's text window now ends where the next name starts, so a row can't borrow the next row's address. Unlinked public-record rows are fail-closed everywhere: they are dropped on merge (including rows stored before this fix), hidden from `GET /api/contacts/{booking}`, refused on approve with 409 `candidate_unlinked` (reject is still allowed), and skipped by outreach (`defendant_link_ok`). Drops are logged as a count and the code `defendant_link_missing` only.
+- **P2: conflicting or unregistered county/state labels are refused (`place_problem`).** A county label that names its own state (`Lee (GA)`, `Lee County, GA`, `Lee, Georgia`) and differs from the separate state, or a label that isn't a state, gives `county_state_conflict`. A Florida place whose county isn't one of the 67 (`Manatee Clerk`, a typo) gives `county_not_in_registry`. `canonical_place` returns no place, so `contact_identity` is `None`. `run_discovery` returns that `discovery_status` with no contacts read or write and no queue row. The contacts GET, discover and review routes return 400 with the code. The cron marks the booking terminal. The dashboard shows a message for each code. The 67-county list is a pure `FL_COUNTIES` tuple in `dashboard/services/place_identity.py`, tested against `REGISTERED_COUNTIES` minus `NON_COUNTY_SOURCE_SCOPES`. The Lee arrest write path is unchanged.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`, `test_codex_p1_*`: multi-result page with an unrelated owner and a name-only row; no defendant address; different house or ZIP; merge drops unlinked rows; an unlinked row can't be approved (409) or texted, and reject still works; GET hides it.
+- `test_codex_p2_*`: six conflict labels and four non-registry places fail closed through `place_problem`, `canonical_place` and `contact_identity`; ten consistent places still resolve; registry parity (67); `run_discovery` refuses with no write, for both arguments and a stored arrest; GET, discover and review return a typed 400 and write nothing.
+- `test_enabled_http_uses_plain_request_and_keeps_anchor` now gives the defendant address the fixture owner shares, and asserts `defendant_link`.
+- Against the `cb48dc8` sources, 24 of these tests fail (all except the registry-parity guard).
+
+## [Unreleased] — 2026-10-30 (Lee co-signer discovery: merge main 2833a40 and prove Lee writes never stall on the queue, #280)
+
+### Changed
+- **Merged `origin/main` at `2833a40` (#305 ingestion-log wiring, #300 Lee County HQ staff auth).** The #305 `log_ingestion` call in `BaseScraper.run()` and the co-signer marker in `MongoWriter.write_records` touch different code, and both run on every Lee scrape. The marker rides in the arrest upsert's `$setOnInsert`. The ingestion-log entry is written after the writers return. A queue failure leaves the run `ok`, with the row counted in `ingestion_log`. No runtime code changed: the write path already fails open and has no await, thread, sleep, socket or extra Mongo call to time out.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py` runs a whole Lee `BaseScraper.run()` through the real `MongoWriter.write_records` and `log_ingestion`:
+  - `test_lee_run_queues_cosigner_marker_and_logs_ingestion`: a normal run carries the marker and logs one `ok` ingestion entry with count 1.
+  - `test_arrest_write_survives_cosigner_queue_failure`: the hook raises, the place check raises, the hook import fails, or the hook returns a non-dict. The row is still upserted with no marker. The run is `ok`, with 1 scraped and 1 new, and is logged with count 1. Logs carry no booking or name.
+  - `test_arrest_write_survives_cosigner_queue_mongo_error`: the marker path or a queue collection raises `ServerSelectionTimeoutError`, `AutoReconnect` or `OperationFailure`. The row is still written and the run counted. The cron's own claim on a Mongo error returns `failed=1` without raising.
+  - `test_arrest_write_does_not_stall_on_cosigner_queue`: the hook runs with socket connect, `Thread.start`, `time.sleep` and event-loop entry made to fail. The hook module has no `async`, `await`, sleep, thread, socket or Mongo client.
+  - Mutation check: with the `try/except` guards removed, the failure and Mongo-error cases fail. With a `time.sleep` in the hook, the stall test fails.
+
+## [Unreleased] — 2026-10-29 (Lee co-signer discovery: read prospective_bonds & active_bonds, Codex round 7 on #280)
+
+### Fixed
+- **Prior-Shamrock discovery now reads `prospective_bonds` and `active_bonds` in `_provider_prior`.** Co-signers attached to a booking via `POST /api/indemnitors/create` or stored directly on bond rows (`indemnitors[]`, nested `indemnitor`, and top-level `indemnitor_*` fields) are parsed by `_bond_prior_rows` and returned as `prior_shamrock` candidates on both same-booking refreshes (when the bond carries the arrest's county and state) and subsequent re-arrests (when the defendant name and a shared defendant anchor match). `POST /api/indemnitors/create` also persists the arrest's `state` and defendant anchor fields (`defendant_dob`, `defendant_phone`, `defendant_address`, `defendant_zip`) when starting a new `prospective_bonds` record from an arrest lead.
+- **Manual discovery retains state across Add Lead, candidate loading, and Refresh discovery (`dashboard/sl-prospective.js`, `dashboard/routers/prospective_bonds.py`).** `submitAddLead` sends the resolved state (`FL` for registered Florida counties or explicit `alState`) to `POST /api/prospective-bonds`, which persists `state` on the prospective bond document; `loadCandidates` and `discoverContacts` cache and reuse the county/state/name scope so subsequent **Refresh discovery** clicks on `MANUAL-*` bookings never omit `state`.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: `test_prospective_and_active_bonds_cosigners_surface_on_refresh_and_rearrest`, `test_indemnitor_create_endpoint_persists_bond_cosigner_visible_to_discovery`, and `prospective_bonds`/`active_bonds` coverage in `test_partial_prior_read_failure_marks_the_run_failed`.
+
+## [Unreleased] — 2026-10-29 (Lee co-signer discovery: durable review audit and Add Lead name, Codex round 6 on #280)
+
+### Fixed
+- **A candidate review never lands without its immutable audit record.** `review_candidate` writes the contacts update (status, `review_pin`, `review_log` entry, `discovery_rev` bump) and the `audit_events` record (`contact_candidate_reviewed`, deterministic `_id` `contact-review:<doc>:<candidate>:<rev>`, linked from the row as `review_audit_id`) in one multi-document transaction, re-reading the doc and re-checking `discovery_rev` inside it. If the audit insert or the commit fails, the transaction aborts, the status is unchanged and the route returns 503 `audit_failed`. Without a replica set or Atlas the route returns 503 `audit_unavailable` and writes nothing (fail closed). The best-effort audit copy and `audit_mirrored` are gone. Logs carry only codes and error types.
+- **Add Lead discovery sends the defendant name.** `addLeadDiscoverBody` now sends `full_name` with the booking, county and state, so a `MANUAL-*` booking (no arrest record) can still be searched by name. With no name it does not run and staff see why. The name is sent in the body only and is never logged. The drawer shows a clear message for the new 503 codes.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: an audit insert failure rolls the status back (no `review_log`, no audit, not an outreach target, 503, no PII in logs); no transactions or no client fails closed with nothing written; the review and audit commit together with a linked id that survives a refresh; a revision change before the transaction gives 409 with nothing written; the route returns 503 `audit_failed`; the discover route passes the name for a `MANUAL-*` booking and never logs it; Add Lead (JS sim) sends `full_name` for FL, form-state and `MANUAL-*` leads, refuses with `name_required` when blank, and shows the audit error message. The fake DB now has a transaction client that rolls back on error.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: staff review action and pinned approvals, Codex round 5 on #280)
+
+### Added
+- **Staff approve/reject for discovered candidates.** `POST /api/contacts/{booking}/candidates/{candidate_id}/review` with `{county, state, decision: approve|reject, rev}`. It is behind the existing dashboard auth (not in `OPEN_PREFIXES`/`OPEN_PATHS`) and needs a staff cookie session with role `god_admin`, `admin` or `staff`; machine auth and no-session calls get 401, `sub_agent`/`recovery` get 403. The write is the same compare-and-swap on `discovery_rev` as the refresh: a stale `rev` gets 409 `stale_revision` and nothing is written. Approving or rejecting pins the reviewed phone, email, address and anchors as per-field SHA-256 digests (`review_pin`), never the values. Each decision is `$push`ed atomically into the doc's `review_log` (pseudonymous staff session id, time, old and new status, revisions; no PII) and mirrored best-effort to `audit_events`. The lead drawer shows each candidate's review status with Approve/Reject buttons that send the drawer's county, state and `discovery_rev`, and shows 409s and other errors to staff.
+
+### Fixed
+- **A refresh only carries a review forward when the contact data is unchanged.** A reviewed, approved or rejected row keeps its status only if its phone, email, address and anchors, compared after normalizing, equal the pinned values. If any of them changed, the row goes back to `unreviewed` with `review_reset = {reason: contact_changed, fields, previous_status, at}`; the log line has the field names and previous status only. Outreach (`_resolve_phone`) also requires the pin to match the row, so a changed number is never texted, even in `full_auto`, and a legacy `approved` row without a pin is not used until staff approve it again.
+- **Rejected candidates are never outreach targets** and expire on the same 30-day TTL and purge as unreviewed rows, so family contact data is not kept indefinitely.
+- **`GET /api/contacts/{booking}` with county and state reads a legacy booking-only doc** through the same `find_contact_doc` fallback as discovery (one legacy doc and one arrest with that booking). If it is ambiguous it returns 409 `legacy_contacts_ambiguous` and writes nothing. The response now carries `discovery_rev` and hides `review_log`.
+- **Add Lead discovery always sends a state.** It uses the form's state if there is one, else `FL` only when the county is one of the 67 FL registry counties; otherwise discovery is not run and staff see why. A 409 or other error is shown to staff instead of being dropped.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: pin normalization; an unchanged approval survives a refresh and stays a target; a changed phone or email resets the review, records the reason, and logs no PII; a changed number in `full_auto` is never texted; the review action writes the audit entry without PII; a stale revision is rejected and writes nothing; reject excludes the candidate from outreach and survives an unchanged refresh; old rejected rows are purged; the review route requires a staff session (open lists, 401/403, success, stale 409); bad input writes nothing; GET reads a unique legacy doc and returns 409 for ambiguous legacy docs without writing; the Add Lead state rule and error toasts via `tests/js/add_lead_discover_sim.js`, with FL list parity against the county registry.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: atomic purge and guarded refresh, Codex on #280)
+
+### Fixed
+- **The purge no longer rewrites the candidate array.** `purge_unreviewed_candidates` removes expired rows with one atomic `$pull` per contacts doc (`review_status` exactly `unreviewed` and `discovered_at` at or before the 30-day cutoff, as an ISO-date string or a BSON date). Candidates a refresh adds or reviews between the purge's read and its write are kept. Reviewed and approved rows never match the condition. A blank or garbled string stamp is never purged. The pull bumps the doc's `discovery_rev`; the TTL date and arrest candidate count are then recomputed from the doc as it is after the pull, and the TTL write is skipped if the doc has moved on again.
+- **A discovery refresh no longer overwrites a concurrent change.** The refresh merge-and-write is a compare-and-swap on `discovery_rev`: if the doc changed after the run read it (another refresh, a purge, or a doc that appeared since), nothing is written, the doc is re-read, and the merge is redone on top of it, up to 3 attempts. If it is still contended, nothing is written and the run is `failed` with `discovery_error = contacts_write_conflict`, which the batch retries. A purge can no longer be undone by a refresh that read before it.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: a refresh that adds rows between the purge read and write keeps them; only expired unreviewed rows are removed (ISO and BSON-date stamps; fresh, blank, garbled and status-less rows stay); reviewed and approved rows are never removed; the purge never `$set`s the array; the purge TTL write does not overwrite a newer refresh; a refresh re-merges when the doc changed after its read; a refresh does not put back rows a purge removed; a refresh that keeps losing writes nothing and goes to `retry`; a guarded insert refuses a doc that appeared after the read. The more-than-200 and paging purge tests and the Lee arrest-write queue tests are unchanged and green.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: Codex round 3 on #280)
+
+### Fixed
+- **A booking number alone never links a prior row to an arrest.** `indemnitors`/`intakes` and `intake_queue` rows matched on the booking number now need arrest-scoped county AND state equal to the arrest's. A legacy row missing either one no longer matches. The co-signer's own home `state` is still never compared.
+- **Family rows need the full arrest identity.** `family_graph` and `family_relationships` rows are read by booking number only and linked only when they carry the arrest's county and state. A matching defendant name or `person_id` slug no longer links a row. FamilyTreeService rows (person name/id only) are therefore skipped.
+- **Legacy booking-only contacts docs are updated in place.** Before a new scoped doc is created, a contacts doc keyed by booking only (no county or state, which is how every pre-#280 doc was written) is updated in place and given state + county; its reviewed rows are kept. This happens only when there is exactly one such doc and exactly one arrest with that booking number. Otherwise nothing is read or written, `contacts_legacy_ambiguous` is logged (code only), the batch marks the booking terminal `failed`, and the discover route returns 409 `legacy_contacts_ambiguous`. No migration, no data change outside the normal discovery write.
+- **County and state are canonical before the identity and `_id`.** `lee` / `LEE` / `Lee County` / `Lee (FL)` give `Lee`; `fl` / `Florida` / `Fla` give `FL`; an unknown state gives no identity. Canonical input (`Lee`/`FL`) gives the same `contacts:v1:` id as before. `_resolve_arrest` and `GET /api/contacts/{booking}` accept the same spellings.
+- **A partial read failure is a failed run, not "nothing found".** If any prior-Shamrock or same-address collection read raises, the run is `failed` with `discovery_error = prior_read_failed`, earlier rows are kept, and the batch sets the booking to `retry`. A booking whose identity cannot be resolved (`identity_ambiguous`) is marked terminal `failed` instead of being re-claimed.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: booking-only rows without arrest county or state do not match; name-only, booking-only, other-county and no-state family rows are rejected and scoped ones accepted; one legacy doc updated in place keeping reviewed rows; a legacy doc for another county is not reused; two legacy docs, a booking on two arrests, or a capped scan write nothing and log only the code; batch and route handling of the ambiguous case; nine county/state spellings give the same identity and the v1 id; partial read failure gives `failed`/`prior_read_failed` and a batch `retry`; unresolvable identity is terminal; `_resolve_arrest` and the GET route accept `Lee County`/`Florida`. Lee arrest-write queue tests unchanged and green.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: Codex round 2 on #280)
+
+### Fixed
+- **An out-of-state co-signer is no longer dropped from a Lee (FL) booking.** Prior-Shamrock `indemnitors`/`intakes` rows are place-checked only on arrest-scoped fields (`defendant_*`, `matched_*`, `bond_*`, `booking_*` county/state). The bare `state`/`county` on an indemnitor row is the co-signer's home address and is no longer compared.
+- **A transient failure leaves the booking retryable.** When a discovery run raises (or every provider fails), the arrest is set to `indemnitor_discovery.status = retry` with `attempts` and a `retry_after` backoff of 15, 30, 60 … minutes. The claim query picks up due `retry` rows. After `MAX_DISCOVERY_ATTEMPTS` (3) runs the booking becomes terminal `failed` and a `retry limit reached` warning is logged (counts and error type only).
+- **The purge reaches every expired unreviewed candidate.** The purge query now selects only contacts docs with an unreviewed row at or before the 30-day cutoff (ISO-string or BSON-date stamp), pages through them `limit` docs at a time, and skips docs it has already read. Expired rows past the first 200 docs are removed.
+- **Discover Contacts in the tracking drawer sends county and state.** `sl-tracking.js` passes the record's county and state (as the prospective drawer does), and the tracking `history`/`map-data` responses now include `state`, so a booking number shared by two counties no longer always returns 409.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: state match, idempotent contacts, TTL)
+
+### Fixed
+- **Intake rows must match the booking's state as well as its county.** `intake_queue` rows compare `defendant_state` (or the nested defendant state) and `matched_state` against the arrest. A Lee, GA intake can no longer add a candidate to a Lee, FL arrest. State names and two-letter codes compare equal ("Georgia" = GA).
+- **Concurrent or repeated contacts upserts make one document.** A new contacts doc gets a deterministic `_id` from state + county + booking (`contact_doc_id`). Mongo's built-in unique `_id` index rejects a second concurrent insert, and that write is retried as an update. No new index. Legacy ObjectId docs are still found by their identity fields and updated in place; they are not migrated or duplicated.
+- **An all-unreviewed contacts doc expires 30 days after its newest candidate**, not its oldest, so a fresh row is never deleted with an old one.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py`: another-state intake excluded; concurrent, repeated, and legacy-ObjectId upserts each leave one doc; duplicate-key insert applied as an update; doc id scoped to the full identity; TTL from the newest candidate. Lee arrest-write queue tests unchanged and green.
+
+## [Unreleased] — 2026-10-28 (Lee co-signer discovery: review fixes)
+
+### Fixed
+- **The queue marker is durable and cannot block or fail the Lee write.** The post-write daemon thread is gone. A new Lee (FL) upsert carries `indemnitor_discovery: queued` in its own `$setOnInsert`, so the marker is stored with the arrest before a one-shot run exits. A marker error is logged by type and the arrest is still written.
+- **Unreviewed candidates never reach automatic outreach.** `OutreachSequencer._resolve_phone` uses only `reviewed` / `approved` discovery candidates, read on state + county + booking.
+- **Contacts are scoped to the full arrest identity.** Discovery, the cache, the arrest marker, and `GET /api/contacts/{booking}` use state + county + booking. A booking that exists in two counties without a county returns `identity_ambiguous` (409) and writes nothing. The lead drawer passes county and state.
+- **A refresh keeps reviewed candidates** (and their review fields) even when the run did not return them, and keeps prior rows from a provider that did not finish.
+- **`intake_queue` rows are matched** on `defendant_booking_number` + `defendant_county` or `matched_booking_number` + `matched_county`, reading the nested indemnitor block.
+- **Public HTTP and skip-trace run off the event loop** (`asyncio.to_thread`). The request gap is slept out, not skipped. A rate-limited or gapped provider defers the booking with `retry_after` (up to 4 times) instead of finishing it empty.
+- **`family_graph` and `family_relationships` use their real schemas** (relative name, phone, relation type; soft-deleted rows skipped).
+- **Skip-trace anchors are recomputed** from the fields the vendor returned; a vendor `matched_anchors` claim alone adds no confidence.
+- `lee_indemnitor_discovery` is listed in Service Control.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py` (on the CI list): marker in the Lee FL upsert only, a marker exception still writes the arrests, no thread/wait on the write path, outreach review gate and identity scope, two-county booking, ambiguous identity, reviewed rows kept, intake_queue and family schemas, off-loop HTTP with a slept gap, deferral and re-claim, skip-trace anchor recompute.
+
+## [Unreleased] — 2026-10-21 (Lee co-signer discovery)
+
+### Added
+- **New Lee (FL) bookings queue co-signer discovery with the arrest write.** The queue marker rides in the upsert and cannot fail or stall the scraper write. Candidates are stored on the existing `contacts` collection and shown on the lead drawer for staff review. Nothing is texted, called, or emailed.
+- **A candidate requires a name plus at least one anchor** (phone, DOB, or normalized address + ZIP). `matched_anchors` is stored. Confidence is the sum of fixed anchor weights. A display name alone is dropped.
+- **Public HTTP and the optional skip-trace provider stay off** unless `INDEMNITOR_DISCOVERY_HTTP` or both `INDEMNITOR_SKIPTRACE_URL` and `INDEMNITOR_SKIPTRACE_API_KEY` are set. HTTP uses plain verified HTTPS. Sheriff hosts honor the existing Lee cooldown.
+- **Unreviewed candidate documents expire after 30 days** via `contacts.unreviewed_expire_at`. A purge pass drops expired unreviewed rows and keeps reviewed ones.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py` (on the CI list).
+
+## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
+
+### Fixed
+- **A payment hold no longer replaces a saved unrelated review, and the hold audit records that saved review.** When a co-signer link already has a non-payment `needs_review`, the first hold still stores it in `paid_block_prior_needs_review` and `paid_block_prior_review_reason`. A later hold does not overwrite those fields with the hold's own flag or reason. `paid_blocked`, `paid_hold_released`, and `paid_block_cleared` include the prior-review fields in `review_before` and `review_after`. Clearing the last hold restores the original review and appends the clear audit. Earlier audits are left in place. No pay link is returned while the hold stands. No DocuSeal send and no SwipeSimple charge.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_hold_audit_keeps_prior_review_and_a_second_flag_does_not_clobber`.
+
+## [Unreleased] — 2026-10-29 (Wire BaseScraper.run() into MongoWriter.log_ingestion)
+
+### Fixed
+- **Every scraper run now records an entry in `ingestion_log` (`scrapers/base_scraper.py`, `writers/mongo_writer.py`).** Previously `MongoWriter.log_ingestion` was defined on `writers/mongo_writer.py` (line 591) but never called from `BaseScraper.run()`, leaving `ingestion_log` at 0 documents in production. `BaseScraper.run()` now invokes `_log_ingestion_run` after persisting `scraper_status` on both normal completions (`ok`/`empty`/`write_failed`) and classified failures (`error`/`auto_disabled`), recording `source` (`scraper_id` or `County (ST)`), `count`, `error_class`, `duration`, `status`, `county`, `county_label`, and `state`. `SOURCE_CONTRACT_VALIDATED = False` fail-closed preflight runs remain untouched and do not write to `ingestion_log`.
+
+### Tests
+- Added `tests/test_ingestion_log_wiring.py` (wired into `.github/workflows/ci.yml`) covering `MongoWriter.log_ingestion`, `BaseScraper.run()` on `ok`, `empty`, and classified error runs (`parse_drift`), and verifying `fail_closed` scrapers do not write to `ingestion_log`.
+
+## [Unreleased] — 2026-10-29 (Co-signer payment holds preserve unrelated review warnings)
+
+### Fixed
+- **Adding and clearing a payment hold on a co-signer link preserves any unrelated staff review warning.** When a link already has `needs_review` set for a non-payment reason before `_flag_paid_blocked` adds a payment hold (`bond_mirror_mismatch`, `bond_ambiguous`, or `packet_ambiguous`), the prior non-payment review flag and reason are saved in `paid_block_prior_needs_review` and `paid_block_prior_review_reason`. When the final payment hold is released in `_clear_paid_block`, that prior review state is restored instead of clearing `needs_review` completely.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_hold_preserves_and_restores_preexisting_unrelated_review_flag`.
 ## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
 
 ### Security
@@ -43,6 +434,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_payment_log_claims.py` (on the CI list): `test_recorder_stamps_a_bond_under_either_booking_spelling` (lowercase and legacy), `test_payment_webhook_stamps_a_legacy_booking_bond`, `test_receipt_poller_stamps_a_legacy_booking_bond`, `test_bond_with_both_booking_spellings_counts_once`, `test_two_bonds_sharing_a_booking_across_spellings_fail_closed`, `test_legacy_mirror_pair_with_matching_case_ids_is_one_case`, `test_stale_legacy_booking_does_not_match_a_reassigned_bond`, `test_later_booking_enriches_blank_charge_on_a_legacy_bond`, `test_dual_spelling_bond_with_padded_lowercase_value_stamps`, `test_bond_stamp_that_matches_nothing_goes_to_review_not_stamped`, `test_mirror_stamp_miss_restores_the_first_document`, `test_enrichment_stamp_miss_writes_nothing`, `test_review_flag_that_matches_nothing_is_not_claimed_in_the_audit`, `test_padded_single_spelling_bond_matches_and_stamps` (legacy and lowercase), `test_padded_legacy_bond_and_a_lowercase_bond_fail_closed`, `test_padded_canonical_value_still_wins_over_a_stale_legacy_value`, `test_booking_regex_is_escaped`. All mocked: no SwipeSimple, Gmail, BlueBubbles, or Slack call.
 
+## [Unreleased] — 2026-10-28 (co-signer paid recovered without a pending marker)
+
+### Fixed
+- A co-signer down payment is no longer lost when every locked paid attempt fails **and** the out-of-transaction pending-marker write also raises (Codex review on #283, r4401127178). `_reconcile` (page read and booking heal) now has a no-marker charge fallback, matching the existing no-marker reversal fallback: for a link that is not paid, it reads the saved, tenant-scoped `payments` rows for the link's booking (`booking_number` or `Booking_Number`) and replays exactly one candidate charge through `note_cosigner_paid` (same lock, re-read rows, case/packet scope, exact down-payment amount, `_cas_mark_paid`).
+- A candidate is one settled charge on this booking with no refund or failure row, not `needs_review`, no pending paid key or paid hold on the link, not already another link's paid charge, saved after the link was issued, from an event the paid note would have taken (webhook reference equal to the booking, or a non-plan Gmail receipt), and an amount equal to the link's confirmed down payment. Anything else fails closed: amount mismatch, refund/failure, review hold, unsettled status, installment or missing reference, plan receipt, another source, a charge older than the link, another booking, another tenant, no tenant with the flag on, or more than one candidate charge.
+- A recovered stamp writes the normal `paid` audit once (the CAS) plus one `payment_transition_recovered` audit, owed on the link and inserted with `_id` = `audit_key` (one per link and charge), so a replay or a racing reconcile does not write it twice. No index or schema change; no audit history is removed.
+
+### Tests
+- Outage: three failed locked attempts plus a failed marker write leave the link unpaid with no marker; the next reconcile stamps it paid with one `paid` and one recovered audit, and a second reconcile/page read is a no-op. Also: two racing reconciles from a stale link, a legacy `Booking_Number` payment row, a recovered Gmail-receipt charge, fail-closed cases (low/high amount, refund, failure, review hold, unsettled, other booking, two charges, installment, no reference, plan receipt, other source, charge before the link, charge already on another link), and tenant isolation (own tenant pays, other tenant's row does not, no tenant does nothing).
+
+## [Unreleased] — 2026-10-28 (co-signer pending audits: atomic flag, one audit per key, own snapshots)
+
+### Fixed
+- **Resolving the last pending payment transition clears `payment_transition_pending` in the same update.** The update that removes a pending key also sets the flag from the keys that are left, as a compare-and-set on the keys it read. A failure after that update can no longer leave the flag true with nothing pending. A failure before it keeps the key and the flag.
+- **Concurrent owed-audit flushes write one audit.** The owed `payment_transition_pending` / `payment_transition_resolved` audit is inserted with `_id` set to its `audit_key`. A duplicate-key error means the audit is already written, so the flush counts it as written and pulls the marker. No new index is added. Audits written earlier with an auto `_id` are still found by their `audit_key` field and are not changed or removed.
+- **Each owed audit records its own transition's before/after.** The pending and resolved updates store that transition's `pending_before` and `pending_after` on the owed marker when it is created. The flush writes those values, so two transitions owed at once no longer contradict each other. Markers without a stored snapshot keep the previous derivation. No payment, plan balance, or SwipeSimple call is involved.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_resolution_clears_the_flag_even_when_the_next_step_fails`, `test_resolution_update_failure_keeps_the_key_and_the_flag`, `test_concurrent_owed_audit_flushes_write_one_audit`, `test_legacy_owed_audit_with_auto_id_is_not_rewritten`, `test_owed_audits_keep_each_transitions_own_snapshot`. The test store now rejects a duplicate `_id` like MongoDB does.
+
 ## [Unreleased] — 2026-10-28 (Indemnitor ID scan is kept)
 
 ### Fixed
@@ -67,6 +478,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `tests/test_packet_builder_service.py`: `test_coindemnitor_comes_only_from_this_bonded_case`, `test_coindemnitor_fails_closed_when_two_cases_share_the_booking`, `test_coindemnitor_not_taken_from_another_booking`.
 - `tests/test_palmetto_template_7.py` (on the CI list). Template 5 inventory and a 7-charge rejection, template 7 prefill and finalize for a 7-charge `TEST-` case, a fitting 6-charge join, 8 charges failing closed, and send flags left false. Schedule A prints a confirmed ledger or completed payment row, including a completed down-payment receipt and a completed installment, and leaves amount paid at `$0.00` with the full premium still due when the only figure is the write-time down payment. A cash receipt with `packet_id` and no booking number is included; another packet's cash is not. Another county's receipt under the same booking number is excluded. An evening UTC timestamp prints the Eastern calendar day. A third indemnitor fails closed on template 7 and stays in template 5's combined header. In-person packets lock the co-indemnitor name, phone, and email. Signer email is `admin@shamrockbailbonds.biz`. No DocuSeal submission is created against the live server.
 - A payment-source read that times out or raises stops packet generation (`DocuSealPacketValidationError`) and creates no DocuSeal submission. A successful read with no receipts still generates the packet at `$0.00` paid. County matching case-folds, collapses whitespace, and strips a trailing County or Co., so `Lee`, `Lee County`, and ` lee  county ` are the same county. `Lee` and `Collier` still conflict. `test_payment_read_failure_does_not_create_a_packet`, `test_empty_payment_read_still_creates_a_packet`, `test_schedule_a_matches_county_name_spellings`.
+
+## [Unreleased] — 2026-10-27 (co-signer paid: Booking_Number bonds, unreadable locked read, owed pending audits)
+
+### Fixed
+- **The paid step finds a bond stored with `Booking_Number` (#291).** `_one_case_id` matches `booking_number` or `Booking_Number`, and the link's drift check reads the bond's booking under either field. A booking that maps to more than one case under either field still returns no case, so nothing is stamped.
+- **A heal keeps its pending paid transition when the locked payment-row read fails (Codex P1).** An unreadable read inside `payment_txn_locks` now raises `PaymentRowsUnreadable` instead of counting as a refusal. The lock reports `LOCK_FAILED`, `note_cosigner_paid` returns False, and the pending key stays for the next read. An empty, readable row set is still a refusal.
+- **Pending state and its audit are no longer split (Codex P1).** `_record_pending_transition` and `_resolve_pending` push an owed-audit marker (`pending_payment_audits_owed`, `payment_audit_owed`) in the same document update as the pending-key change. The audit is then written with a stable `audit_key` and the marker is pulled. If the audit write fails, the marker stays and the next page read, heal or record writes it once. A retry that finds the `audit_key` already written only pulls the marker. No new index and no transaction are added.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_paid_finds_a_bond_stored_with_booking_number_alias`, `test_paid_fails_closed_when_the_alias_booking_is_two_cases`, `test_heal_keeps_pending_when_the_locked_row_read_fails`, `test_pending_state_and_its_audit_are_not_split`, `test_resolved_state_and_its_audit_are_not_split`, `test_owed_audit_is_not_written_twice_when_the_marker_pull_fails`.
 
 ## [Unreleased] — 2026-10-27 (signer emails must agree)
 
@@ -314,13 +735,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_cosigner_link.py`: `test_audit_outage_releases_the_verification_claim`.
 
+## [Unreleased] — 2026-10-23 (co-signer payment rows are tenant-scoped; pending audits show before/after)
+
+### Fixed
+- **The co-signer paid, reopen and heal steps read only this tenant's payment rows.** `_payment_rows` (and the heal step through `_stored_rows`) adds the active `tenant_id` when multi-tenancy is on, so a transaction id reused by another tenant cannot stamp or reopen this tenant's link. Flag on with no tenant: the rows count as unreadable and nothing is stamped. Flag off is unchanged. Closes #287.
+- **`payment_transition_pending` and `payment_transition_resolved` audits record the pending values before and after.** Each carries `pending_before` / `pending_after` with `payment_transition_pending`, `pending_payment_keys` and `pending_payment_transitions`. Closes #288.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_payment_rows_are_scoped_to_the_active_tenant`, `test_heal_does_not_replay_another_tenants_charge`, `test_pending_and_resolved_audits_record_before_and_after`.
+
 ## [Unreleased] — 2026-10-23 (co-signer revalidation reads Bond_Case_ID)
 
 ### Fixed
 - **A co-signer link stays valid when the case id is stored as `Bond_Case_ID` or `bond_case_id`.** Revalidation fails closed when neither field is the issued case. A POA number change does not revoke the link or the packet.
 
 ### Tests
-- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`.
+- `tests/test_cosigner_link.py`: `test_bond_case_id_alias_revalidates_and_rejects_a_mismatch`, `test_poa_number_change_keeps_the_cosigner_link`, `test_poa_number_change_keeps_the_link_and_docuseal_packet`.
 
 ## [Unreleased] — 2026-10-22 (co-signer pay URL stays on SwipeSimple)
 
@@ -345,6 +775,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_cosigner_link.py`: `test_bond_stored_as_bond_case_id_alias_issues_a_link`.
+
+## [Unreleased] — 2026-10-22 (co-signer down payment held by bond mirror drift is flagged)
+
+### Fixed
+- **Case and spacing are not mirror drift.** The `bond_cases` / `active_bonds` mirror check compares status, surety, booking, case number, POA, and match status trimmed and casefolded. Signer and defendant names compare without case, punctuation, or extra spaces (first and last name still decide). `match_id` compares trimmed only. A really different value still fails closed. The co-signer page and the paid path use the same check.
+- **A settled down payment that cannot mark the pay step is visible to staff.** When `note_cosigner_paid` is refused by `bond_mirror_mismatch`, `bond_ambiguous`, or two open packets on the case (`packet_ambiguous`), and the charge equals the packet's down payment, the link gets `needs_review` with `needs_review_reason`. The transaction is added to `paid_blocked_transaction_ids`. One `paid_blocked` audit event records the reason, transaction, and cents. A replay of the same transaction does not flag or audit again, even when it alternates with another held charge. A charge that is not the down payment is not flagged. Each hold is also kept in `paid_blocked_holds` with its own reason, and the `paid_blocked` audit records `review_before` and `review_after` (`needs_review`, `needs_review_reason`, held transactions), so a hold that replaces another one keeps both in history. Writes are conditional on `paid_block_version`, so concurrent holds are not lost. Nothing is sent. The payment row, the lock, and the compare-and-set stamp are unchanged.
+- **A paid stamp releases only its own hold.** When charge B marks paid, B is added to `paid_block_released_transaction_ids`. If another held charge (A) is still recorded on the link, `needs_review` stays set with A's reason and one `paid_hold_released` audit records the before/after review values with `hold_kept: true`. Only when no held charge is left is `needs_review` cleared, with one `paid_block_cleared` audit. A review reason that is not a paid hold is left alone.
+- **A failed co-signer paid or reopen write is retried and then healed from the payment rows.** `_with_payment_lock` retries a failed transaction up to three times inside the lock (not a co-signer refusal and not a server without transactions). If every attempt fails, the affected links get `payment_transition_pending`, `pending_payment_keys` and `pending_payment_transitions` (`paid:<txn>` or `reversed:<txn>`) with one `payment_transition_pending` audit, written outside the failed transaction. `reconcile_cosigner_payment_state` replays the pending transition through `note_cosigner_paid` / `note_cosigner_reversed` with the amount and status from the stored payment row, so the same rules apply (`SETTLED_CHARGE_STATUSES`, `REVERSAL_KINDS`, exact `invoice_due_cents`, `needs_review` rows excluded) with the same lock and compare-and-set. It runs on the next paid or refund event for the booking and on the co-signer page read. A paid link whose stored rows include a refund or failure is reopened on page read even when the pending marker could not be written. The heal marks once, audits once, writes one `payment_transition_resolved` audit, and does not touch plan balances, `last_payment` fields or payment rows. `webhooks.py`, the receipt poller and `payment_log_claims` are unchanged.
+
+### Tests
+- `tests/test_cosigner_link.py`: `test_blocked_down_payment_is_flagged_without_a_pay_link_or_outbound_charge`, `test_paid_path_reconciles_a_mirror_that_differs_only_in_case_and_spacing`, `test_mirror_drift_blocks_paid_and_flags_review_once`, `test_ambiguous_mirror_blocks_paid_and_flags_review_once`, `test_two_open_packets_block_paid_and_flag_each_link_once`, `test_mirror_normalization_keeps_real_differences`, `test_alternating_blocked_transactions_audit_once_each`, `test_held_charge_that_is_not_the_down_payment_is_not_flagged`, `test_paid_keeps_the_hold_while_another_held_charge_remains`, `test_hold_audits_record_review_before_and_after`, `test_transient_paid_lock_failure_is_retried_inside_the_lock`, `test_persistent_paid_lock_failure_leaves_pending_then_heals_once`, `test_persistent_reversal_lock_failure_leaves_pending_then_reopens_once`.
 
 ## [Unreleased] — 2026-10-22 (co-signer email reads coindemnitor_email)
 
@@ -1165,7 +1606,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_fl_pvp_bond_unknown.py` (added to the `ci.yml` list).
 
-
 ## [Unreleased] — 2026-10-14 (Collier: plain verified HTTPS, custody unknown)
 
 ### Changed
@@ -1194,7 +1634,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_fl_plain_https_polk_volusia_pasco.py` (added to the `ci.yml` list).
-
 
 ## [Unreleased] — 2026-10-14 (powers pack saved to generated reports)
 

@@ -145,6 +145,19 @@ def keep_stored_source_values(collection, pending) -> int:
     return kept
 
 
+
+def _discovery_insert_marker(state, county, booking, doc, now):
+    """Queue marker for a new Lee (FL) booking. Never raises; {} on any error."""
+    try:
+        from writers.indemnitor_discovery_hook import discovery_insert_marker
+
+        marker = discovery_insert_marker(state, county, booking, doc, now)
+        return dict(marker) if isinstance(marker, dict) else {}
+    except Exception as exc:
+        logger.warning("indemnitor discovery marker skipped error_type=%s", type(exc).__name__)
+        return {}
+
+
 class MongoWriter:
     """
     Writes ArrestRecord instances to MongoDB Atlas.
@@ -467,6 +480,14 @@ class MongoWriter:
                 doc, prov = protect_scraped_update(doc, existing, record=record, now=now)
                 protected += int(prov.any)
             state, county_name, booking = key
+            on_insert = {
+                "created_at": now,
+                "first_seen_at": now,
+            }
+            # Lee (FL) co-signer discovery queue marker. It rides in this same
+            # upsert, so it is durable when bulk_write returns (no thread, no
+            # extra round trip). Fail-open: an error yields {} and is logged.
+            on_insert.update(_discovery_insert_marker(state, county_name, booking, doc, now))
             operations.append(
                 UpdateOne(
                     {
@@ -477,10 +498,7 @@ class MongoWriter:
                     },
                     {
                         "$set": doc,
-                        "$setOnInsert": {
-                            "created_at": now,
-                            "first_seen_at": now,
-                        },
+                        "$setOnInsert": on_insert,
                     },
                     upsert=True,
                 )
@@ -533,10 +551,11 @@ class MongoWriter:
             f"{f', {skipped_invalid} skipped' if skipped_invalid else ''})"
         )
         if new_record_indexes:
+            fresh = [records[i] for i in new_record_indexes if 0 <= i < len(records)]
             try:
                 from dashboard.services.lead_subscriptions import record_lead_fanout
 
-                record_lead_fanout(self.db, [records[i] for i in new_record_indexes])
+                record_lead_fanout(self.db, fresh)
             except Exception as fanout_err:
                 # Type only: a traceback/driver message can embed the pointers.
                 logger.warning("lead fan-out skipped (%s)", type(fanout_err).__name__)
@@ -589,17 +608,52 @@ class MongoWriter:
         return list(self.arrests.aggregate(pipeline))
 
     def log_ingestion(
-        self, county: str, stats: Dict[str, Any], error: str = None, state: str = None
+        self,
+        county: str,
+        stats: Dict[str, Any] = None,
+        error: str = None,
+        state: str = None,
+        *,
+        source: str = None,
+        count: int = None,
+        error_class: str = None,
+        duration: float = None,
+        status: str = None,
+        scraper_id: str = None,
     ):
-        """Log a scraper run (include state for multi-state ops)."""
+        """Log a scraper run (include source, count, error_class, duration, and state)."""
+        stats = stats or {}
+        _filter_q, bare, st, label = self._scraper_status_identity(county, state)
+        total_records = (
+            int(count)
+            if count is not None
+            else int(stats.get("total_records", stats.get("records_scraped", 0)) or 0)
+        )
+        duration_seconds = round(
+            float(
+                duration
+                if duration is not None
+                else stats.get("elapsed_seconds", 0.0) or 0.0
+            ),
+            1,
+        )
+        resolved_source = source or scraper_id or label
+        resolved_status = status or ("ERROR" if error else "SUCCESS")
         self.ingestion_log.insert_one({
             "timestamp": datetime.now(timezone.utc),
-            "county": county,
-            "state": (state or "FL").upper(),
-            "total_records": stats.get("total_records", 0),
-            "new_records": stats.get("new_records", 0),
-            "updated_records": stats.get("updated_records", 0),
-            "status": "ERROR" if error else "SUCCESS",
+            "source": resolved_source,
+            "county": bare or county,
+            "county_label": label,
+            "state": st,
+            "scraper_id": scraper_id,
+            "count": total_records,
+            "total_records": total_records,
+            "new_records": int(stats.get("new_records", 0) or 0),
+            "updated_records": int(stats.get("updated_records", 0) or 0),
+            "duration": duration_seconds,
+            "duration_seconds": duration_seconds,
+            "status": resolved_status,
+            "error_class": error_class,
             "error": error,
         })
 

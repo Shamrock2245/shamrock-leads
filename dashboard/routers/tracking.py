@@ -20,7 +20,70 @@ import logging
 
 logger = logging.getLogger(__name__)
 tracking_bp = APIRouter(prefix="/api", tags=["tracking"])
-async def _merge_location_history(booking_number: str) -> list:
+def _registered_florida_county(county: str) -> bool:
+    """True when this bare county is one of the registered Florida counties.
+
+    A blank state on that county is the legacy Florida record. The same name
+    in another state stays explicit, so Lee, GA is not treated as Lee, FL.
+    """
+    from dashboard.extensions import REGISTERED_COUNTIES, parse_registered_county
+    from dashboard.services.place_identity import parse_place
+
+    name, _state = parse_place(county, "")
+    if not name:
+        return False
+    target = name.casefold()
+    for label in REGISTERED_COUNTIES:
+        bare, state = parse_registered_county(label)
+        if state == "FL" and bare.casefold() == target:
+            return True
+    return False
+
+
+def resolved_history_place(county: str = "", state: str = "") -> tuple[str, str] | None:
+    """The county and state a tracking card refers to.
+
+    A blank state is Florida only for a registered Florida county. A blank
+    state on any other county is not a place, so the caller keeps the
+    booking-only path and refuses a shared booking.
+    """
+    from dashboard.services.place_identity import parse_place
+
+    name, st = parse_place(county, state)
+    if name and not st and _registered_florida_county(name):
+        st = "FL"
+    if not name or not st:
+        return None
+    return name, st
+
+
+def _history_place_clause(county: str, state: str) -> dict:
+    """County plus one ``state`` field.
+
+    Florida includes a blank or missing ``state``. A sibling ``State`` field
+    is not consulted: a Georgia row that only stores ``state`` would otherwise
+    match ``State`` being absent.
+    """
+    from dashboard.services.place_identity import mongo_state_clause, parse_place
+
+    name, st = parse_place(county, state)
+    if not name or not st:
+        return {}
+    return {"$and": [
+        {"county": {"$regex": f"^{re.escape(name)}(?:\\s+County)?$", "$options": "i"}},
+        mongo_state_clause(st, state_fields=("state",)),
+    ]}
+
+
+def _scoped_tracking_query(booking_number: str, county: str = "", state: str = "") -> dict:
+    """Booking filter, narrowed to one place when the card named one."""
+    place = resolved_history_place(county, state)
+    if place is None:
+        return {"booking_number": booking_number}
+    return {"$and": [{"booking_number": booking_number}, _history_place_clause(*place)]}
+
+
+async def _merge_location_history(booking_number: str, county: str = "", state: str = "") -> list:
     """
     Merge location data from three sources for a given booking number:
       1. active_bonds.location_history  — geo-link pings pushed by geo.py
@@ -34,10 +97,10 @@ async def _merge_location_history(booking_number: str) -> list:
     merged: list[dict] = []
     seen_ts: set = set()
 
-    # Source 1: active_bonds.location_history
-    bond = await active_bonds.find_one(
-        {"booking_number": booking_number}, {"location_history": 1, "_id": 0}
-    )
+    # Source 1: active_bonds.location_history. A named place must not read
+    # another county's bond that happens to share the booking number.
+    scope = _scoped_tracking_query(booking_number, county, state)
+    bond = await active_bonds.find_one(scope, {"location_history": 1, "_id": 0})
     if bond:
         for entry in bond.get("location_history", []):
             ts = entry.get("ts") or entry.get("timestamp") or ""
@@ -55,8 +118,7 @@ async def _merge_location_history(booking_number: str) -> list:
 
     # Source 2: geo_pings collection
     async for doc in geo_pings_col.find(
-        {"booking_number": booking_number},
-        {"pings": 1, "created_at": 1, "_id": 0}
+        scope, {"pings": 1, "created_at": 1, "_id": 0}
     ).sort("created_at", -1).limit(200):
         for ping in doc.get("pings", []):
             ts = ping.get("ts", "")
@@ -76,7 +138,7 @@ async def _merge_location_history(booking_number: str) -> list:
 
     # Source 3: bond_checkins collection
     async for ci in checkins_col.find(
-        {"booking_number": booking_number}, {"_id": 0}
+        scope, {"_id": 0}
     ).sort("checkin_at", -1).limit(100):
         lat = ci.get("gps_lat")
         lng = ci.get("gps_lon")
@@ -101,8 +163,15 @@ async def _merge_location_history(booking_number: str) -> list:
 
     # Source 4: geo_devices collection (Traccar hardware & phone app GPS)
     geo_devices_col = get_collection("geo_devices")
+    device_query: dict = {
+        "$or": [{"booking_number": booking_number}, {"unique_id": booking_number}],
+        "last_position": {"$exists": True, "$ne": None},
+    }
+    device_place = resolved_history_place(county, state)
+    if device_place is not None:
+        device_query = {"$and": [device_query, _history_place_clause(*device_place)]}
     async for gd in geo_devices_col.find(
-        {"$or": [{"booking_number": booking_number}, {"unique_id": booking_number}], "last_position": {"$exists": True, "$ne": None}},
+        device_query,
         {"last_position": 1, "device_type": 1, "unique_id": 1, "_id": 0}
     ):
         lp = gd.get("last_position") or {}
@@ -181,6 +250,7 @@ async def tracking_map_data():
                 "booking_number": booking_number,
                 "defendant_name": bond.get("defendant_name"),
                 "county": bond.get("county"),
+            "state": bond.get("state"),
                 "bond_amount": bond.get("bond_amount"),
                 "premium": bond.get("premium"),
                 "case_number": bond.get("case_number"),
@@ -219,6 +289,7 @@ async def tracking_map_data():
                     "booking_number": bk,
                     "defendant_name": gd.get("label") or gd.get("unique_id") or "Tracked Device",
                     "county": gd.get("county") or "Lee",
+                    "state": gd.get("state"),
                     "bond_amount": 0,
                     "premium": 0,
                     "case_number": gd.get("unique_id"),
@@ -311,14 +382,58 @@ async def tracking_location_history(booking_number):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def history_place_query(booking_number: str, county: str = "", state: str = "") -> dict | None:
+    """Bond filter for one tracking card.
+
+    County and state together pin the place. A blank state on a registered
+    Florida county is that legacy Florida record. ``None`` means the caller
+    did not name a place, and the history route then refuses a booking that
+    belongs to more than one bond.
+    """
+    if resolved_history_place(county, state) is None:
+        return None
+    return _scoped_tracking_query(booking_number, county, state)
+
+
+async def _history_rows(collection, query: dict, limit: int = 2) -> list:
+    cursor = collection.find(query, {"_id": 0})
+    if hasattr(cursor, "limit"):
+        cursor = cursor.limit(limit)
+    to_list = getattr(cursor, "to_list", None)
+    if to_list is not None:
+        rows = to_list(length=limit)
+        if hasattr(rows, "__await__"):
+            rows = await rows
+        return [row for row in (rows or []) if isinstance(row, dict)]
+    found: list = []
+    async for row in cursor:
+        if isinstance(row, dict):
+            found.append(row)
+        if len(found) >= limit:
+            break
+    return found
+
+
 @tracking_bp.get("/tracking/{booking_number}/history")
-async def tracking_history(booking_number):
+async def tracking_history(
+    booking_number: str,
+    county: str = Query(""),
+    state: str = Query(""),
+):
     """Full location history + alerts + court dates for a specific defendant."""
     active_bonds = get_collection("active_bonds")
     try:
-        bond = await active_bonds.find_one(
-            {"booking_number": booking_number}, {"_id": 0}
-        )
+        place = resolved_history_place(county, state)
+        placed = history_place_query(booking_number, county, state)
+        if placed is not None:
+            bond = await active_bonds.find_one(placed, {"_id": 0})
+            if not bond:
+                return JSONResponse({"error": "Bond not found"}, status_code=404)
+        else:
+            rows = await _history_rows(active_bonds, {"booking_number": booking_number}, limit=2)
+            if len(rows) > 1:
+                return JSONResponse({"error": "booking_scope_ambiguous"}, status_code=409)
+            bond = rows[0] if rows else None
         if not bond:
             geo_devices = get_collection("geo_devices")
             gd = await geo_devices.find_one({
@@ -338,6 +453,7 @@ async def tracking_history(booking_number):
                     "status": "active",
                     "bond_amount": 0,
                     "county": gd.get("county", "Lee"),
+                    "state": gd.get("state"),
                     "case_number": gd.get("unique_id"),
                     "indemnitor_name": gd.get("phone", ""),
                     "indemnitor_phone": gd.get("phone", ""),
@@ -369,23 +485,27 @@ async def tracking_history(booking_number):
             if isinstance(v, datetime):
                 bond[k] = v.isoformat()
 
-        full_history = await _merge_location_history(booking_number)
+        scope_county, scope_state = place if place is not None else ("", "")
+        full_history = await _merge_location_history(booking_number, scope_county, scope_state)
 
         court_reminders = get_collection("court_reminders")
         court_dates = []
         async for rem in court_reminders.find(
-            {"booking_number": booking_number}, {"_id": 0}
+            _scoped_tracking_query(booking_number, scope_county, scope_state), {"_id": 0}
         ).sort("send_at", 1):
             for k, v in list(rem.items()):
                 if isinstance(v, datetime):
                     rem[k] = v.isoformat()
             court_dates.append(rem)
 
-        # Attach hardware device info if registered
-        geo_dev = await get_collection("geo_devices").find_one({
+        # Attach hardware device info if registered for this same place.
+        device_query: dict = {
             "$or": [{"booking_number": booking_number}, {"unique_id": booking_number}],
             "status": "active",
-        })
+        }
+        if place is not None:
+            device_query = {"$and": [device_query, _history_place_clause(*place)]}
+        geo_dev = await get_collection("geo_devices").find_one(device_query)
         dev_info = None
         if geo_dev:
             lp = geo_dev.get("last_position") or {}
@@ -408,6 +528,7 @@ async def tracking_history(booking_number):
             "status": bond.get("status"),
             "bond_amount": bond.get("bond_amount"),
             "county": bond.get("county"),
+            "state": bond.get("state"),
             "case_number": bond.get("case_number"),
             "indemnitor_name": bond.get("indemnitor_name"),
             "indemnitor_phone": bond.get("indemnitor_phone"),
@@ -421,6 +542,7 @@ async def tracking_history(booking_number):
             "location_count": len(full_history),
             "alerts": bond.get("alerts", []),
             "court_dates": court_dates,
+            "device_info": dev_info,
             "exonerated_at": bond.get("exonerated_at"),
             "exoneration_source": bond.get("exoneration_source"),
             "exoneration_case_number": bond.get("exoneration_case_number"),

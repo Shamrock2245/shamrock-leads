@@ -395,7 +395,6 @@ window.SLiMessage = (() => {
       body: JSON.stringify({
         suffix,
         url: newUrl,
-        api_key: 'shamrock-bb-sync-2245',
       }),
     });
 
