@@ -407,6 +407,23 @@ def paperwork_done_url() -> str:
     return f"{base}/done"
 
 
+def paperwork_done_url_for(packet_id: str, role: str = "") -> str:
+    """Completion URL for one signer. Packet id and role only — never an amount."""
+    from urllib.parse import urlencode
+
+    from dashboard.services.paperwork_signers import normalize_role
+
+    base = paperwork_done_url()
+    pid = str(packet_id or "").strip()
+    if not pid:
+        return base
+    params = [("packet_id", pid)]
+    raw = str(role or "").strip()
+    if raw:
+        params.append(("role", normalize_role(raw)))
+    return f"{base}?{urlencode(params)}"
+
+
 def role_copy(role: Optional[str]) -> Dict[str, str]:
     from dashboard.services.paperwork_signers import normalize_role
 

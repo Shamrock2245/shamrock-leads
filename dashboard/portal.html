@@ -443,27 +443,43 @@ function onConsentChange() {
   if (btn) btn.disabled = !ok;
 }
 
+function escHtml(v) {
+  return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[c]));
+}
+
+const CALL_PHONE = '(239) 332-2245';
+const CALL_TEL = 'tel:+12393322245';
+
+function safePayUrl(u) {
+  // Only the bond's own https invoice link the server verified; anything
+  // else falls back to the call-us button.
+  return (typeof u === 'string' && u.startsWith('https://')) ? u : '';
+}
+
 function renderIndemnitor(d) {
   document.getElementById('tabPaymentsBtn').style.display = '';
   const plan = d.payment_plan;
-  const balance = plan ? plan.balance : (d.premium || 0);
   const nextDue = plan ? plan.next_due_date : '';
+  // Confirmed amount due only — never an estimate or a guessed premium.
+  let amountHtml;
+  if (d.paid) {
+    amountHtml = plan && plan.balance ? fmtMoney(plan.balance) : 'Paid';
+  } else if (d.amount_due != null && d.amount_due !== '') {
+    amountHtml = fmtMoney(d.amount_due);
+  } else {
+    amountHtml = `Call ${CALL_PHONE}`;
+  }
 
   document.getElementById('balanceCard').innerHTML = `
     <div class="balance-card">
-      <div class="balance-label">Balance Due</div>
-      <div class="balance-amount">${fmtMoney(balance)}</div>
-      ${nextDue ? `<div class="balance-due">Next payment due: ${fmtDate(nextDue)}</div>` : ''}
+      <div class="balance-label">${d.paid ? (plan ? 'Plan Balance' : 'Premium') : 'Amount Due'}</div>
+      <div class="balance-amount">${escHtml(amountHtml)}</div>
+      ${nextDue ? `<div class="balance-due">Next payment due: ${escHtml(fmtDate(nextDue))}</div>` : ''}
     </div>`;
 
-  document.getElementById('paymentActions').innerHTML = `
-    <a href="${d.payment_link || '#'}" target="_blank" class="btn btn-gold">
-      💳 Make a Payment
-    </a>
-    <a href="tel:+12393322245" class="btn btn-secondary">
-      📞 Call to Pay by Phone
-    </a>`;
-
+  renderPaymentActions(d);
   // Payment history
   const payments = d.payment_history || [];
   if (payments.length > 0) {
@@ -478,6 +494,55 @@ function renderIndemnitor(d) {
       </div>
     `).join('');
   }
+}
+
+function renderPaymentActions(d) {
+  const el = document.getElementById('paymentActions');
+  const link = d.paid ? '' : safePayUrl(d.payment_link);
+  const call = `<a href="${CALL_TEL}" class="btn btn-secondary">📞 Call ${CALL_PHONE}</a>`;
+  if (link) {
+    el.innerHTML = `
+      <a href="${escHtml(link)}" target="_blank" rel="noopener noreferrer" class="btn btn-gold">
+        💳 Make a Payment
+      </a>${call}`;
+  } else if (!d.paid && d.invoice_request_allowed) {
+    el.innerHTML = `
+      <button type="button" id="btnInvoiceLink" class="btn btn-gold" onclick="requestInvoiceLink()">
+        💳 Get My Payment Link
+      </button>${call}
+      <div id="invoiceLinkMsg" class="balance-due" style="margin-top:8px"></div>`;
+  } else {
+    el.innerHTML = call;
+  }
+}
+
+async function requestInvoiceLink() {
+  const btn = document.getElementById('btnInvoiceLink');
+  const msg = document.getElementById('invoiceLinkMsg');
+  if (btn) btn.disabled = true;
+  if (msg) msg.textContent = 'Getting your payment link…';
+  try {
+    const res = await fetch(`/api/portal/${encodeURIComponent(TOKEN)}/invoice-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ send_copy: false }),
+    });
+    const body = await res.json().catch(() => ({}));
+    const url = res.ok && body.ok ? safePayUrl(body.payment_url) : '';
+    if (url) {
+      renderPaymentActions({ payment_link: url });
+      if (msg) msg.textContent = '';
+      return;
+    }
+    if (msg) {
+      msg.textContent = res.status === 202
+        ? 'Your link is being prepared. Please try again in a moment.'
+        : `We couldn't create your link online. Please call ${CALL_PHONE}.`;
+    }
+  } catch (e) {
+    if (msg) msg.textContent = `We couldn't create your link online. Please call ${CALL_PHONE}.`;
+  }
+  if (btn) btn.disabled = false;
 }
 
 // ── Check-In (explicit consent required — Track A) ──

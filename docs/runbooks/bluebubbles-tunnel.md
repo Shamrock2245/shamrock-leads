@@ -135,10 +135,14 @@ launchctl load ~/Library/LaunchAgents/com.ngrok.bluebubbles.plist
 
 ### VPS still using old URL
 ```bash
+# Ensure LaunchAgent env file exists on the office iMac (0600 permissions)
+install -m 600 /dev/null ~/.shamrock-bb-sync.env
+# Populate BB_PASSWORD and BB_CONFIG_API_KEY in ~/.shamrock-bb-sync.env
+
 # Hot-swap (no rebuild needed)
 curl -X PATCH https://leads.shamrockbailbonds.biz/api/bb-health/update-url \
   -H 'Content-Type: application/json' \
-  -d '{"suffix":"0178","url":"https://pseudospherical-etta-untactually.ngrok-free.dev","api_key":"shamrock-bb-sync-2245"}'
+  -d "{\"suffix\":\"0178\",\"url\":\"https://pseudospherical-etta-untactually.ngrok-free.dev\",\"api_key\":\"${BB_CONFIG_API_KEY}\"}"
 
 # Or rebuild for persistence
 docker compose build --no-cache dashboard && docker compose up -d dashboard

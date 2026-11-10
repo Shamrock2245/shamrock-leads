@@ -111,7 +111,12 @@ class FakeCollection:
         self.docs: List[Dict[str, Any]] = []
 
     async def insert_one(self, doc):
-        self.docs.append(copy.deepcopy(doc))
+        stored = copy.deepcopy(doc)
+        if "_id" in stored and any(row.get("_id") == stored["_id"] for row in self.docs):
+            from dashboard.services.exclusive_insert import DuplicateKeyError
+
+            raise DuplicateKeyError("duplicate _id")
+        self.docs.append(stored)
 
     async def find_one(self, flt=None, projection=None, sort=None, **kwargs):
         hits = [d for d in self.docs if matches(d, flt or {})]
@@ -131,6 +136,13 @@ class FakeCollection:
     def _apply(self, d, update, inserting):
         for k, v in (update.get("$set") or {}).items():
             _set_path(d, k, copy.deepcopy(v))
+        for k, v in (update.get("$inc") or {}).items():
+            current = _get(d, k)
+            try:
+                base = int(current or 0)
+            except (TypeError, ValueError):
+                base = 0
+            _set_path(d, k, base + int(v))
         for k, v in (update.get("$push") or {}).items():
             if "." in k:
                 bucket = _get(d, k)
@@ -160,11 +172,16 @@ class FakeCollection:
             return _WriteResult(0)
         return _WriteResult(0)
 
-    async def find_one_and_update(self, flt, update, **kw):
+    async def find_one_and_update(self, flt, update, upsert=False, **kw):
         for d in self.docs:
             if matches(d, flt):
                 self._apply(d, update, inserting=False)
                 return copy.deepcopy(d)
+        if upsert:
+            d = {k: v for k, v in (flt or {}).items() if not str(k).startswith("$") and not isinstance(v, dict)}
+            self._apply(d, update, inserting=True)
+            self.docs.append(d)
+            return copy.deepcopy(d)
         return None
 
 
