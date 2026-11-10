@@ -39,6 +39,7 @@ class SendPinRequest(BaseModel):
     booking_number: Optional[str] = None
     intake_id: Optional[str] = None
     role: Optional[str] = None
+    intake_proof: Optional[str] = None
 
 
 class VerifyPinRequest(BaseModel):
@@ -48,6 +49,11 @@ class VerifyPinRequest(BaseModel):
 
 def _digits_phone(raw: str) -> str:
     return "".join(ch for ch in (raw or "") if ch.isdigit())[-10:]
+
+
+def _self_serve_flag() -> bool:
+    from dashboard.services.paperwork_self_serve import self_serve_prefill_enabled
+    return self_serve_prefill_enabled()
 
 
 def _extract_signing_link_from_packet(doc: Optional[dict], role: Optional[str] = None) -> str:
@@ -174,8 +180,12 @@ async def _resolve_packet_for_client(
             "defendant_name": "",
             "status": "not_found",
             "message": (
-                "No e-sign packet is on file for this phone yet. "
-                "If your bond agent already sent paperwork, call (239) 332-2245."
+                "Scan your ID and confirm your details to open your paperwork."
+                if _self_serve_flag()
+                else (
+                    "No e-sign packet is on file for this phone yet. "
+                    "If your bond agent already sent paperwork, call (239) 332-2245."
+                )
             ),
         }
 
@@ -245,6 +255,8 @@ async def send_portal_pin(req: SendPinRequest):
     now = datetime.now(timezone.utc)
     expires_at = (now + timedelta(minutes=15)).isoformat()
 
+    from dashboard.services.paperwork_self_serve import consume_walk_in_proof
+
     pin_doc = {
         "phone": clean_phone,
         "pin": otp_pin,
@@ -254,6 +266,8 @@ async def send_portal_pin(req: SendPinRequest):
         "created_at": now.isoformat(),
         "expires_at": expires_at,
         "verified": False,
+        # Empty unless the server signed this launch. A raw channel is not stored.
+        "intake_channel": consume_walk_in_proof(req.intake_proof or ""),
     }
 
     await pins_col.update_one(
@@ -531,7 +545,14 @@ _CLIENT_FIELD_ALLOWLIST = frozenset({
     "coindemnitor_name", "coindemnitor_first_name", "coindemnitor_last_name",
     "coindemnitor_address", "coindemnitor_city", "coindemnitor_state", "coindemnitor_zip",
     "coindemnitor_city_state_zip", "coindemnitor_dob", "coindemnitor_dl",
+    "coindemnitor_dl_state", "coindemnitor_sex", "coindemnitor_dl_expiration",
     "coindemnitor_phone", "coindemnitor_email", "Ind2Name",
+    "indemnitor_dl_state", "indemnitor_sex", "indemnitor_dl_expiration",
+    "indemnitor_first_name", "indemnitor_last_name",
+    "defendant_sex", "defendant_dl_expiration", "defendant_license_number",
+    "defendant_license_state",
+    "IndDOB", "IndDL", "IndAddress", "IndCity", "IndState", "IndZip", "IndCityStateZip",
+    "DefDOB", "DefDL", "DefDLState", "DefSex", "DefAddress", "DefCity", "DefState", "DefZip",
 })
 
 
@@ -541,6 +562,8 @@ class RemainingFieldsRequest(BaseModel):
     role: Optional[str] = None
     address_confirmed: Optional[bool] = None
     staff_review_acknowledged: Optional[bool] = None
+    scan_id: Optional[str] = None
+    email: Optional[str] = None
 
 
 def _normalize_client_role(raw: Optional[str]) -> str:
@@ -1277,9 +1300,14 @@ async def portal_id_ocr(request: Request):
             except Exception:
                 image_bytes = b""
 
-    session = await _load_verified_session(session_token)
-    if not session:
-        return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
+    if _self_serve_flag():
+        session, denial = await _id_upload_session(session_token)
+        if denial or session is None:
+            return _id_upload_denied(denial or "token_invalid")
+    else:
+        session = await _load_verified_session(session_token)
+        if not session:
+            return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
     if not image_bytes:
         return JSONResponse({"success": False, "error": "No ID image data provided"}, status_code=400)
 
@@ -1288,6 +1316,34 @@ async def portal_id_ocr(request: Request):
     result = await IDScannerService.scan_id_image(image_bytes, filename=filename)
     extracted = result.get("extracted") if isinstance(result.get("extracted"), dict) else {}
     pushed = False
+    scan_id = ""
+    if _self_serve_flag() and result.get("success") and extracted:
+        from dashboard.services.paperwork_self_serve import ocr_snapshot
+
+        record = _id_upload_record(session, extracted, True)
+        denial = await _insert_id_upload(session, record)
+        if denial:
+            return _id_upload_denied(denial)
+        scan_id = record["scan_id"]
+        await get_collection("portal_pins").update_one(
+            {"session_token": session_token},
+            {"$push": {"id_ocr_snapshots": {
+                "scan_id": scan_id,
+                "role": record["role"],
+                "recorded_at": record["recorded_at"],
+                "extracted": ocr_snapshot(extracted),
+            }}},
+        )
+        session["role"] = record["role"]
+        return JSONResponse({
+            "success": True,
+            "extracted": extracted,
+            "error": None,
+            "portrait_jpeg_b64": result.get("portrait_jpeg_b64") or "",
+            "pushed_to_docuseal": False,
+            "role": record["role"],
+            "scan_id": scan_id,
+        })
     if result.get("success") and extracted:
         role = _normalize_client_role(session.get("role")) or "indemnitor"
         existing = session.get("client_fields") if isinstance(session.get("client_fields"), dict) else {}
@@ -1730,6 +1786,54 @@ async def portal_selfie(request: Request):
     return {"success": True}
 
 
+def _public_self_serve_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Signing link only. Never a pay link."""
+    link = str(result.get("signing_link") or "")
+    if result.get("fallback") or not link.startswith("http"):
+        link = ""
+    lowered = link.lower()
+    if "swipesimple" in lowered or "/pay" in lowered:
+        link = ""
+    return {
+        "success": bool(result.get("ok", result.get("saved"))),
+        "saved": bool(result.get("saved")),
+        "fallback": bool(result.get("fallback")),
+        "signing_link": link,
+        "packet_id": result.get("packet_id") or "",
+        "bond_case_id": result.get("bond_case_id") or "",
+        "person_id": result.get("person_id") or "",
+        "role": result.get("role") or "",
+        "has_packet": bool(link),
+        "created_case": bool(result.get("created_case")),
+        "reused_case": bool(result.get("reused_case")),
+        "message": result.get("message") or "",
+        "error": result.get("error") or "",
+        "pushed_to_docuseal": bool(link),
+    }
+
+
+async def _self_serve_remaining_fields(session: Dict[str, Any], req: RemainingFieldsRequest):
+    from dashboard.services.paperwork_self_serve import accept_confirmed_id
+
+    role = _normalize_client_role(session.get("role")) or _normalize_client_role(req.role) or "indemnitor"
+    email = str(req.email or (req.fields or {}).get(f"{'defendant' if role == 'defendant' else 'coindemnitor' if role == 'coindemnitor' else 'indemnitor'}_email") or "").strip()
+    phone = _digits_phone(session.get("phone") or "")
+    result = await accept_confirmed_id(
+        session=session,
+        scan_id=str(req.scan_id or ""),
+        role=role,
+        edits=req.fields or {},
+        email=email,
+        phone=phone,
+    )
+    if result.get("error") == "scan_required":
+        return JSONResponse({"success": False, "error": "scan_required", "signing_link": ""}, status_code=400)
+    payload = _public_self_serve_payload(result)
+    if not payload["success"]:
+        return JSONResponse(payload, status_code=400)
+    return payload
+
+
 @pin_portal_router.post("/remaining-fields")
 async def portal_remaining_fields(req: RemainingFieldsRequest):
     """Save a verified role-specific intake and update DocuSeal only if staff issued it.
@@ -1739,6 +1843,12 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
     is saved for the client and no packet is created.  Existing staff-issued
     DocuSeal packets retain the established field-update behavior.
     """
+    if _self_serve_flag() and (req.scan_id or "").strip():
+        session, denial = await _id_upload_session(req.session_token)
+        if denial or session is None:
+            return _id_upload_denied(denial or "token_invalid")
+        return await _self_serve_remaining_fields(session, req)
+
     session = await _load_verified_session(req.session_token)
     if not session:
         return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
@@ -2898,7 +3008,9 @@ async def get_portal_ui(request: Request):
         let inPerson = false;
         // Client data lives in page memory only — never localStorage (a shared
         // office tablet must not keep the last client's phone or ID).
-        const portalMem = { phone: '', sessionToken: '', pendingIdFile: null, signingLink: '', signingOpts: null, role: '', mode: '', caseId: '' };
+        const SELF_SERVE_PREFILL = false;
+        const WALK_IN_INTAKE_PROOF = "";
+        const portalMem = { phone: '', sessionToken: '', pendingIdFile: null, signingLink: '', signingOpts: null, role: '', scanId: '', mode: '', caseId: '' };
         const portalHints = { role: '', caseId: '', mode: '' };
         try { ['sl_portal_phone', 'sl_indemnitor_scanned_profile', 'sl_portal_in_person'].forEach(k => localStorage.removeItem(k)); } catch (e) {}
 
@@ -3083,6 +3195,7 @@ async def get_portal_ui(request: Request):
                     return;
                 }
                 portalMem.role = d.role || 'indemnitor';
+                portalMem.scanId = d.scan_id || '';
                 renderPortalConfirm(d.extracted, d.portrait_jpeg_b64 || '');
             } catch (err) {
                 resEl.innerHTML = `<div class="status error" style="display:block">❌ ID scan error: ${escHtml(err.message)}</div>`;
@@ -3093,6 +3206,12 @@ async def get_portal_ui(request: Request):
         function renderPortalConfirm(ext, portrait) {
             const resEl = document.getElementById('portalIdResult');
             const P = portalMem.role === 'defendant' ? 'defendant_' : (portalMem.role === 'coindemnitor' ? 'coindemnitor_' : 'indemnitor_');
+            const extra = SELF_SERVE_PREFILL ? `
+                        <input name="dob" placeholder="Date of birth" value="${escHtml(ext.dob || '')}">
+                        <input name="dl" placeholder="ID number" value="${escHtml(ext.dl_number || '')}">
+                        <input name="dl_state" placeholder="ID issuing state" maxlength="2" value="${escHtml(ext.dl_state || ext.issuing_state || '')}">
+                        <input name="expiration" placeholder="ID expiration" value="${escHtml(ext.expiration_date || '')}">
+                        <input name="sex" placeholder="Sex" maxlength="1" value="${escHtml(ext.sex || '')}">` : '';
             resEl.innerHTML = `
                 <form id="portalConfirm" class="id-extracted-card" autocomplete="off">
                     <div class="id-extracted-title">Check your details</div>
@@ -3104,6 +3223,7 @@ async def get_portal_ui(request: Request):
                         <input name="city" placeholder="City" value="${escHtml(ext.city || '')}">
                         <input name="state" placeholder="State" maxlength="3" value="${escHtml(ext.state || '')}">
                         <input name="zip" placeholder="ZIP" inputmode="numeric" value="${escHtml(ext.zip || '')}">
+                        ${extra}
                         <button type="button" class="btn-primary" data-next="2">Yes, that's right</button>
                     </div>
                     <div data-step="2" hidden>
@@ -3114,7 +3234,7 @@ async def get_portal_ui(request: Request):
                     <div data-step="3" hidden>
                         <p class="id-extracted-hint"><strong>3.</strong> Best email</p>
                         <input name="email" type="email" inputmode="email" placeholder="you@example.com">
-                        <label class="id-extracted-hint"><input type="checkbox" name="ack" style="width:auto;min-height:auto"> This is correct. I understand staff will review it.</label>
+                        <label class="id-extracted-hint"><input type="checkbox" name="ack" style="width:auto;min-height:auto"> ${SELF_SERVE_PREFILL ? 'This is correct.' : 'This is correct. I understand staff will review it.'}</label>
                         <button type="submit" class="btn-primary">Save &amp; continue</button>
                     </div>
                     <p id="portalConfirmErr" class="status error" style="display:none"></p>
@@ -3136,17 +3256,33 @@ async def get_portal_ui(request: Request):
                 fields[P + 'city'] = form.city.value.trim();
                 fields[P + 'state'] = form.state.value.trim();
                 fields[P + 'zip'] = form.zip.value.trim();
+                if (SELF_SERVE_PREFILL) {
+                    fields[P + 'dob'] = form.dob.value.trim();
+                    fields[P + 'dl'] = form.dl.value.trim();
+                    fields[P + 'dl_state'] = form.dl_state.value.trim();
+                    fields[P + 'dl_expiration'] = form.expiration.value.trim();
+                    fields[P + 'sex'] = form.sex.value.trim();
+                }
                 if (phone) fields[P + 'phone'] = phone;
                 if (form.email.value.trim()) fields[P + 'email'] = form.email.value.trim();
+                const payload = { session_token: portalMem.sessionToken, fields, role: portalMem.role,
+                                   address_confirmed: true, staff_review_acknowledged: true };
+                if (SELF_SERVE_PREFILL && portalMem.scanId) payload.scan_id = portalMem.scanId;
+                if (form.email.value.trim()) payload.email = form.email.value.trim();
                 try {
                     const r = await fetch('/api/portal/remaining-fields', {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ session_token: portalMem.sessionToken, fields, role: portalMem.role,
-                                               address_confirmed: true, staff_review_acknowledged: true })
+                        body: JSON.stringify(payload)
                     });
                     const d = await r.json();
                     if (!d.success) { err.style.display = 'block'; err.textContent = d.error || 'Could not save.'; return; }
-                    if (portalMem.signingLink) {
+                    if (SELF_SERVE_PREFILL) {
+                        if (d.signing_link) {
+                            openDocuSealForm(d.signing_link, portalMem.signingOpts || { fullscreen: inPerson || isTabletOrTouch() });
+                        } else {
+                            resEl.innerHTML = '<div class="status success" style="display:block">' + escHtml(d.message || 'We saved your information. A signing link is not available yet. Call (239) 332-2245.') + '</div>';
+                        }
+                    } else if (portalMem.signingLink) {
                         openDocuSealForm(portalMem.signingLink, portalMem.signingOpts || {});
                     } else {
                         resEl.innerHTML = '<div class="status success" style="display:block">✅ Saved. A Shamrock agent will text you when your paperwork is ready. (239) 332-2245</div>';
@@ -3250,7 +3386,6 @@ async def get_portal_ui(request: Request):
                 consumeHandoff(ht);
                 return;
             }
-            const mode = (params.get('mode') || params.get('kiosk') || '').toLowerCase();
             if (mode === 'id-upload') {
                 showAuthTab('scan');
                 ['tabPin', 'tabLink', 'panel-pin', 'panel-link', 'esign-frame', 'btnInPerson'].forEach(function (id) {
@@ -3380,7 +3515,7 @@ async def get_portal_ui(request: Request):
                 const r = await fetch('/api/portal/send-pin', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({phone})
+                    body: JSON.stringify({phone: phone, intake_proof: WALK_IN_INTAKE_PROOF || ""})
                 });
                 const d = await r.json();
                 if (d.success) {
@@ -3480,4 +3615,17 @@ async def get_portal_ui(request: Request):
     if _in_person_launch(request):
         # Shared office tablet: 3-minute idle reset back to /kiosk.
         html = html.replace("</body>", KIOSK_IDLE_SNIPPET + "\n</body>", 1)
+    if _self_serve_flag():
+        html = html.replace("const SELF_SERVE_PREFILL = false;", "const SELF_SERVE_PREFILL = true;", 1)
+    from dashboard.services.paperwork_self_serve import issue_walk_in_proof
+
+    launch = _launch_mode(request)
+    if launch in {"inperson", "ipad", "kiosk"}:
+        proof = issue_walk_in_proof(launch)
+        if proof:
+            html = html.replace(
+                'const WALK_IN_INTAKE_PROOF = "";',
+                "const WALK_IN_INTAKE_PROOF = " + json.dumps(proof) + ";",
+                1,
+            )
     return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})

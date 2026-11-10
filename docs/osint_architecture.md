@@ -2,6 +2,8 @@
 
 ## Overview
 
+Lee (FL) co-signer candidates are not OSINT scans. They are stored on the `contacts` collection by `dashboard/services/contact_discovery.py` and shown on the lead drawer. `osint_scans` remains the digital-footprint report for a known defendant after a bond exists. Maigret, GHunt, and h8mail are not run for a new booking.
+
 Expansion of the OSINT Intelligence tab from 2-engine (Maigret + Blackbird) to a 4-engine workstation adding **Sherlock** and **SpiderFoot**. Full end-to-end wiring: schema → worker → router → exports → UI.
 
 ## Engine Matrix

@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from dashboard.extensions import get_collection
+from dashboard.services.exclusive_insert import insert_new
 from dashboard.services.surety_registry import normalize_surety, is_supported_surety
 
 logger = logging.getLogger(__name__)
@@ -708,3 +709,909 @@ async def ensure_match_bondcase(
         "premium": resolved_premium,
         "pending_staff_match": False,
     }
+
+
+# ── Self-serve draft (no invented bond, premium, or POA) ────────────────────
+# ensure_match_bondcase stays the path for a booking that already has an
+# arrest, an active bond, a surety, a case number, a POA, and a premium.
+# A walk-in ID confirm has none of those. This helper dedupes on phone +
+# name + DOB and, on a miss, inserts one draft BondCase. It does not pull a
+# power and it does not calculate a premium.
+#
+# The draft's ``_id`` is a uuid5 of the dedupe key. MongoDB's existing unique
+# ``_id`` index makes the second insert fail with DuplicateKeyError. No new
+# index is created. A legacy case is reused only when the role-slot lookup
+# sees it. Two visible matches fail closed. Rows that already exist are not
+# deleted.
+
+_SELF_SERVE_SOURCE = "self_serve"
+_SELF_SERVE_STATUS = "pending_owner_review"
+_HARD_CHAIN_ERRORS = frozenset({
+    "poa_assigned_elsewhere",
+    "indemnitor_contact_mismatch",
+})
+
+
+def _stable_id(label: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, label))
+
+
+def self_serve_ids(dedupe_key: str, role: str) -> Dict[str, str]:
+    """Ids both workers can compute before either one reads the database."""
+    case_id = _stable_id("shamrock-self-serve-case-v1:" + dedupe_key)
+    person_id = _stable_id(f"shamrock-self-serve-person-v1:{case_id}:{role}")
+    match_id = _stable_id(f"shamrock-self-serve-match-v1:{case_id}:{role}")
+    return {"bond_case_id": case_id, "person_id": person_id, "match_id": match_id}
+
+
+def _digits_phone(raw: Any) -> str:
+    digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+def _normalize_dob(raw: Any) -> str:
+    digits = "".join(ch for ch in str(raw or "") if ch.isdigit())
+    if len(digits) != 8:
+        return digits
+    year_first = int(digits[:4])
+    if 1900 <= year_first <= 2100:
+        return digits
+    month = int(digits[:2])
+    if 1 <= month <= 12:
+        return digits[4:8] + digits[:4]
+    return digits
+
+
+def _first_text(doc: Dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = doc.get(key)
+        if isinstance(value, dict):
+            continue
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _same_identity(phone: str, name: str, dob: str, doc_phone: Any, doc_name: Any, doc_dob: Any) -> bool:
+    from dashboard.services.identity_verification_service import names_match
+
+    if not phone or not name or not dob:
+        return False
+    if _digits_phone(doc_phone) != phone:
+        return False
+    if _normalize_dob(doc_dob) != dob:
+        return False
+    return names_match(name, doc_name)
+
+
+async def _collect_docs(name: str, query: Dict[str, Any], limit: int = 25) -> List[Dict[str, Any]]:
+    cursor = get_collection(name).find(query)
+    if hasattr(cursor, "to_list"):
+        rows = await cursor.to_list(length=limit)
+        return [row for row in rows if isinstance(row, dict)]
+    rows = []
+    async for row in cursor:
+        if isinstance(row, dict):
+            rows.append(row)
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _case_id_of(doc: Dict[str, Any]) -> str:
+    return _owner_token(doc.get("bond_case_id") or doc.get("Bond_Case_ID"))
+
+
+def _canonical_self_serve_case(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Earliest draft wins when a race inserted more than one row for one key."""
+    usable = [row for row in rows if isinstance(row, dict) and _case_id_of(row)]
+    if not usable:
+        return None
+    usable.sort(key=lambda row: (str(row.get("created_at") or ""), _case_id_of(row)))
+    return usable[0]
+
+
+def _slot_identity(case: Dict[str, Any], role: str) -> Tuple[str, str, str, str]:
+    """Return person id, phone, name, dob for one role slot. Empty when unset."""
+    nested_key = {"defendant": "defendant", "coindemnitor": "coindemnitor"}.get(role, "indemnitor")
+    nested = case.get(nested_key) if isinstance(case.get(nested_key), dict) else {}
+    if role == "defendant":
+        return (
+            _owner_token(case.get("defendant_id") or case.get("Defendant_ID") or nested.get("defendant_id")),
+            _first_text(case, "defendant_phone") or _first_text(nested, "phone"),
+            _first_text(case, "defendant_name") or _first_text(nested, "name", "full_name"),
+            _first_text(case, "defendant_dob") or _first_text(nested, "dob"),
+        )
+    if role == "coindemnitor":
+        return (
+            _owner_token(case.get("co_indemnitor_id") or nested.get("indemnitor_id") or nested.get("co_indemnitor_id")),
+            _first_text(case, "coindemnitor_phone") or _first_text(nested, "phone"),
+            _first_text(case, "coindemnitor_name") or _first_text(nested, "name", "full_name"),
+            _first_text(case, "coindemnitor_dob") or _first_text(nested, "dob"),
+        )
+    return (
+        _owner_token(case.get("indemnitor_id") or case.get("Indemnitor_ID") or nested.get("indemnitor_id")),
+        _first_text(case, "indemnitor_phone") or _first_text(nested, "phone"),
+        _first_text(case, "indemnitor_name") or _first_text(nested, "name", "full_name"),
+        _first_text(case, "indemnitor_dob") or _first_text(nested, "dob"),
+    )
+
+
+def _case_matches_signer(case: Dict[str, Any], phone: str, name: str, dob: str, role: str) -> bool:
+    """True only when this role's slot is the same phone, name, and date of birth."""
+    _person_id, slot_phone, slot_name, slot_dob = _slot_identity(case, role)
+    return _same_identity(phone, name, dob, slot_phone, slot_name, slot_dob)
+
+
+async def _cases_for_signer(
+    phone: str,
+    name: str,
+    dob: str,
+    dedupe_key: str,
+    role: str,
+) -> List[Dict[str, Any]]:
+    found: Dict[str, Dict[str, Any]] = {}
+
+    def _keep(case: Optional[Dict[str, Any]]) -> None:
+        if not isinstance(case, dict):
+            return
+        case_id = _case_id_of(case)
+        if case_id and case_id not in found and _case_matches_signer(case, phone, name, dob, role):
+            found[case_id] = case
+
+    keyed = await _collect_docs("bond_cases", {"self_serve_dedupe_key": dedupe_key})
+    for row in keyed:
+        if _case_matches_signer(row, phone, name, dob, role) or not _slot_identity(row, role)[2]:
+            case_id = _case_id_of(row)
+            if case_id:
+                found[case_id] = row
+    phone_field = {
+        "defendant": "defendant_phone",
+        "coindemnitor": "coindemnitor_phone",
+    }.get(role, "indemnitor_phone")
+    for row in await _collect_docs("bond_cases", {phone_field: {"$regex": phone + "$"}}):
+        if _case_matches_signer(row, phone, name, dob, role):
+            _keep(row)
+    if role == "defendant":
+        people = await _collect_docs("defendants", {"phone": {"$regex": phone + "$"}})
+        id_query = lambda person_id: {"$or": [{"defendant_id": person_id}, {"Defendant_ID": person_id}]}
+    else:
+        people = await _collect_docs("indemnitors", {"phone": {"$regex": phone + "$"}})
+        if role == "coindemnitor":
+            id_query = lambda person_id: {"co_indemnitor_id": person_id}
+        else:
+            id_query = lambda person_id: {"$or": [{"indemnitor_id": person_id}, {"Indemnitor_ID": person_id}]}
+    id_field = "defendant_id" if role == "defendant" else "indemnitor_id"
+    alt_field = "Defendant_ID" if role == "defendant" else "Indemnitor_ID"
+    for person in people:
+        if role == "coindemnitor" and str(person.get("role") or "").strip().lower() not in {"coindemnitor", "co_indemnitor", "co-indemnitor"}:
+            continue
+        if role == "indemnitor" and str(person.get("role") or "").strip().lower() in {"coindemnitor", "co_indemnitor", "co-indemnitor"}:
+            continue
+        person_name = _first_text(person, "name", "full_name")
+        person_dob = _first_text(person, "dob")
+        if not _same_identity(phone, name, dob, person.get("phone"), person_name, person_dob):
+            continue
+        person_id = _owner_token(person.get(id_field) or person.get(alt_field))
+        if not person_id:
+            continue
+        for case in await _collect_docs("bond_cases", id_query(person_id)):
+            if _case_matches_signer(case, phone, name, dob, role):
+                _keep(case)
+    return list(found.values())
+
+
+def _identity_patch(role: str, identity: Dict[str, str], phone: str, email: str) -> Dict[str, Any]:
+    """Identity and contact only. Bond, premium, and POA are not in this patch."""
+    prefix = {"defendant": "defendant", "coindemnitor": "coindemnitor"}.get(role, "indemnitor")
+    patch: Dict[str, Any] = {}
+    for suffix in ("name", "dob", "address", "city", "state", "zip", "dl", "dl_state", "sex", "dl_expiration", "phone", "email"):
+        key = f"{prefix}_{suffix}"
+        value = str(identity.get(key) or "").strip()
+        if suffix == "phone" and phone:
+            value = phone
+        if suffix == "email" and email:
+            value = email
+        if value:
+            patch[key] = value
+    return patch
+
+
+async def _write_party_identity(
+    *,
+    role: str,
+    person_id: str,
+    case_id: str,
+    identity: Dict[str, str],
+    phone: str,
+    email: str,
+    name: str,
+    dob: str,
+    scan_blob: Dict[str, Any],
+    now_iso: str,
+) -> None:
+    collection = "defendants" if role == "defendant" else "indemnitors"
+    id_field = "defendant_id" if role == "defendant" else "indemnitor_id"
+    col = get_collection(collection)
+    alt_field = "Defendant_ID" if role == "defendant" else "Indemnitor_ID"
+    existing = await col.find_one({"$or": [{id_field: person_id}, {alt_field: person_id}]})
+    prefix = {"defendant": "defendant", "coindemnitor": "coindemnitor"}.get(role, "indemnitor")
+    party_fields = {
+        "name": name,
+        "full_name": name,
+        "phone": phone,
+        "email": email,
+        "dob": dob,
+        "address": identity.get(f"{prefix}_address") or "",
+        "city": identity.get(f"{prefix}_city") or "",
+        "state": identity.get(f"{prefix}_state") or "",
+        "zip": identity.get(f"{prefix}_zip") or "",
+        "dl": identity.get(f"{prefix}_dl") or "",
+        "dl_state": identity.get(f"{prefix}_dl_state") or "",
+        "sex": identity.get(f"{prefix}_sex") or "",
+        "dl_expiration": identity.get(f"{prefix}_dl_expiration") or "",
+        "bond_case_id": case_id,
+        "role": "coindemnitor" if role == "coindemnitor" else ("defendant" if role == "defendant" else "primary"),
+        "source": _SELF_SERVE_SOURCE,
+        "updated_at": now_iso,
+    }
+    party_fields = {key: value for key, value in party_fields.items() if value not in ("", None)}
+    party_fields["bond_case_id"] = case_id
+    party_fields["source"] = _SELF_SERVE_SOURCE
+    scan_row = {
+        "scan_id": scan_blob.get("scan_id") or "",
+        "role": role,
+        "source": _SELF_SERVE_SOURCE,
+        "recorded_at": now_iso,
+        "success": True,
+        "packet_id": "",
+        "extracted": {
+            "full_name": str(scan_blob.get("full_name") or name),
+            "dl_state": str(scan_blob.get("dl_state") or ""),
+        },
+    }
+    already = [
+        row for row in (existing.get("id_scan_records") or [])
+        if isinstance(row, dict) and row.get("scan_id") == scan_row["scan_id"]
+    ] if isinstance(existing, dict) else []
+    if isinstance(existing, dict):
+        update: Dict[str, Any] = {"$set": party_fields}
+        if not already:
+            update["$push"] = {"id_scan_records": scan_row}
+        if not isinstance(existing.get("id_scan"), dict) or not existing.get("id_scan"):
+            update["$set"]["id_scan"] = {
+                "success": True,
+                "full_name": scan_row["extracted"]["full_name"],
+                "dl_state": scan_row["extracted"]["dl_state"],
+                "role": role,
+                "scan_id": scan_row["scan_id"],
+            }
+        filt = {"_id": existing["_id"]} if existing.get("_id") else {id_field: person_id}
+        await col.update_one(filt, update)
+        return
+    doc = {
+        "_id": person_id,
+        id_field: person_id,
+        "Indemnitor_ID" if role != "defendant" else "Defendant_ID": person_id,
+        "created_at": now_iso,
+        "id_scan": {
+            "success": True,
+            "full_name": scan_row["extracted"]["full_name"],
+            "dl_state": scan_row["extracted"]["dl_state"],
+            "role": role,
+            "scan_id": scan_row["scan_id"],
+        },
+        "id_scan_records": [scan_row],
+        **party_fields,
+    }
+    inserted = await insert_new(col, doc)
+    if inserted:
+        return
+    raced = await col.find_one({"_id": person_id})
+    if isinstance(raced, dict):
+        await _write_party_identity(
+            role=role,
+            person_id=person_id,
+            case_id=case_id,
+            identity=identity,
+            phone=phone,
+            email=email,
+            name=name,
+            dob=dob,
+            scan_blob=scan_blob,
+            now_iso=now_iso,
+        )
+
+
+async def ensure_self_serve_bondcase(
+    *,
+    phone: str,
+    name: str,
+    dob: str,
+    role: str,
+    email: str = "",
+    identity: Optional[Dict[str, str]] = None,
+    scan_blob: Optional[Dict[str, Any]] = None,
+    booking_number: str = "",
+    actor: str = "auto",
+    walk_in_channel: str = "",
+) -> Dict[str, Any]:
+    """Reuse one BondCase for this phone + name + DOB, or insert one draft.
+
+    A booking already on the session is checked against the stored role
+    phone, name, and date of birth before ``ensure_match_bondcase``. A
+    mismatch does not call that function. A booking that passes is offered
+    to it. It still refuses a missing arrest, POA, premium, or bond amount,
+    and this function does not fill those in. A miss inserts one
+    draft with ``source=self_serve`` and ``status=pending_owner_review``.
+    A second call with the same dedupe key returns the same case.
+    """
+    from dashboard.services.id_ocr_service import name_letters_key, normalize_person_name
+    from dashboard.services.identity_verification_service import names_match
+
+    role = str(role or "").strip().lower()
+    if role not in {"indemnitor", "coindemnitor", "defendant"}:
+        return {"success": False, "error": "role_invalid"}
+    phone_n = _digits_phone(phone)
+    dob_n = _normalize_dob(dob)
+    name_n = normalize_person_name(name)
+    if len(phone_n) != 10:
+        return {"success": False, "error": "phone_required"}
+    if not dob_n:
+        return {"success": False, "error": "dob_required"}
+    if not names_match(name_n, name_n):
+        return {"success": False, "error": "name_required"}
+    identity = dict(identity or {})
+    scan_blob = dict(scan_blob or {})
+    dedupe_key = "|".join((phone_n, name_letters_key(name_n), dob_n, role))
+    booking = str(booking_number or "").strip()
+    return await _ensure_self_serve_locked(
+        phone=phone_n,
+        name=name_n,
+        dob=dob_n,
+        role=role,
+        email=email,
+        identity=identity,
+        scan_blob=scan_blob,
+        dedupe_key=dedupe_key,
+        booking=booking,
+        actor=actor or "auto",
+        walk_in_channel=str(walk_in_channel or ""),
+    )
+
+
+async def _ensure_self_serve_locked(
+    *,
+    phone: str,
+    name: str,
+    dob: str,
+    role: str,
+    email: str,
+    identity: Dict[str, str],
+    scan_blob: Dict[str, Any],
+    dedupe_key: str,
+    booking: str,
+    actor: str,
+    walk_in_channel: str = "",
+) -> Dict[str, Any]:
+    if booking:
+        blocked = await _booking_role_blocked(
+            booking=booking,
+            role=role,
+            phone=phone,
+            name=name,
+            dob=dob,
+        )
+        if blocked:
+            return {
+                "success": False,
+                "error": blocked,
+                "case_created": False,
+            }
+        chain_kwargs: Dict[str, Any] = {
+            "booking_number": booking,
+            "actor_email": actor or "auto",
+            "source": _SELF_SERVE_SOURCE,
+        }
+        if role == "indemnitor":
+            chain_kwargs["indemnitor_name"] = name
+            chain_kwargs["indemnitor_email"] = email or None
+            chain_kwargs["indemnitor_phone"] = phone
+        ensured = await ensure_match_bondcase(**chain_kwargs)
+        if ensured.get("success"):
+            case = await get_collection("bond_cases").find_one(
+                {"bond_case_id": ensured.get("bond_case_id")}
+            )
+            if isinstance(case, dict):
+                return await _attach_signer_to_case(
+                    case,
+                    role=role,
+                    phone=phone,
+                    name=name,
+                    dob=dob,
+                    email=email,
+                    identity=identity,
+                    scan_blob=scan_blob,
+                    dedupe_key=dedupe_key,
+                    created=False,
+                    reused=True,
+                    actor=actor or "auto",
+                )
+        error = str(ensured.get("error") or "")
+        error_code = error.split(":", 1)[0]
+        if error_code in _HARD_CHAIN_ERRORS:
+            return {"success": False, "error": error_code, "case_created": False}
+
+    matches = await _cases_for_signer(phone, name, dob, dedupe_key, role)
+    if len(matches) > 1:
+        return {"success": False, "error": "ambiguous_case", "case_created": False}
+    if len(matches) == 1:
+        return await _attach_signer_to_case(
+            matches[0],
+            role=role,
+            phone=phone,
+            name=name,
+            dob=dob,
+            email=email,
+            identity=identity,
+            scan_blob=scan_blob,
+            dedupe_key=dedupe_key,
+            created=False,
+            reused=True,
+            actor=actor or "auto",
+        )
+    return await _insert_self_serve_draft(
+        role=role,
+        phone=phone,
+        name=name,
+        dob=dob,
+        email=email,
+        identity=identity,
+        scan_blob=scan_blob,
+        dedupe_key=dedupe_key,
+        actor=actor or "auto",
+        walk_in_channel=walk_in_channel,
+    )
+
+
+def _role_slot_block(case: Dict[str, Any], role: str, phone: str, name: str, dob: str) -> str:
+    """Empty when this role slot can take the signer. No writes."""
+    from dashboard.services.identity_verification_service import names_match
+
+    _person_id, slot_phone, slot_name, slot_dob = _slot_identity(case, role)
+    if slot_phone and _digits_phone(slot_phone) != _digits_phone(phone):
+        return "role_phone_mismatch"
+    if slot_name and not names_match(name, slot_name):
+        return "role_conflict"
+    if slot_dob and _normalize_dob(slot_dob) != dob:
+        return "role_conflict"
+    return ""
+
+
+async def _booking_role_blocked(*, booking: str, role: str, phone: str, name: str, dob: str) -> str:
+    """Stop before ensure_match_bondcase when the booking's role slot disagrees.
+
+    That ensure restamps match, case source and status, and POA assignment.
+    The phone gate has to run first, on the stored booking, for every role.
+    """
+    booking_query = {"$or": [{"booking_number": booking}, {"Booking_Number": booking}]}
+    for collection in ("bond_cases", "active_bonds"):
+        doc = await get_collection(collection).find_one(booking_query)
+        if not isinstance(doc, dict):
+            continue
+        blocked = _role_slot_block(doc, role, phone, name, dob)
+        if blocked:
+            return blocked
+    return ""
+
+
+async def _attach_signer_to_case(
+    case: Dict[str, Any],
+    *,
+    role: str,
+    phone: str,
+    name: str,
+    dob: str,
+    email: str,
+    identity: Dict[str, str],
+    scan_blob: Dict[str, Any],
+    dedupe_key: str,
+    created: bool,
+    reused: bool,
+    actor: str,
+) -> Dict[str, Any]:
+    case_id = _case_id_of(case)
+    blocked = _role_slot_block(case, role, phone, name, dob)
+    if blocked:
+        return {
+            "success": False,
+            "error": blocked,
+            "bond_case_id": case_id,
+            "case_created": False,
+        }
+    _person_id, slot_phone, slot_name, slot_dob = _slot_identity(case, role)
+    slot_id = _person_id
+    now_iso = _now_iso()
+    person_id = slot_id or str(uuid.uuid4())
+    patch = _identity_patch(role, identity, phone, email)
+    nested_key = {"defendant": "defendant", "coindemnitor": "coindemnitor"}.get(role, "indemnitor")
+    nested = case.get(nested_key) if isinstance(case.get(nested_key), dict) else {}
+    nested = {**nested, "name": name, "phone": phone, "dob": dob, "email": email}
+    if role == "defendant":
+        patch["defendant_id"] = person_id
+        patch["Defendant_ID"] = person_id
+    elif role == "coindemnitor":
+        patch["co_indemnitor_id"] = person_id
+    else:
+        patch["indemnitor_id"] = person_id
+        patch["Indemnitor_ID"] = person_id
+    patch[nested_key] = nested
+    if not case.get("self_serve_dedupe_key"):
+        patch["self_serve_dedupe_key"] = dedupe_key
+    contact_keys = ("name", "phone", "email", "dob")
+    nested_before = case.get(nested_key) if isinstance(case.get(nested_key), dict) else {}
+    old_state: Dict[str, Any] = {}
+    new_state: Dict[str, Any] = {}
+    for key, value in patch.items():
+        if key in {"indemnitor", "coindemnitor", "defendant", "self_serve_dedupe_key"}:
+            continue
+        if key.endswith("_id") or key.endswith("_ID"):
+            continue
+        previous = case.get(key, "")
+        if previous != value:
+            old_state[key] = previous if previous is not None else ""
+            new_state[key] = value
+    old_contact = {key: nested_before.get(key, "") for key in contact_keys}
+    new_contact = {key: nested.get(key, "") for key in contact_keys}
+    if old_contact != new_contact:
+        old_state[nested_key] = old_contact
+        new_state[nested_key] = new_contact
+    collection = "defendants" if role == "defendant" else "indemnitors"
+    id_field = "defendant_id" if role == "defendant" else "indemnitor_id"
+    alt_field = "Defendant_ID" if role == "defendant" else "Indemnitor_ID"
+    prior_person = await get_collection(collection).find_one({"$or": [{id_field: person_id}, {alt_field: person_id}]})
+    person_keys = ("name", "phone", "email", "dob", "address", "city", "state", "zip", "dl", "dl_state")
+    if isinstance(prior_person, dict):
+        prefix = {"defendant": "defendant", "coindemnitor": "coindemnitor"}.get(role, "indemnitor")
+        person_old = {key: prior_person.get(key, "") for key in person_keys}
+        person_new = {
+            "name": name,
+            "phone": phone,
+            "email": email,
+            "dob": dob,
+            "address": identity.get(f"{prefix}_address") or prior_person.get("address") or "",
+            "city": identity.get(f"{prefix}_city") or prior_person.get("city") or "",
+            "state": identity.get(f"{prefix}_state") or prior_person.get("state") or "",
+            "zip": identity.get(f"{prefix}_zip") or prior_person.get("zip") or "",
+            "dl": identity.get(f"{prefix}_dl") or prior_person.get("dl") or "",
+            "dl_state": identity.get(f"{prefix}_dl_state") or prior_person.get("dl_state") or "",
+        }
+        if person_old != person_new:
+            old_state["person"] = person_old
+            new_state["person"] = person_new
+    filt = {"_id": case["_id"]} if case.get("_id") else {"bond_case_id": case_id}
+    await get_collection("bond_cases").update_one(filt, {"$set": patch})
+    await _write_party_identity(
+        role=role,
+        person_id=person_id,
+        case_id=case_id,
+        identity=identity,
+        phone=phone,
+        email=email,
+        name=name,
+        dob=dob,
+        scan_blob=scan_blob,
+        now_iso=now_iso,
+    )
+    if str(case.get("source") or "") == _SELF_SERVE_SOURCE or str(patch.get("source") or "") == _SELF_SERVE_SOURCE:
+        await _ensure_self_serve_match(
+            {**case, **patch},
+            role=role,
+            person_id=person_id,
+            actor=actor,
+            now_iso=now_iso,
+        )
+        await _ensure_draft_audit(
+            {**case, **patch},
+            role=role,
+            person_id=person_id,
+            actor=actor,
+            now_iso=now_iso,
+        )
+    if old_state or new_state:
+        await get_collection("audit_events").insert_one({
+            "event_id": str(uuid.uuid4()),
+            "event_type": "self_serve_identity_updated",
+            "action": "self_serve_identity_updated",
+            "entity_type": "bond_case",
+            "entity_id": case_id,
+            "bond_case_id": case_id,
+            "actor": actor or "auto",
+            "agent_name": "paperwork_self_serve",
+            "role": role,
+            "person_id": person_id,
+            "source": _SELF_SERVE_SOURCE,
+            "reason": "self_serve_identity_confirmed",
+            "created_at": now_iso,
+            "timestamp": now_iso,
+            "old_state": old_state,
+            "new_state": new_state,
+        })
+    refreshed = await get_collection("bond_cases").find_one({"bond_case_id": case_id}) or {**case, **patch}
+    return {
+        "success": True,
+        "created": created,
+        "reused": reused,
+        "bond_case_id": case_id,
+        "person_id": person_id,
+        "defendant_id": _owner_token(refreshed.get("defendant_id") or refreshed.get("Defendant_ID")),
+        "indemnitor_id": _owner_token(refreshed.get("indemnitor_id") or refreshed.get("Indemnitor_ID")),
+        "co_indemnitor_id": _owner_token(refreshed.get("co_indemnitor_id")),
+        "match_id": _owner_token(refreshed.get("match_id") or refreshed.get("Match_ID")),
+        "case": refreshed,
+    }
+
+
+async def compensate_owned_self_serve_case(case_id: str) -> bool:
+    """Mark one saga-created draft compensated. Do not delete it or its scans.
+
+    A preexisting or shared case does not match ``self_serve_saga_owned``.
+    A second call matches nothing and writes no second audit.
+    """
+    case_id = str(case_id or "").strip()
+    if not case_id:
+        return False
+    result = await get_collection("bond_cases").update_one(
+        {
+            "_id": case_id,
+            "source": _SELF_SERVE_SOURCE,
+            "self_serve_saga_owned": True,
+            "self_serve_saga_status": "open",
+        },
+        {"$set": {"self_serve_saga_status": "compensated", "updated_at": _now_iso()}},
+    )
+    if int(getattr(result, "matched_count", 0) or 0) != 1:
+        return False
+    audit_id = _stable_id(f"shamrock-self-serve-saga-compensate-v1:{case_id}")
+    await insert_new(get_collection("audit_events"), {
+        "_id": audit_id,
+        "event_id": audit_id,
+        "event_type": "self_serve_saga_compensated",
+        "action": "self_serve_saga_compensated",
+        "entity_type": "bond_case",
+        "entity_id": case_id,
+        "bond_case_id": case_id,
+        "actor": "auto",
+        "agent_name": "paperwork_self_serve",
+        "source": _SELF_SERVE_SOURCE,
+        "reason": "packet_aborted_before_provider",
+        "created_at": _now_iso(),
+        "timestamp": _now_iso(),
+        "old_state": {"self_serve_saga_status": "open"},
+        "new_state": {"self_serve_saga_status": "compensated"},
+    })
+    return True
+
+
+async def resume_owned_self_serve_case(case_id: str) -> bool:
+    """Open a compensated saga-owned draft again. Identity fields stay."""
+    case_id = str(case_id or "").strip()
+    if not case_id:
+        return False
+    result = await get_collection("bond_cases").update_one(
+        {
+            "_id": case_id,
+            "source": _SELF_SERVE_SOURCE,
+            "self_serve_saga_owned": True,
+            "self_serve_saga_status": "compensated",
+        },
+        {"$set": {"self_serve_saga_status": "open", "updated_at": _now_iso()}},
+    )
+    if int(getattr(result, "matched_count", 0) or 0) != 1:
+        return False
+    audit_id = _stable_id(f"shamrock-self-serve-saga-resume-v1:{case_id}")
+    await insert_new(get_collection("audit_events"), {
+        "_id": audit_id,
+        "event_id": audit_id,
+        "event_type": "self_serve_saga_resumed",
+        "action": "self_serve_saga_resumed",
+        "entity_type": "bond_case",
+        "entity_id": case_id,
+        "bond_case_id": case_id,
+        "actor": "auto",
+        "agent_name": "paperwork_self_serve",
+        "source": _SELF_SERVE_SOURCE,
+        "reason": "retry_after_local_compensation",
+        "created_at": _now_iso(),
+        "timestamp": _now_iso(),
+        "old_state": {"self_serve_saga_status": "compensated"},
+        "new_state": {"self_serve_saga_status": "open"},
+    })
+    return True
+
+
+async def _ensure_self_serve_match(
+    case: Dict[str, Any],
+    *,
+    role: str,
+    person_id: str,
+    actor: str,
+    now_iso: str,
+) -> str:
+    """One match row per draft. A second insert of the same ``_id`` is a no-op."""
+    case_id = _case_id_of(case)
+    match_id = _owner_token(case.get("match_id") or case.get("Match_ID")) or _stable_id(
+        f"shamrock-self-serve-match-v1:{case_id}:{role}"
+    )
+    defendant_id = _owner_token(case.get("defendant_id") or case.get("Defendant_ID"))
+    indemnitor_id = _owner_token(case.get("indemnitor_id") or case.get("Indemnitor_ID") or case.get("co_indemnitor_id"))
+    await insert_new(get_collection("matches"), {
+        "_id": match_id,
+        "match_id": match_id,
+        "Match_ID": match_id,
+        "bond_case_id": case_id,
+        "defendant_id": defendant_id,
+        "indemnitor_id": indemnitor_id,
+        "status": _SELF_SERVE_STATUS,
+        "Status": _SELF_SERVE_STATUS,
+        "source": _SELF_SERVE_SOURCE,
+        "confirmed_by": actor or "auto",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
+    return match_id
+
+
+async def _ensure_draft_audit(
+    case: Dict[str, Any],
+    *,
+    role: str,
+    person_id: str,
+    actor: str,
+    now_iso: str,
+) -> None:
+    """Insert the creation audit once. A retry keeps the first row."""
+    case_id = _case_id_of(case)
+    audit_id = _stable_id(f"shamrock-self-serve-draft-audit-v1:{case_id}:{role}")
+    await insert_new(get_collection("audit_events"), {
+        "_id": audit_id,
+        "event_id": audit_id,
+        "event_type": "self_serve_draft_bondcase",
+        "action": "self_serve_draft_bondcase",
+        "entity_type": "bond_case",
+        "entity_id": case_id,
+        "bond_case_id": case_id,
+        "actor": actor or "auto",
+        "agent_name": "paperwork_self_serve",
+        "role": role,
+        "person_id": person_id,
+        "source": _SELF_SERVE_SOURCE,
+        "reason": "self_serve_draft_created",
+        "created_at": now_iso,
+        "timestamp": now_iso,
+        "old_state": {},
+        "new_state": {
+            "status": _SELF_SERVE_STATUS,
+            "source": _SELF_SERVE_SOURCE,
+            **(
+                {"surety_id": str(case.get("surety_id"))}
+                if str(case.get("surety_id") or "").strip()
+                else {}
+            ),
+            **(
+                {"intake_channel": str(case.get("intake_channel"))}
+                if str(case.get("intake_channel") or "").strip()
+                else {}
+            ),
+        },
+    })
+
+
+async def _insert_self_serve_draft(
+    *,
+    role: str,
+    phone: str,
+    name: str,
+    dob: str,
+    email: str,
+    identity: Dict[str, str],
+    scan_blob: Dict[str, Any],
+    dedupe_key: str,
+    actor: str,
+    walk_in_channel: str = "",
+) -> Dict[str, Any]:
+    now_iso = _now_iso()
+    ids = self_serve_ids(dedupe_key, role)
+    bond_case_id = ids["bond_case_id"]
+    person_id = ids["person_id"]
+    existing = await get_collection("bond_cases").find_one({"_id": bond_case_id})
+    if not isinstance(existing, dict):
+        existing = await get_collection("bond_cases").find_one({"self_serve_dedupe_key": dedupe_key})
+    if isinstance(existing, dict):
+        return await _attach_signer_to_case(
+            existing,
+            role=role,
+            phone=phone,
+            name=name,
+            dob=dob,
+            email=email,
+            identity=identity,
+            scan_blob=scan_blob,
+            dedupe_key=dedupe_key,
+            created=False,
+            reused=True,
+            actor=actor,
+        )
+    defendant_id = person_id if role == "defendant" else ""
+    indemnitor_id = person_id if role == "indemnitor" else ""
+    co_id = person_id if role == "coindemnitor" else ""
+    # Surety stays unset unless this request is creating a walk-in draft.
+    # An existing case, including one with no surety, is not updated here.
+    patch = _identity_patch(role, identity, phone, email)
+    nested_key = {"defendant": "defendant", "coindemnitor": "coindemnitor"}.get(role, "indemnitor")
+    patch[nested_key] = {"name": name, "phone": phone, "dob": dob, "email": email}
+    doc: Dict[str, Any] = {
+        "_id": bond_case_id,
+        "bond_case_id": bond_case_id,
+        "Bond_Case_ID": bond_case_id,
+        "self_serve_dedupe_key": dedupe_key,
+        "match_id": ids["match_id"],
+        "Match_ID": ids["match_id"],
+        "match_status": _SELF_SERVE_STATUS,
+        "status": _SELF_SERVE_STATUS,
+        "source": _SELF_SERVE_SOURCE,
+        "defendant_id": defendant_id,
+        "Defendant_ID": defendant_id,
+        "indemnitor_id": indemnitor_id,
+        "Indemnitor_ID": indemnitor_id,
+        "co_indemnitor_id": co_id,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        "created_by": actor or "auto",
+        "self_serve_saga_owned": True,
+        "self_serve_saga_status": "open",
+        "self_serve_saga_id": bond_case_id,
+        **patch,
+    }
+    from dashboard.services.paperwork_self_serve import _WALK_IN_CHANNELS, _WALK_IN_SURETY
+
+    channel = str(walk_in_channel or "").strip().lower()
+    if channel in _WALK_IN_CHANNELS and not str(doc.get("surety_id") or "").strip():
+        doc["surety_id"] = _WALK_IN_SURETY
+        doc["Surety_ID"] = _WALK_IN_SURETY
+        doc["intake_channel"] = channel
+    inserted = await insert_new(get_collection("bond_cases"), doc)
+    if not inserted:
+        stored = await get_collection("bond_cases").find_one({"_id": bond_case_id})
+        if not isinstance(stored, dict):
+            return {"success": False, "error": "case_not_stored", "case_created": False}
+        return await _attach_signer_to_case(
+            stored,
+            role=role,
+            phone=phone,
+            name=name,
+            dob=dob,
+            email=email,
+            identity=identity,
+            scan_blob=scan_blob,
+            dedupe_key=dedupe_key,
+            created=False,
+            reused=True,
+            actor=actor,
+        )
+    logger.info("[self-serve] draft bond case %s role=%s", bond_case_id, role)
+    return await _attach_signer_to_case(
+        doc,
+        role=role,
+        phone=phone,
+        name=name,
+        dob=dob,
+        email=email,
+        identity=identity,
+        scan_blob=scan_blob,
+        dedupe_key=dedupe_key,
+        created=True,
+        reused=False,
+        actor=actor,
+    )
