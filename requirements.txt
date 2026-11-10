@@ -46,7 +46,7 @@ Pillow>=13.0.0      # Preprocess variants for captcha_ocr
 
 # Selenium — Seminole County (NorthPointe Suite Angular portal)
 selenium>=4.49.0
-webdriver-manager>=4.0.0
+webdriver-manager>=4.1.2
 
 # PDF parsing — Citrus County (jail roster is PDF)
 pdfplumber>=0.10.0
