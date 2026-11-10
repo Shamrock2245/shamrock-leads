@@ -2237,16 +2237,31 @@ def test_codex_1110_c_tracking_history_uses_the_selected_card(monkeypatch):
     def _matches(doc, query):
         if not isinstance(query, dict):
             return False
+        if "$and" in query:
+            rest = {key: value for key, value in query.items() if key != "$and"}
+            return all(_matches(doc, item) for item in query["$and"]) and (not rest or _matches(doc, rest))
         if "$or" in query:
             rest = {key: value for key, value in query.items() if key != "$or"}
-            return any(_matches(doc, item) for item in query["$or"]) and _matches(doc, rest)
+            return any(_matches(doc, item) for item in query["$or"]) and (not rest or _matches(doc, rest))
         for key, expected in query.items():
             if isinstance(expected, dict) and "$regex" in expected:
                 flags = re.I if "i" in str(expected.get("$options") or "") else 0
                 if re.search(expected["$regex"], str(doc.get(key) or ""), flags) is None:
                     return False
+            elif isinstance(expected, dict) and "$in" in expected:
+                if doc.get(key) not in expected["$in"]:
+                    return False
+            elif isinstance(expected, dict) and "$exists" in expected:
+                present = key in doc
+                if bool(expected["$exists"]) != present:
+                    return False
+                if "$ne" in expected and present and doc.get(key) == expected["$ne"]:
+                    return False
             elif isinstance(expected, dict):
                 return False
+            elif expected is None:
+                if key in doc and doc.get(key) is not None:
+                    return False
             elif doc.get(key) != expected:
                 return False
         return True
@@ -2289,7 +2304,7 @@ def test_codex_1110_c_tracking_history_uses_the_selected_card(monkeypatch):
     }
     monkeypatch.setattr(tracking_router, "get_collection", lambda name: cols[name])
 
-    async def _no_locations(_booking):
+    async def _no_locations(*_args, **_kwargs):
         return []
 
     monkeypatch.setattr(tracking_router, "_merge_location_history", _no_locations)
@@ -2309,6 +2324,150 @@ def test_codex_1110_c_tracking_history_uses_the_selected_card(monkeypatch):
     assert bare.json()["error"] == "booking_scope_ambiguous"
     missed = client.get("/api/tracking/B-100/history", params={"county": "Lee", "state": "SC"})
     assert missed.status_code == 404
+
+
+def test_codex_1110_d_legacy_florida_history_stays_on_that_card(monkeypatch):
+    """Codex 11/10 on d31e06a: a blank Florida state is FL, and the other card's pings stay put.
+
+    Lee with no state is the legacy Florida bond, so it must open instead of
+    returning booking_scope_ambiguous. Fulton with no state is not Florida.
+    GPS pings, check-ins, devices, and court dates follow the selected place.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from dashboard.routers import tracking as tracking_router
+
+    assert tracking_router.resolved_history_place("Lee", "") == ("Lee", "FL")
+    assert tracking_router.resolved_history_place("Lee County", "") == ("Lee", "FL")
+    assert tracking_router.resolved_history_place("Fulton", "") is None
+    assert tracking_router.resolved_history_place("Lee", "GA") == ("Lee", "GA")
+
+    bonds = [
+        {"booking_number": "B-100", "county": "Lee", "state": "",
+         "defendant_name": "FL Card", "status": "active",
+         "location_history": [{"lat": 1.0, "lng": 2.0, "ts": "fl"}]},
+        {"booking_number": "B-100", "county": "Lee", "state": "GA",
+         "defendant_name": "GA Card", "status": "active",
+         "location_history": [{"lat": 3.0, "lng": 4.0, "ts": "ga"}]},
+    ]
+    reminders = [
+        {"booking_number": "B-100", "county": "Lee", "state": "", "court_location": "FL court"},
+        {"booking_number": "B-100", "county": "Lee", "state": "GA", "court_location": "GA court"},
+    ]
+    pings = [
+        {"booking_number": "B-100", "county": "Lee", "state": "FL",
+         "pings": [{"lat": 8.0, "lng": 8.0, "ts": "fl-ping"}]},
+        {"booking_number": "B-100", "county": "Lee", "state": "GA",
+         "pings": [{"lat": 9.0, "lng": 9.0, "ts": "ga-ping"}]},
+    ]
+    devices = [
+        {"booking_number": "B-100", "county": "Lee", "state": "GA", "status": "active",
+         "unique_id": "ga-device", "last_position": {"lat": 3.5, "lng": 4.5, "ts": "ga-dev"}},
+        {"booking_number": "B-100", "county": "Lee", "state": "FL", "status": "active",
+         "unique_id": "fl-device", "last_position": {"lat": 1.5, "lng": 2.5, "ts": "fl-dev"}},
+    ]
+    checkins = [
+        {"booking_number": "B-100", "county": "Lee", "state": "GA",
+         "gps_lat": 3.2, "gps_lon": 4.2, "checkin_at": "ga-check"},
+        {"booking_number": "B-100", "county": "Lee", "state": "",
+         "gps_lat": 1.2, "gps_lon": 2.2, "checkin_at": "fl-check"},
+    ]
+
+    def _matches(doc, query):
+        if not isinstance(query, dict):
+            return False
+        if "$and" in query:
+            rest = {key: value for key, value in query.items() if key != "$and"}
+            return all(_matches(doc, item) for item in query["$and"]) and (not rest or _matches(doc, rest))
+        if "$or" in query:
+            rest = {key: value for key, value in query.items() if key != "$or"}
+            return any(_matches(doc, item) for item in query["$or"]) and (not rest or _matches(doc, rest))
+        for key, expected in query.items():
+            if isinstance(expected, dict) and "$regex" in expected:
+                import re
+                flags = re.I if "i" in str(expected.get("$options") or "") else 0
+                if re.search(expected["$regex"], str(doc.get(key) or ""), flags) is None:
+                    return False
+            elif isinstance(expected, dict) and "$in" in expected:
+                if doc.get(key) not in expected["$in"]:
+                    return False
+            elif isinstance(expected, dict) and "$exists" in expected:
+                present = key in doc
+                if bool(expected["$exists"]) != present:
+                    return False
+            elif isinstance(expected, dict):
+                return False
+            elif expected is None:
+                if key in doc and doc.get(key) is not None:
+                    return False
+            elif doc.get(key) != expected:
+                return False
+        return True
+
+    class _Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+        def sort(self, *args, **kwargs):
+            return self
+        def limit(self, count):
+            self.rows = self.rows[:count]
+            return self
+        def __aiter__(self):
+            self._index = 0
+            return self
+        async def __anext__(self):
+            if self._index >= len(self.rows):
+                raise StopAsyncIteration
+            row = self.rows[self._index]
+            self._index += 1
+            return row
+
+    class _Col:
+        def __init__(self, docs):
+            self.docs = docs
+        async def find_one(self, query, projection=None):
+            for doc in self.docs:
+                if _matches(doc, query):
+                    return dict(doc)
+            return None
+        def find(self, query, projection=None):
+            return _Cursor([doc for doc in self.docs if _matches(doc, query)])
+
+    cols = {
+        "active_bonds": _Col(bonds),
+        "court_reminders": _Col(reminders),
+        "geo_devices": _Col(devices),
+        "geo_pings": _Col(pings),
+        "bond_checkins": _Col(checkins),
+    }
+    monkeypatch.setattr(tracking_router, "get_collection", lambda name: cols[name])
+    app = FastAPI()
+    app.include_router(tracking_router.tracking_bp)
+    client = TestClient(app)
+
+    legacy = client.get("/api/tracking/B-100/history", params={"county": "Lee", "state": ""})
+    assert legacy.status_code == 200
+    body = legacy.json()
+    assert body["defendant_name"] == "FL Card"
+    lats = [row["lat"] for row in body["location_history"]]
+    assert 1.0 in lats and 1.2 in lats and 8.0 in lats
+    assert 3.0 not in lats and 9.0 not in lats and 3.2 not in lats and 3.5 not in lats
+    assert [row["court_location"] for row in body["court_dates"]] == ["FL court"]
+    assert body["device_info"]["unique_id"] == "fl-device"
+
+    georgia = client.get("/api/tracking/B-100/history", params={"county": "Lee", "state": "GA"})
+    assert georgia.status_code == 200
+    ga = georgia.json()
+    ga_lats = [row["lat"] for row in ga["location_history"]]
+    assert ga["defendant_name"] == "GA Card"
+    assert 3.0 in ga_lats and 9.0 in ga_lats and 3.2 in ga_lats
+    assert 1.0 not in ga_lats and 8.0 not in ga_lats
+    assert [row["court_location"] for row in ga["court_dates"]] == ["GA court"]
+    assert ga["device_info"]["unique_id"] == "ga-device"
+
+    other = client.get("/api/tracking/B-100/history", params={"county": "Fulton", "state": ""})
+    assert other.status_code == 409
+    assert other.json()["error"] == "booking_scope_ambiguous"
 
 
 def test_codex_1110_b_arrest_snapshot_query_pins_state():

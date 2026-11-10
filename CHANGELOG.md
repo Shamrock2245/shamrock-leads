@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of d31e06a on #280)
+
+### Fixed
+- **A blank state on a Florida county still opens that tracking card (P2).** `history_place_query` treated a missing state as no place, so a legacy Lee card shared with another booking returned `booking_scope_ambiguous`. A blank state is Florida only when the county is a registered Florida county. A blank state on any other county still refuses a shared booking.
+- **Tracking pings and court dates follow the selected card (P2).** Location history, check-ins, devices, and court reminders were still read by booking number after the bond itself was scoped, so the second card showed the first arrest's records. Those lookups now use the same county and state.
+
+### Tests
+- `test_codex_1110_d_legacy_florida_history_stays_on_that_card` in `tests/test_lee_indemnitor_discovery.py` (already on the CI list). It fails on `d31e06a`.
+
 ## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of c4e0098 on #280)
 
 ### Fixed
