@@ -217,12 +217,43 @@ def manatee_clerk_identity_problems(result: dict) -> list[str]:
         or _int(buckets, "") != rows
     ):
         problems.append('status_buckets != {"": rows}')
+    problems.extend(_bond_bucket_problems(result.get("bond"), rows))
     return problems
+
+
+# Bonds the Clerk smoke may certify: unknown, a listed $0.00 row, or a
+# positive amount from the Bonds table. ``negative`` and ``text`` are not.
+_BOND_OK = frozenset({"empty", "zero", "positive"})
+
+
+def _bond_bucket_problems(bond: Any, rows: int) -> list[str]:
+    """Problems when the bond aggregate is not empty, zero, or positive."""
+    if not isinstance(bond, dict) or not bond:
+        return ["bond buckets missing"]
+    if set(bond) - _BOND_OK:
+        return ["bond buckets not empty/zero/positive"]
+    total = 0
+    for key in bond:
+        count = _int(bond, key)
+        if count is None or count < 0:
+            return ["bond bucket count invalid"]
+        total += count
+    if total != rows:
+        return ["bond buckets != rows"]
+    return []
 
 
 IDENTITY_GATES = {
     "Manatee Clerk (FL)": manatee_clerk_identity_problems,
 }
+
+
+def canonical_state(state: str) -> str:
+    """``Florida`` and ``FL`` are the same gate state. Other text is only stripped."""
+    st = " ".join(str(state or "").split()).upper()
+    if st in {"FL", "FLORIDA"}:
+        return "FL"
+    return st
 
 
 def _canonical_gate_label(label: str) -> str:
@@ -233,11 +264,10 @@ def _canonical_gate_label(label: str) -> str:
     selects ``Manatee Clerk (FL)``.
     """
     text = " ".join(str(label or "").split())
-    text = re.sub(
-        r"\(\s*([^)]*?)\s*\)",
-        lambda match: "(" + " ".join(match.group(1).split()) + ")",
-        text,
-    )
+    def _paren(match: re.Match[str]) -> str:
+        return "(" + canonical_state(match.group(1)) + ")"
+
+    text = re.sub(r"\(\s*([^)]*?)\s*\)", _paren, text)
     folded = text.casefold()
     for key in IDENTITY_GATES:
         if " ".join(key.split()).casefold() == folded:
@@ -248,8 +278,7 @@ def _canonical_gate_label(label: str) -> str:
 def evidence_label(county: str, state: str) -> str:
     """``County (ST)`` with whitespace stripped from both parts."""
     name = " ".join(str(county or "").split())
-    st = " ".join(str(state or "").split()).upper()
-    return f"{name} ({st})"
+    return f"{name} ({canonical_state(state)})"
 
 
 def identity_gate(label: str, result: dict) -> list[str] | None:
@@ -261,7 +290,7 @@ def identity_gate(label: str, result: dict) -> list[str] | None:
 def county_query(county: str, state: str, since: datetime) -> dict:
     """Same county/state rule as the lead list; Florida owns rows with no state."""
     name = re.escape(county.strip())
-    st = state.strip().upper()
+    st = canonical_state(state)
     if st == "FL":
         state_cond: dict = {"$or": [
             {"state": {"$in": ["FL", "fl", "Florida", "FLORIDA"]}},

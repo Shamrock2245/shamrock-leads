@@ -372,6 +372,7 @@ def _mc_counters(**over):
     res = {"status": "ok", "rows": 12, "window_hours": 24, "booking_number_blank": 0,
            "booking_number_duplicates": 0, "booking_number_shapes": {"mc_case_v1:<sha256>": 12},
            "booking_key_internal": 12, "internal_key_valid": 12, "internal_key_matches_case": 12,
+           "bond": {"empty": 12},
            "with_case_number": 12,
            "with_obts_number": 9, "booking_equals_case_number": 0, "with_charges": 12,
            "with_booking_date": 0, "status_buckets": {"": 12}}
@@ -534,6 +535,30 @@ def test_codex_1110_manatee_clerk_gate_ignores_label_case_and_space():
         assert blank is not None and any("status_buckets" in p for p in blank), label
         assert sec.identity_gate(label, _mc_counters()) == [], label
     assert sec.identity_gate("Lee (FL)", {"rows": 1}) is None
+
+
+def test_codex_1110_d_florida_alias_and_bond_buckets():
+    """Codex 11/10 on 176b381: Florida must hit the gate, and a bad bond must not pass.
+
+    ``--state Florida`` selects Florida rows and used to label the result
+    ``Manatee Clerk (FLORIDA)``, which skipped the gate. ``negative`` and
+    ``text`` bond buckets are not a Clerk bond.
+    """
+    sec = _sec()
+    assert sec.evidence_label("Manatee Clerk", "Florida") == "Manatee Clerk (FL)"
+    assert sec.evidence_label("Manatee Clerk", " florida ") == "Manatee Clerk (FL)"
+    assert sec.canonical_state("FLORIDA") == "FL"
+    bad_shape = _mc_counters(booking_number_shapes={"md_dedupe_v2:<sha256>": 12})
+    for label in ("Manatee Clerk (FLORIDA)", "Manatee Clerk ( Florida )"):
+        problems = sec.identity_gate(label, bad_shape)
+        assert problems is not None and any("booking_number_shapes" in p for p in problems), label
+    query = sec.county_query("Manatee Clerk", "Florida", __import__("datetime").datetime(2026, 11, 10))
+    assert "$or" in query["$and"][1]
+    for bad_bond in ({"negative": 12}, {"text": 12}, {"empty": 1}, {}):
+        found = sec.manatee_clerk_identity_problems(_mc_counters(bond=bad_bond))
+        assert any("bond" in problem for problem in found), bad_bond
+    assert sec.manatee_clerk_identity_problems(_mc_counters(bond={"empty": 10, "positive": 2})) == []
+    assert sec.manatee_clerk_identity_problems(_mc_counters(bond={"zero": 12})) == []
 
 
 def test_codex_1110_c_falsy_status_is_not_a_blank_bucket():

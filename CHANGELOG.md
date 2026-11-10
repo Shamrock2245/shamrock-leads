@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of 176b381 on #308)
+
+### Fixed
+- **A passed smoke cannot carry an impossible bond bucket (P2).** The identity gate never read `bond`, so `{"negative": rows}` or `{"text": rows}` could be recorded as a passed Manatee Clerk smoke. The gate now allows only `empty`, `zero`, and `positive`, and those counts must add up to `rows`.
+- **`--state Florida` selects the Manatee gate (P2).** The query treated `Florida` as a state spelling, but the label became `Manatee Clerk (FLORIDA)` and skipped the gate. `Florida` is now `FL` before the label is built, before the gate is chosen, and before the county query runs.
+
+### Tests
+- `test_codex_1110_d_florida_alias_and_bond_buckets` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `176b381`. The row stays `requested`.
+
 ## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of 8a016ba on #308)
 
 ### Fixed

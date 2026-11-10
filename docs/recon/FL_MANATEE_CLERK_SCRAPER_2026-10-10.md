@@ -57,7 +57,7 @@ python scripts/smoke_evidence_check.py --county "Manatee Clerk" --state FL --hou
 - `with_case_number` == `rows`, and `booking_equals_case_number` is 0.
 - `with_obts_number` counts the rows where the Clerk lists an OBTS.
 - `with_charges` == `rows`.
-- Bond is `empty`, or comes from the Bonds table.
+- Bond buckets are only `empty`, `zero`, or `positive`, and they sum to `rows`. `negative` and `text` fail the gate.
 - `with_booking_date` is 0, and status is blank. Only `None` or a blank string counts as blank. `0`, `false`, `[]` and `{}` are `malformed` and fail the gate.
 
 These are enforced (Codex 11/4, tightened 11/5 and 11/10): for `--county "Manatee Clerk"` the check adds `identity_gate` (`pass`/`fail`) and `identity_problems` (counter names only), and a failed gate prints `result: identity_failed` and exits 3. A padded state such as `--state " FL "` still selects the gate. A key that is a valid `mc_case_v1` digest of a different case number does not count. `scripts/build_recon_matrix.py` applies the same gate (`IDENTITY_GATES` in `smoke_evidence_check.py`) to any `passed` Manatee Clerk write row, for both `prod_mongo_aggregate` and `one_shot_run`. A missing or non-integer counter fails closed. `booking_number_shapes` must be exactly `{mc_case_v1:<sha256>: rows}` (a valid Miami-Dade `md_dedupe_v2` key must not certify this smoke). `status_buckets` must be exactly `{"": rows}` with an integer count.
