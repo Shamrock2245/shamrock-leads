@@ -184,9 +184,23 @@ IDENTITY_GATES = {
 }
 
 
+def _canonical_gate_label(label: str) -> str:
+    """Match an identity-gate key ignoring case and extra whitespace.
+
+    ``county_query`` already strips the county and matches it case-insensitively.
+    The gate lookup must use the same spelling, so ``manatee clerk`` still
+    selects ``Manatee Clerk (FL)``.
+    """
+    folded = " ".join(str(label or "").split()).casefold()
+    for key in IDENTITY_GATES:
+        if " ".join(key.split()).casefold() == folded:
+            return key
+    return " ".join(str(label or "").split())
+
+
 def identity_gate(label: str, result: dict) -> list[str] | None:
     """None when the label has no identity gate, else the problem list."""
-    gate = IDENTITY_GATES.get(label)
+    gate = IDENTITY_GATES.get(_canonical_gate_label(label))
     return None if gate is None else gate(result)
 
 

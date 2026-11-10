@@ -508,3 +508,26 @@ def test_codex_1105_manatee_clerk_gate_helpers_name_the_problems():
     probs = sec.manatee_clerk_identity_problems(bad_status)
     assert any("status_buckets" in p for p in probs)
     assert sec.manatee_clerk_identity_problems(_mc_counters()) == []
+
+
+def test_codex_1110_manatee_clerk_gate_ignores_label_case_and_space():
+    """Codex 11/10 on #308: CLI spelling must not skip the identity gate.
+
+    ``--county "manatee clerk"`` still selects the rows, so the gate has to
+    run. The counters themselves stay exact.
+    """
+    sec = _sec()
+    bad = _mc_counters(booking_number_shapes={"md_dedupe_v2:<sha256>": 12})
+    labels = (
+        "manatee clerk (FL)",
+        "  MANATEE   CLERK (fl)",
+        "Manatee Clerk (FL)",
+        " manatee clerk  (FL)",
+    )
+    for label in labels:
+        problems = sec.identity_gate(label, bad)
+        assert problems is not None and any("booking_number_shapes" in p for p in problems), label
+        blank = sec.identity_gate(label, _mc_counters(status_buckets={}))
+        assert blank is not None and any("status_buckets" in p for p in blank), label
+        assert sec.identity_gate(label, _mc_counters()) == [], label
+    assert sec.identity_gate("Lee (FL)", {"rows": 1}) is None

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex 11/10 on #308)
+
+### Changed
+- **Merged `origin/main` at `12c64e8`.** Merge commit only. Main's optional GPS compose profile is taken as-is. This file had no conflict.
+
+### Fixed
+- **The Manatee Clerk identity gate follows the county spelling (P2).** `--county "manatee clerk"` still selects the rows, but the gate looked up `manatee clerk (FL)` and was skipped. The lookup now ignores case and extra whitespace, so that spelling still runs `manatee_clerk_identity_problems`. The counters are unchanged: `booking_number_shapes` must be exactly `{mc_case_v1:<sha256>: rows}` and `status_buckets` must be exactly `{"": rows}` with an integer count. The row stays `requested`.
+
+### Tests
+- `test_codex_1110_manatee_clerk_gate_ignores_label_case_and_space` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `82cf77a` because the messy label skips the gate.
+
 ## [Unreleased] — 2026-11-09 (merge origin/main into #308)
 
 ### Changed
