@@ -25,6 +25,23 @@ import re
 logger = logging.getLogger(__name__)
 
 prospective_bonds_bp = APIRouter(prefix="/api", tags=["prospective_bonds"])
+
+
+def arrest_snapshot_query(booking_number: str, county: str = "", state: str = "") -> dict:
+    """Arrest lookup for a new prospective bond.
+
+    County and state together pin the place. Booking number alone is only the
+    legacy path, used when the caller has no state to send.
+    """
+    query: dict = {"booking_number": booking_number}
+    name = (county or "").strip()
+    st = (state or "").strip().upper()
+    if name and st:
+        query["county"] = {"$regex": f"^{re.escape(name)}(?:\\s+County)?$", "$options": "i"}
+        query["state"] = st
+    return query
+
+
 VALID_STAGES = ["contacted", "negotiating", "paperwork", "ready"]
 VALID_OUTCOMES = [
     "bonded", "lost_to_competitor", "released_ror", "no_contact",
@@ -82,8 +99,14 @@ async def api_prospective_create(request: Request):
                 "stage": existing.get("stage", "contacted"),
             })
 
-        # Snapshot defendant data from arrests collection
-        arrest_doc = await arrests.find_one({"booking_number": booking_number}, {"_id": 0})
+        # Snapshot defendant data from arrests collection. A posted county and
+        # state select that place only. A booking that also exists in another
+        # state is not this lead (Codex 11/10 on #280).
+        posted_county = (data.get("county") or "").strip()
+        posted_state = (data.get("state") or "").strip().upper()
+        arrest_doc = await arrests.find_one(
+            arrest_snapshot_query(booking_number, posted_county, posted_state), {"_id": 0},
+        )
         if not arrest_doc:
             arrest_doc = {}
 
@@ -115,7 +138,7 @@ async def api_prospective_create(request: Request):
             "booking_number": booking_number,
             "defendant_name": data.get("defendant_name") or arrest_doc.get("full_name", "Unknown"),
             "county": data.get("county") or arrest_doc.get("county", ""),
-            "state": (data.get("state") or arrest_doc.get("state") or arrest_doc.get("State") or "").strip().upper(),
+            "state": (posted_state or arrest_doc.get("state") or arrest_doc.get("State") or "").strip().upper(),
             "bond_amount": float(data.get("bond_amount") or arrest_doc.get("bond_amount", 0) or 0),
             "charges": data.get("charges") or arrest_doc.get("charges", ""),
             "lead_score": int(data.get("lead_score") or arrest_doc.get("lead_score", 0) or 0),

@@ -19,6 +19,35 @@ from dashboard.models.osint import OSINTScanRequest, SubjectType, EngineType
 logger = logging.getLogger(__name__)
 
 
+async def trigger_lee_indemnitor_discovery(db: Any = None, limit: int = 5) -> Dict[str, Any]:
+    """Run Lee co-signer discovery for queued bookings.
+
+    Called by the dashboard cron. Provider and database errors are counted
+    and logged as types only. This does not scan social accounts and does
+    not contact anyone.
+    """
+    try:
+        if db is None:
+            db = get_collection("arrests").database
+        from dashboard.services.contact_discovery import run_lee_discovery_batch
+
+        return await run_lee_discovery_batch(db, limit=limit)
+    except Exception as exc:
+        logger.warning(
+            "[indemnitor_discovery] batch failed error_type=%s",
+            type(exc).__name__,
+        )
+        return {
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "enabled": False,
+            "claimed": 0,
+            "completed": 0,
+            "failed": 1,
+            "purged": 0,
+        }
+
+
 async def trigger_auto_osint_profiling(
     bond_data: Dict[str, Any],
     actor: str = "auto_trigger",
