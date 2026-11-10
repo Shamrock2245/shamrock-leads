@@ -22,7 +22,7 @@ openai>=1.12.0
 # Optional on a roomy host:  pip install 'xgboost>=2.0.0'
 scikit-learn>=1.4.0
 pandas>=2.2.0
-numpy>=1.26.0
+numpy>=2.5.4
 joblib>=1.3.0
 
 # Slack notifications
@@ -46,7 +46,7 @@ Pillow>=13.0.0      # Preprocess variants for captcha_ocr
 
 # Selenium — Seminole County (NorthPointe Suite Angular portal)
 selenium>=4.49.0
-webdriver-manager>=4.0.0
+webdriver-manager>=4.1.2
 
 # PDF parsing — Citrus County (jail roster is PDF)
 pdfplumber>=0.10.0
@@ -61,7 +61,7 @@ httpx[socks]>=0.28.1            # Async HTTP client + SOCKS proxy (Hillsborough 
 cryptography>=43.0.0          # Fernet symmetric encryption (OAuth token storage)
 PyJWT>=2.15.1                  # JWT state tokens for OAuth CSRF protection
 aiohttp>=3.14.5                # Async HTTP client for contact discovery OSINT pipeline
-python-multipart>=0.0.9       # Required by FastAPI for form data / file uploads
+python-multipart>=0.0.33       # Required by FastAPI for form data / file uploads
 itsdangerous>=2.2.0           # Signed-cookie state for dashboard PIN auth
 PyYAML>=6.0.3                   # Blog auto-publisher YAML frontmatter parsing
 
@@ -88,7 +88,7 @@ pydub>=0.25.1      # MP3→WAV conversion (requires ffmpeg system package)
 SpeechRecognition>=3.17.0  # Google Speech Recognition (free, no API key)
 
 # Development
-pytest>=8.0.0
+pytest>=9.2.0
 pytest-asyncio>=0.26.0
 nodriver>=0.38  # Seminole, Lake — JS-rendered jail portals (headless Chrome via CDP)
 

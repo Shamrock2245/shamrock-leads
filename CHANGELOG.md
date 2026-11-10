@@ -13,6 +13,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - Added `tests/test_prod_readiness_runbooks.py` (wired into `.github/workflows/ci.yml`).
 
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of 176b381 on #308)
+
+### Fixed
+- **A passed smoke cannot carry an impossible bond bucket (P2).** The identity gate never read `bond`, so `{"negative": rows}` or `{"text": rows}` could be recorded as a passed Manatee Clerk smoke. The gate now allows only `empty`, `zero`, and `positive`, and those counts must add up to `rows`.
+- **`--state Florida` selects the Manatee gate (P2).** The query treated `Florida` as a state spelling, but the label became `Manatee Clerk (FLORIDA)` and skipped the gate. `Florida` is now `FL` before the label is built, before the gate is chosen, and before the county query runs.
+
+### Tests
+- `test_codex_1110_d_florida_alias_and_bond_buckets` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `176b381`. The row stays `requested`.
+
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of 8a016ba on #308)
+
+### Fixed
+- **A falsy status is not a blank custody bucket (P2).** `summarize` used `str(status or "")`, so `0`, `false`, `[]` and `{}` were counted as `""`. Those rows could still produce `status_buckets` of `{"": rows}` and pass the Manatee gate. Only `None` and a blank string count as blank. Any other type is `malformed` and the gate fails. The shapes rule is unchanged and the row stays `requested`.
+
+### Tests
+- `test_codex_1110_c_falsy_status_is_not_a_blank_bucket` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `8a016ba`.
+
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of a4b35de on #308)
+
+### Fixed
+- **A Manatee key must be the digest of that row's case number (P2).** `internal_key_valid` counted any well-shaped `mc_case_v1` value, so a key from a different case still passed. `summarize` now counts `internal_key_matches_case` by comparing the stored key with a locally derived digest. The identity gate requires that count to equal `rows`. The key, the digest and the case number are not printed.
+- **A padded state still selects the gate (P2).** `--state " FL "` built the label `Manatee Clerk ( FL )`, which missed `Manatee Clerk (FL)`, so invalid counters could exit 0. The printed label and the gate lookup now strip whitespace inside the state parentheses.
+
+### Tests
+- `test_codex_1110_b_key_must_match_its_case_and_state_label_is_stripped` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `a4b35de`. The row stays `requested`.
+
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex 11/10 on #308)
 ## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of d31e06a on #280)
 
 ### Fixed
@@ -41,11 +68,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `test_codex_1110_b_arrest_snapshot_query_pins_state`, `test_codex_1110_b_dob_digest_change_resets_review`, and the `from_arrest` case in `tests/js/add_lead_discover_sim.js`. They fail on `0815522`.
 
 ## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex 11/10 findings on #280)
-
 ### Changed
 - **Merged `origin/main` at `12c64e8`.** Merge commit only. Main's optional GPS compose profile is taken as-is. This file had no conflict.
 
 ### Fixed
+- **The Manatee Clerk identity gate follows the county spelling (P2).** `--county "manatee clerk"` still selects the rows, but the gate looked up `manatee clerk (FL)` and was skipped. The lookup now ignores case and extra whitespace, so that spelling still runs `manatee_clerk_identity_problems`. The counters are unchanged: `booking_number_shapes` must be exactly `{mc_case_v1:<sha256>: rows}` and `status_buckets` must be exactly `{"": rows}` with an integer count. The row stays `requested`.
+
+### Tests
+- `test_codex_1110_manatee_clerk_gate_ignores_label_case_and_space` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `82cf77a` because the messy label skips the gate.
+
+## [Unreleased] — 2026-11-09 (merge origin/main into #308)
+
+### Changed
+- **Merged `origin/main` at `93ab053`.** Merge commit only (no rebase). The only conflict was this file. Every entry from both sides is kept.
+- **Manatee Clerk identity gate rechecked and left as-is.** `booking_number_shapes` must be exactly `{mc_case_v1:<sha256>: rows}` and `status_buckets` must be exactly `{"": rows}` with an integer count. The row stays `requested`. No source status change.
+
 - **A booking-only contacts doc is adopted only when the unique arrest is that place (P1).** `_booking_is_unique` counted arrests and ignored county and state, so a scoped request could adopt a legacy contacts doc for a different arrest and a review could rewrite it onto the caller's identity. The sole arrest's place must match. A mismatch, a failed read, or more than one arrest fails closed (`contacts_legacy_ambiguous`) and nothing is written.
 - **An explicit scope that misses, while the booking exists elsewhere, is not a manual lead (P1).** `run_discovery` used the caller's name and address and wrote a new contacts doc. It now returns `booking_scope_conflict` with no providers and no write. The discover route answers 409. A booking with no arrest is still a manual lead. The Lee queue passes the claimed arrest, so arrest writes are unchanged.
 
@@ -56,7 +93,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 - **Merged `origin/main` at `93ab053`.** Merge commit only (no rebase). Conflicts were only this file. Every entry from both sides is kept. `ci.yml` merged with both test lists kept.
-
 ## [Unreleased] — 2026-11-04 (Paperwork self-serve ID prefill)
 
 ### Fixed
@@ -93,6 +129,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - Added `tests/test_bb_config_key_fail_closed.py` to the CI contract list. It covers the unset-key `503`, a wrong key `401`, a matching configured key, machine auth, an admin session with no frontend key, and the absence of a fallback key in the dashboard script and URL-sync files.
 
+## [Unreleased] — 2026-11-07 (merge origin/main into #308)
+
+### Changed
+- **Merged `origin/main` at `1efc45d`.** Merge commit only (no rebase). The only conflict was this file. Every entry from both sides is kept.
+- **Manatee Clerk identity gate rechecked after the merge and left as-is.** `manatee_clerk_identity_problems` still requires `booking_number_shapes == {mc_case_v1:<sha256>: rows}` (full SHA shape only, no other family) and `status_buckets == {"": rows}` with an integer count. `{}`, `{"": 0}`, and `{"": "invalid"}` still fail. The row stays `requested`. No source status change.
+
 ## [Unreleased] — 2026-11-07 (Lee co-signer discovery: Codex 11/7 findings on #280)
 
 ### Fixed
@@ -107,7 +149,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 - **Merged `origin/main` at `1efc45d`.** Merge commit only (no rebase). The only conflict was this file. Every entry from both sides is kept.
-
 ## [Unreleased] — 2026-11-05 (Auto-send indemnitor only; ambiguous staff premium)
 
 ### Fixed
@@ -205,6 +246,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_paperwork_id_upload.py` (on the CI list): id-upload shows only the ID step, a second upload appends, invalid and voided tokens are refused before OCR, no DocuSeal URL or pay link is returned, a POA change still accepts the upload, and an unknown mode falls back. Signer email is `admin@shamrockbailbonds.biz`. Records are `TEST-` prefixed.
+
+## [Unreleased] — 2026-11-03 (Manatee Clerk write smoke: checkable aggregates)
+
+### Added
+- **`scripts/smoke_evidence_check.py` now reports what the Manatee Clerk write smoke expects.** It adds these PII-free counts: `booking_key_internal`, `internal_key_valid` (the exact `mc_case_v1` / `md_dedupe_v2` pattern from `core/booking_identity.py`), `with_case_number`, `with_obts_number` and `booking_equals_case_number`. A valid internal key appears in `booking_number_shapes` as `mc_case_v1:<sha256>` and the digest is never printed. The read-only projection adds `booking_key_internal`, `case_number` and `obts_number`. No name, DOB, key, case or OBTS value is printed, and the script still never writes. Before this change, the requested Manatee Clerk smoke could not be confirmed from the script's output.
+
+### Changed
+- **The Manatee Clerk (FL) smoke request (`docs/recon/smoke_evidence.json`) is updated.**
+  - `expect` now names the new counters.
+  - `blocked_on` now says the scraper is merged (#177 2026-10-14, #256 2026-10-16) and is waiting on a VPS deploy. Hetzner deploys are blocked by a full disk as of 2026-11-03.
+  - `COUNTY_SOURCE_CONTRACT_MATRIX.md` is regenerated.
+  - The status stays `requested`, and Health stays `unverified`. No county or source state changes, and no fail_closed scope is touched.
+- **`docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md` is updated.**
+  - `Status` is now documented as `""`, which matches #256 (it was `Unknown`).
+  - A new "Leads Ops write smoke" section gives the run commands and the expected aggregates.
+
+### Fixed (Codex 11/5 on #308)
+- Tests: `test_codex_1105_*` in `tests/test_home_county_smoke_evidence.py` (wrong family, blank-status count, helper names). Fail on `e1dc403` for the cases the old gate accepted.
+- **Manatee Clerk smoke accepts only the Manatee key family (P2).** `internal_key_valid` counted any internal family, so a result with only valid Miami-Dade `md_dedupe_v2` keys still passed. The gate now requires `booking_number_shapes` to be exactly `{mc_case_v1:<sha256>: rows}`.
+- **Blank status evidence must count every row (P2).** `status_buckets: {}`, `{"": 0}` or `{"": "invalid"}` used to pass. The gate now requires exactly `{"": rows}` with an integer count.
+
+### Fixed (Codex 11/4 on #308)
+- **Manatee Clerk identity counters are enforced (P2).** A `passed` Manatee Clerk row was accepted with `booking_key_internal: 0`, `internal_key_valid: 0`, no case numbers and `booking_equals_case_number: 1`, because `prod_mongo_aggregate` checked only rows and blank/duplicate keys and `one_shot_run` only writer stats. `smoke_evidence_check.py` now has `IDENTITY_GATES` with `manatee_clerk_identity_problems()`: rows >= 1; blank, duplicate, booking_equals_case_number and with_booking_date all 0; booking_key_internal, internal_key_valid, with_case_number and with_charges all == rows; `status_buckets` blank only. Missing or non-integer counters fail closed. The script prints `identity_gate` and `identity_problems` (counter names only) and exits 3 with `result: identity_failed`. `build_recon_matrix.py` applies the same gate to a passed Manatee Clerk write row for either method. Other sources are unchanged. The Manatee Clerk row stays `requested`; its `expect` and the recon doc name the gate.
+- Tests: `test_codex_1104_*` in `tests/test_home_county_smoke_evidence.py` (34 cases); 32 fail on `f5cac40`, and the 2 good-counter guards pass on both.
+
+### Fixed (Codex 11/3 on #308)
+- **The internal-key check now requires a full match.** `internal_key_valid` and the masked `<family>:<sha256>` shape now use `pattern.fullmatch()`, the same check as the writer's `internal_natural_key()`. Before, `re.match` with `$` accepted a key with a trailing newline and counted it as valid evidence.
+
+### Tests
+- `tests/test_home_county_smoke_evidence.py`:
+  - `test_smoke_evidence_check_reports_manatee_clerk_internal_key_fields`
+  - `test_smoke_evidence_check_internal_key_needs_a_full_match`
+  - `test_manatee_clerk_smoke_row_names_the_checkable_fields`
 
 ## [Unreleased] — 2026-11-05 (Lee co-signer discovery: Codex 11/5 findings on #280)
 
@@ -380,7 +454,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_lee_indemnitor_discovery.py` (on the CI list).
-
 ## [Unreleased] — 2026-11-02 (Co-signer hold audits keep the prior review)
 
 ### Fixed
