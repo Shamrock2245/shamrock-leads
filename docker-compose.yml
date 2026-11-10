@@ -243,7 +243,6 @@ services:
     depends_on:
       - shamrock-leads
       - osint-worker
-      - traccar                         # In-stack GPS (portal check-ins + continuous client)
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5050/health/live"]
       interval: 30s
@@ -273,11 +272,14 @@ services:
   # ── Traccar GPS Intelligence Engine ──
   # Real-time GPS tracking server (Java) — 200+ device protocols
   # REST API on 8082 (internal), webhooks to dashboard:5050
+  # Starts with: docker compose --profile gps up -d traccar
   traccar:
     image: traccar/traccar:latest
     container_name: shamrock-traccar
     restart: unless-stopped
     hostname: traccar
+    profiles:
+      - gps
     environment:
       # Quoted: an unquoted value with ": " is parsed as a YAML map and dropped.
       # CONFIG_USE_ENVIRONMENT_VARIABLES is required for Traccar to honor CONFIG_* overlays.
