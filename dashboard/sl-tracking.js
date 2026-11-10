@@ -168,7 +168,7 @@ const SLTracking = (() => {
     }
 
     // Remove stale markers/trails
-    const cur = new Set(_filtered.map(d => d.booking_number));
+    const cur = new Set(_filtered.map(_cardKey));
     Object.keys(_markers).forEach(bk => { if (!cur.has(bk)) { _map.removeLayer(_markers[bk]); delete _markers[bk]; } });
     Object.keys(_trails).forEach(bk => { if (!cur.has(bk)) { _map.removeLayer(_trails[bk]); delete _trails[bk]; } });
 
@@ -186,8 +186,8 @@ const SLTracking = (() => {
       const history = (d.location_history || []).filter(h => h.lat != null && h.lng != null);
       if (history.length > 1) {
         const lls = history.map(h => [parseFloat(h.lat), parseFloat(h.lng)]);
-        if (_trails[d.booking_number]) _trails[d.booking_number].setLatLngs(lls);
-        else _trails[d.booking_number] = L.polyline(lls, { color, weight: 2, opacity: 0.5, dashArray: '4 4' }).addTo(_map);
+        if (_trails[_cardKey(d)]) _trails[_cardKey(d)].setLatLngs(lls);
+        else _trails[_cardKey(d)] = L.polyline(lls, { color, weight: 2, opacity: 0.5, dashArray: '4 4' }).addTo(_map);
       }
 
       // Marker icon
@@ -200,12 +200,12 @@ const SLTracking = (() => {
         iconSize: [32, 32], iconAnchor: [16, 16],
       });
 
-      if (_markers[d.booking_number]) {
-        _markers[d.booking_number].setLatLng([lat, lng]).setIcon(icon);
+      if (_markers[_cardKey(d)]) {
+        _markers[_cardKey(d)].setLatLng([lat, lng]).setIcon(icon);
       } else {
         const m = L.marker([lat, lng], { icon }).addTo(_map).bindPopup(_buildPopup(d), { maxWidth: 320 });
-        m.on('click', () => openDetail(d.booking_number));
-        _markers[d.booking_number] = m;
+        m.on('click', () => openDetail(d.booking_number, d.county, d.state));
+        _markers[_cardKey(d)] = m;
       }
     });
 
@@ -235,7 +235,7 @@ const SLTracking = (() => {
       (d.bond_amount ? '<div style="font-size:12px;margin-bottom:4px">Bond: $' + (d.bond_amount || 0).toLocaleString() + '</div>' : '') +
       (dev.unique_id ? '<div style="font-size:11px;color:#38bdf8;margin-bottom:6px">📡 ' + escH(dev.unique_id) + '</div>' : '') +
       '<div style="font-size:12px;margin-bottom:8px">' + (d.location_count || 0) + ' total pings</div>' +
-      '<button onclick="SLTracking.openDetail(\'' + bkSafe + '\')" ' +
+      '<button onclick="' + _detailCall(d.booking_number, d.county, d.state) + '" ' +
         'style="width:100%;padding:6px;background:#22c55e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600">' +
         '📋 View Full Detail</button>' +
       '</div>';
@@ -291,7 +291,7 @@ const SLTracking = (() => {
         '<td>' + (d.missed_check_ins || 0) + '</td>' +
         '<td>' +
           '<div style="display:flex;gap:4px;flex-wrap:wrap">' +
-            '<button class="btn-sm btn-primary" onclick="SLTracking.openDetail(\'' + bkSafe + '\')">📋 Detail</button>' +
+            '<button class="btn-sm btn-primary" onclick="' + _detailCall(d.booking_number, d.county, d.state) + '">📋 Detail</button>' +
             '<button class="btn-sm" style="background:#3b82f6;color:#fff;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:11px" onclick="SLTracking.sendGeoLink(\'' + bkSafe + '\',\'' + nameSafe + '\')">📍 Ping</button>' +
             '<button class="btn-sm btn-danger" onclick="SLTracking.confirmExonerate(\'' + bkSafe + '\',\'' + nameSafe + '\')">✅ Exonerate</button>' +
           '</div>' +
@@ -323,7 +323,15 @@ const SLTracking = (() => {
   }
 
   // ── Detail Drawer ─────────────────────────────────────────────────────────
-  async function openDetail(bookingNumber) {
+  function _cardKey(d) {
+    return [d && d.booking_number, d && d.county, d && d.state].join('\x1f');
+  }
+
+  function _detailCall(bookingNumber, county, state) {
+    return "SLTracking.openDetail('" + esc(bookingNumber) + "','" + esc(county) + "','" + esc(state) + "')";
+  }
+
+  async function openDetail(bookingNumber, county, state) {
     _selectedBk = bookingNumber;
     const panel = document.getElementById('trkDetailPanel');
     const title = document.getElementById('trkDetailTitle');
@@ -335,7 +343,11 @@ const SLTracking = (() => {
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     try {
-      const r = await fetch(API + '/api/tracking/' + encodeURIComponent(bookingNumber) + '/history');
+      const place = new URLSearchParams();
+      if (county) place.set('county', county);
+      if (state) place.set('state', state);
+      const placeQuery = place.toString();
+      const r = await fetch(API + '/api/tracking/' + encodeURIComponent(bookingNumber) + '/history' + (placeQuery ? '?' + placeQuery : ''));
       if (!r.ok) throw new Error('HTTP ' + r.status);
       const data = await r.json();
       if (data.error) throw new Error(data.error);
@@ -807,6 +819,7 @@ const SLTracking = (() => {
     _openInActiveBonds,
     discoverContacts,
     _discoverBody,
+    _detailCall,
     onBondWritten,
     onBondExonerated,
     focusDevice,

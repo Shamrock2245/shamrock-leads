@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of c4e0098 on #280)
+
+### Fixed
+- **A missing DOB or ZIP digest is not a match (P1).** `review_pin` hashed the `uncompared` sentinel, and `review_pin_matches` then compared that digest with the word `uncompared`, so an approved phone-plus-DOB row with no anchor evidence still cleared outreach. The sentinel is stored as itself and is rejected.
+- **Tracking history follows the selected card (P2).** Two bonds that share a booking number both opened the first bond, and Discover Contacts then used that bond's county and state. The card passes its county and state into the history lookup. A booking-only request with more than one bond returns 409.
+
+### Tests
+- `test_codex_1110_c_uncompared_anchor_is_not_an_outreach_match` and `test_codex_1110_c_tracking_history_uses_the_selected_card` in `tests/test_lee_indemnitor_discovery.py` (already on the CI list). The tracking sim checks the history URL. Both fail on `c4e0098`.
+
 ## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of 0815522 on #280)
 
 ### Fixed

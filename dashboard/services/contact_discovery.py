@@ -482,11 +482,17 @@ def review_pin(row: Dict[str, Any]) -> Dict[str, str]:
 
     Stored on the row when staff approve or reject it, so a later refresh can
     tell which field changed without keeping a second copy of the values.
+    ``uncompared`` is kept as that sentinel and is not hashed: hashing it made
+    the later sentinel check look at a digest and treat missing DOB or ZIP
+    evidence as a match.
     """
-    return {
-        field: hashlib.sha256(f"{field}\x1f{value}".encode("utf-8")).hexdigest()[:24]
-        for field, value in _review_values(row).items()
-    }
+    pinned: Dict[str, str] = {}
+    for field, value in _review_values(row).items():
+        if value == "uncompared":
+            pinned[field] = "uncompared"
+            continue
+        pinned[field] = hashlib.sha256(f"{field}\x1f{value}".encode("utf-8")).hexdigest()[:24]
+    return pinned
 
 
 def _stored_pin(row: Dict[str, Any]) -> Optional[Dict[str, str]]:

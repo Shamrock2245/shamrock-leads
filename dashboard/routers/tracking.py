@@ -313,14 +313,62 @@ async def tracking_location_history(booking_number):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+def history_place_query(booking_number: str, county: str = "", state: str = "") -> dict | None:
+    """Bond filter for one tracking card.
+
+    County and state together pin the place. ``None`` means the caller did not
+    name a place, and the history route then refuses a booking that belongs to
+    more than one bond.
+    """
+    name = " ".join(str(county or "").split())
+    st = " ".join(str(state or "").split()).upper()
+    if not name or not st:
+        return None
+    return {
+        "booking_number": booking_number,
+        "county": {"$regex": f"^{re.escape(name)}(?:\\s+County)?$", "$options": "i"},
+        "state": {"$regex": f"^{re.escape(st)}$", "$options": "i"},
+    }
+
+
+async def _history_rows(collection, query: dict, limit: int = 2) -> list:
+    cursor = collection.find(query, {"_id": 0})
+    if hasattr(cursor, "limit"):
+        cursor = cursor.limit(limit)
+    to_list = getattr(cursor, "to_list", None)
+    if to_list is not None:
+        rows = to_list(length=limit)
+        if hasattr(rows, "__await__"):
+            rows = await rows
+        return [row for row in (rows or []) if isinstance(row, dict)]
+    found: list = []
+    async for row in cursor:
+        if isinstance(row, dict):
+            found.append(row)
+        if len(found) >= limit:
+            break
+    return found
+
+
 @tracking_bp.get("/tracking/{booking_number}/history")
-async def tracking_history(booking_number):
+async def tracking_history(
+    booking_number: str,
+    county: str = Query(""),
+    state: str = Query(""),
+):
     """Full location history + alerts + court dates for a specific defendant."""
     active_bonds = get_collection("active_bonds")
     try:
-        bond = await active_bonds.find_one(
-            {"booking_number": booking_number}, {"_id": 0}
-        )
+        placed = history_place_query(booking_number, county, state)
+        if placed is not None:
+            bond = await active_bonds.find_one(placed, {"_id": 0})
+            if not bond:
+                return JSONResponse({"error": "Bond not found"}, status_code=404)
+        else:
+            rows = await _history_rows(active_bonds, {"booking_number": booking_number}, limit=2)
+            if len(rows) > 1:
+                return JSONResponse({"error": "booking_scope_ambiguous"}, status_code=409)
+            bond = rows[0] if rows else None
         if not bond:
             geo_devices = get_collection("geo_devices")
             gd = await geo_devices.find_one({

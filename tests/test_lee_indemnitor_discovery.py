@@ -1547,6 +1547,10 @@ def test_tracking_discover_button_sends_county_and_state():
     out = _json.loads(r.stdout.strip().splitlines()[-1])
     assert out["explicit"] == {"booking_number": "B-100", "full_name": "Casey Sample", "county": "Lee", "state": "FL"}
     assert out["blank"]["county"] == "" and out["blank"]["state"] == ""
+    # Codex 11/10 on c4e0098: the selected card's place is part of the history lookup.
+    assert out["detail_call"] == "SLTracking.openDetail('B-100','Lee','GA')"
+    assert "county=Lee" in out["history_url"] and "state=GA" in out["history_url"]
+    assert out["history_url"].endswith("/history?county=Lee&state=GA")
 
 
 # ── Codex round 3 on #280 ────────────────────────────────────────────────────
@@ -2179,6 +2183,132 @@ async def _approve_only_candidate(db, decision="approve"):
         db, identity=_lee_identity(), candidate_id=cid, decision=decision,
         expected_rev=int(doc.get("discovery_rev") or 0), actor="staff:test", actor_role="admin",
     )
+
+
+def test_codex_1110_c_uncompared_anchor_is_not_an_outreach_match():
+    """Codex 11/10 on c4e0098: hashing the sentinel hid a missing DOB digest.
+
+    An approved phone-plus-DOB row with no anchor evidence must not match, and
+    a refresh must reset it. The pin stores the sentinel, not a digest of it.
+    """
+    row = {
+        "name": "Jordan Sample",
+        "phone": "5550100100",
+        "matched_anchors": ["phone", "dob", "address_zip"],
+        "review_status": "approved",
+        "source": "prior_shamrock",
+    }
+    from dashboard.services.contact_discovery import review_changed_fields
+    row["review_pin"] = review_pin(row)
+    assert row["review_pin"]["dob"] == "uncompared"
+    assert row["review_pin"]["zip"] == "uncompared"
+    assert review_pin_matches(row) is False
+    fresh = {key: value for key, value in row.items() if key != "review_pin"}
+    fresh["review_status"] = "unreviewed"
+    assert "dob" in review_changed_fields(row, fresh)
+    assert "zip" in review_changed_fields(row, fresh)
+    evidenced = make_candidate(
+        booking_number="B-200", name="Jordan Sample", anchors=["phone", "dob"],
+        source="prior_shamrock", relationship="prior_indemnitor", phone="5550100100",
+        identity_dob=["1990-01-02"],
+    )
+    evidenced["review_status"] = "approved"
+    evidenced["review_pin"] = review_pin(evidenced)
+    assert evidenced["review_pin"]["dob"] != "uncompared"
+    assert review_pin_matches(evidenced) is True
+    import json
+    assert "1990" not in json.dumps(evidenced["review_pin"])
+
+
+def test_codex_1110_c_tracking_history_uses_the_selected_card(monkeypatch):
+    """Codex 11/10 on c4e0098: a shared booking must not open the first bond."""
+    import re
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from dashboard.routers import tracking as tracking_router
+
+    bonds = [
+        {"booking_number": "B-100", "county": "Lee", "state": "FL",
+         "defendant_name": "FL Card", "status": "active", "bond_amount": 1},
+        {"booking_number": "B-100", "county": "Lee", "state": "GA",
+         "defendant_name": "GA Card", "status": "active", "bond_amount": 2},
+    ]
+
+    def _matches(doc, query):
+        if not isinstance(query, dict):
+            return False
+        if "$or" in query:
+            rest = {key: value for key, value in query.items() if key != "$or"}
+            return any(_matches(doc, item) for item in query["$or"]) and _matches(doc, rest)
+        for key, expected in query.items():
+            if isinstance(expected, dict) and "$regex" in expected:
+                flags = re.I if "i" in str(expected.get("$options") or "") else 0
+                if re.search(expected["$regex"], str(doc.get(key) or ""), flags) is None:
+                    return False
+            elif isinstance(expected, dict):
+                return False
+            elif doc.get(key) != expected:
+                return False
+        return True
+
+    class _Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+        def sort(self, *args, **kwargs):
+            return self
+        def limit(self, count):
+            self.rows = self.rows[:count]
+            return self
+        def __aiter__(self):
+            self._index = 0
+            return self
+        async def __anext__(self):
+            if self._index >= len(self.rows):
+                raise StopAsyncIteration
+            row = self.rows[self._index]
+            self._index += 1
+            return row
+
+    class _Col:
+        def __init__(self, docs):
+            self.docs = docs
+        async def find_one(self, query, projection=None):
+            for doc in self.docs:
+                if _matches(doc, query):
+                    return dict(doc)
+            return None
+        def find(self, query, projection=None):
+            return _Cursor([doc for doc in self.docs if _matches(doc, query)])
+
+    cols = {
+        "active_bonds": _Col(bonds),
+        "court_reminders": _Col([]),
+        "geo_devices": _Col([]),
+        "geo_pings": _Col([]),
+        "bond_checkins": _Col([]),
+    }
+    monkeypatch.setattr(tracking_router, "get_collection", lambda name: cols[name])
+
+    async def _no_locations(_booking):
+        return []
+
+    monkeypatch.setattr(tracking_router, "_merge_location_history", _no_locations)
+    app = FastAPI()
+    app.include_router(tracking_router.tracking_bp)
+    client = TestClient(app)
+
+    scoped = client.get("/api/tracking/B-100/history", params={"county": "Lee", "state": "GA"})
+    assert scoped.status_code == 200
+    assert scoped.json()["defendant_name"] == "GA Card"
+    assert scoped.json()["state"] == "GA"
+    florida = client.get("/api/tracking/B-100/history", params={"county": "Lee", "state": "FL"})
+    assert florida.status_code == 200
+    assert florida.json()["defendant_name"] == "FL Card"
+    bare = client.get("/api/tracking/B-100/history")
+    assert bare.status_code == 409
+    assert bare.json()["error"] == "booking_scope_ambiguous"
+    missed = client.get("/api/tracking/B-100/history", params={"county": "Lee", "state": "SC"})
+    assert missed.status_code == 404
 
 
 def test_codex_1110_b_arrest_snapshot_query_pins_state():
@@ -2841,6 +2971,7 @@ async def test_review_candidate_scopes_legacy_booking_only_contacts_doc_for_outr
         source="prior_shamrock",
         relationship="sibling",
         anchors=["phone", "dob"],
+        identity_dob=["1990-01-02"],
     )
     # Legacy booking-only contacts document (missing state and county).
     db["contacts"].docs.append({
