@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Dependabot ignores scoped to incompatible ranges)
+
+### Changed
+- **Scoped Dependabot pip ignores for `starlette` and `sse-starlette` to incompatible release ranges.** `.github/dependabot.yml` now ignores `starlette >= 0.41.0` and `sse-starlette >= 2.2.0` (matching the `<0.41.0` and `<2.2` caps required by the `fastapi>=0.115.0,<0.120.0` pin in `requirements.txt` and `requirements-dashboard.txt`) so compatible patch and security releases within `<0.41.0` and `<2.2.0` remain eligible for Dependabot updates.
+
+### Tests
+- `tests/test_dependabot_config.py` (added to the CI list): verifies `.github/dependabot.yml` parses as valid YAML and scopes `starlette` (`>= 0.41.0`) and `sse-starlette` (`>= 2.2.0`) ignore rules by version range rather than blocking all versions.
+
 ## [Unreleased] — 2026-10-29 (Production readiness runbooks: Lee County, public endpoints manifest, Mongo & proxy)
 
 ### Added
@@ -39,8 +47,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `test_codex_1110_b_key_must_match_its_case_and_state_label_is_stripped` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `a4b35de`. The row stays `requested`.
 
-## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex 11/10 on #308)
-## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of d31e06a on #280)
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex 11/10 on #308)## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of d31e06a on #280)
 
 ### Fixed
 - **A blank state on a Florida county still opens that tracking card (P2).** `history_place_query` treated a missing state as no place, so a legacy Lee card shared with another booking returned `booking_scope_ambiguous`. A blank state is Florida only when the county is a registered Florida county. A blank state on any other county still refuses a shared booking.
