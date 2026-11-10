@@ -18,6 +18,12 @@ on:
     branches: [main]
   workflow_dispatch:  # Manual trigger from GitHub UI
 
+# Serialize VPS deploys so rapid merges to main never run `docker compose up -d`
+# concurrently over SSH on the same host.
+concurrency:
+  group: deploy-hetzner-main
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy ShamrockLeads
