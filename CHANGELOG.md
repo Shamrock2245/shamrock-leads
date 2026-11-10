@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of 0815522 on #280)
+
+### Fixed
+- **Adding an arrest keeps its state (P1).** `addFromArrest` posted booking, name and county only. A Lee, GA lead then fell through the Florida fallback. The search result's state is posted and stored, and the arrest snapshot for a posted county and state does not read another state's row.
+- **An approval pins the DOB and ZIP values, not just the anchor labels (P1).** The same phone with a different DOB kept the old approval because the pin recorded `dob` as a label. The candidate now stores a digest of the DOB and ZIP that justified those anchors. A different digest, or an anchor with no digest, resets the review. The values are not stored or logged.
+
+### Tests
+- `test_codex_1110_b_arrest_snapshot_query_pins_state`, `test_codex_1110_b_dob_digest_change_resets_review`, and the `from_arrest` case in `tests/js/add_lead_discover_sim.js`. They fail on `0815522`.
+
 ## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex 11/10 findings on #280)
 
 ### Changed

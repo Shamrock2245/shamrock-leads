@@ -117,7 +117,7 @@ def _expiring_status(value: Any) -> bool:
 # Staff decision -> stored review_status.
 REVIEW_DECISIONS = {"approve": "approved", "reject": REJECTED_STATUS}
 # Contact data a review covers. Any change resets the row to unreviewed.
-REVIEW_PIN_FIELDS = ("phone", "email", "address", "anchors")
+REVIEW_PIN_FIELDS = ("phone", "email", "address", "anchors", "dob", "zip")
 # Provider statuses that mean "try again later", not "nothing found".
 DEFERRABLE_STATUSES = frozenset({"lee_rate_limited", "discovery_http_gap"})
 # Public-provider statuses for a transient failure (timeout, connection error,
@@ -450,14 +450,30 @@ def is_reviewed(candidate: Any) -> bool:
 
 
 def _review_values(row: Dict[str, Any]) -> Dict[str, str]:
-    """Normalized contact data a review covers (phone, email, address, anchors)."""
+    """Normalized contact data a review covers.
+
+    ``dob`` and ``zip`` are digests of the values behind those anchors, never
+    the values. A claimed anchor with no digest is ``uncompared``: the review
+    cannot be carried forward, because the label alone does not identify the
+    person.
+    """
     anchors = row.get("matched_anchors")
     anchor_list = [str(a).strip().lower() for a in anchors] if isinstance(anchors, (list, tuple)) else []
+    anchor_set = {a for a in anchor_list if a}
+    evidence = row.get("anchor_evidence") if isinstance(row.get("anchor_evidence"), dict) else {}
+    dob_pin = str(evidence.get("dob") or "")
+    zip_pin = str(evidence.get("zip") or "")
+    if "dob" in anchor_set and not dob_pin:
+        dob_pin = "uncompared"
+    if "address_zip" in anchor_set and not zip_pin:
+        zip_pin = "uncompared"
     return {
         "phone": normalize_phone(row.get("phone")),
         "email": str(row.get("email") or "").strip().lower(),
         "address": " ".join(str(row.get("address") or "").lower().replace(",", " ").split()),
-        "anchors": ",".join(sorted({a for a in anchor_list if a})),
+        "anchors": ",".join(sorted(anchor_set)),
+        "dob": dob_pin,
+        "zip": zip_pin,
     }
 
 
@@ -485,7 +501,13 @@ def review_changed_fields(previous: Dict[str, Any], fresh: Dict[str, Any]) -> Li
     a refreshed one. Without a pin the previous row's own values are compared."""
     base = _stored_pin(previous) or review_pin(previous)
     now = review_pin(fresh)
-    return [field for field in REVIEW_PIN_FIELDS if base.get(field) != now[field]]
+    changed = [field for field in REVIEW_PIN_FIELDS if base.get(field) != now[field]]
+    # Two missing digests are not the same evidence. A DOB or ZIP anchor that
+    # cannot be compared resets the review instead of keeping the approval.
+    for field in ("dob", "zip"):
+        if field not in changed and (base.get(field) == "uncompared" or now.get(field) == "uncompared"):
+            changed.append(field)
+    return changed
 
 
 def review_pin_matches(row: Any) -> bool:
@@ -495,7 +517,9 @@ def review_pin_matches(row: Any) -> bool:
     if not isinstance(row, dict):
         return False
     pin = _stored_pin(row)
-    return pin is not None and pin == review_pin(row)
+    if pin is None or pin != review_pin(row):
+        return False
+    return pin.get("dob") != "uncompared" and pin.get("zip") != "uncompared"
 
 
 def discovery_enabled() -> bool:
@@ -648,6 +672,19 @@ def shares_defendant_address(candidate_address: Any, candidate_zip: Any, booking
     return cand_street == def_street or cand_street.startswith(def_street + " ")
 
 
+def _value_digest(kind: str, values: Sequence[str]) -> str:
+    """Digest of the normalized DOB or ZIP values behind an anchor. Never the values."""
+    norms: List[str] = []
+    for value in values:
+        norm = normalize_dob(value) if kind == "dob" else normalize_zip(value)
+        if norm and norm not in norms:
+            norms.append(norm)
+    if not norms:
+        return ""
+    payload = f"{kind}\x1f" + "\x1e".join(norms)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
 def make_candidate(
     *,
     booking_number: str,
@@ -659,6 +696,8 @@ def make_candidate(
     email: str = "",
     address: str = "",
     defendant_name: str = "",
+    identity_dob: Sequence[str] = (),
+    identity_zip: Sequence[str] = (),
 ) -> Optional[Dict[str, Any]]:
     """Return a candidate dict, or None when the name lacks a real anchor."""
     clean_name = " ".join(str(name or "").split())
@@ -671,7 +710,7 @@ def make_candidate(
     if score <= 0:
         return None
     discovered = datetime.now(timezone.utc).isoformat()
-    return {
+    built = {
         "candidate_id": str(uuid.uuid5(
             uuid.NAMESPACE_URL,
             f"{booking_number}|{source}|{name_key(clean_name)}",
@@ -687,6 +726,18 @@ def make_candidate(
         "discovered_at": discovered,
         "review_status": "unreviewed",
     }
+    evidence: Dict[str, str] = {}
+    if "dob" in kept:
+        dob_digest = _value_digest("dob", identity_dob)
+        if dob_digest:
+            evidence["dob"] = dob_digest
+    if "address_zip" in kept:
+        zip_digest = _value_digest("zip", identity_zip)
+        if zip_digest:
+            evidence["zip"] = zip_digest
+    if evidence:
+        built["anchor_evidence"] = evidence
+    return built
 
 
 def _first(row: Dict[str, Any], *keys: str) -> str:
@@ -826,11 +877,13 @@ def _merge_candidates(
         if not bkey[0]:
             continue
         ct = _contact_tuple(raw_row)
-        # Only merge two fresh rows when they share the same (name, source) AND
-        # the exact same non-empty normalized (phone, email, address) tuple.
-        # Two same-name people with different or disjoint contact fields never
-        # combine their phones, addresses, or anchors into a synthetic person.
-        exact_key = (*bkey, ct) if any(ct) else (*bkey, ("__unanchored__", len(deduped_fresh)))
+        evidence = _review_values(raw_row)
+        # Only merge two fresh rows when they share the same (name, source),
+        # the same phone/email/address, and the same DOB and ZIP digests.
+        # Two same-name people with different identity evidence never combine.
+        exact_key = (*bkey, ct, evidence["dob"], evidence["zip"]) if any(ct) else (
+            *bkey, ("__unanchored__", len(deduped_fresh))
+        )
         if exact_key not in by_exact_key:
             copied = dict(raw_row)
             by_exact_key[exact_key] = copied
@@ -1046,6 +1099,12 @@ def _generic_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Di
             anchors.extend(_contact_anchors(row))
         if name_hit:
             anchors.extend(shared_defendant_anchors(booking, row))
+        dobs = [_first(row, "indemnitor_dob", "relative_dob", "emergency_dob")]
+        zips = [_first(row, "indemnitor_zip", "relative_zip", "emergency_zip", "employer_zip", "zip")]
+        if "dob" in anchors:
+            dobs.append(str(booking.get("dob") or ""))
+        if "address_zip" in anchors:
+            zips.append(str(booking.get("zip") or ""))
         candidate = make_candidate(
             booking_number=booking_number,
             name=_candidate_name(row),
@@ -1053,6 +1112,8 @@ def _generic_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Di
             source="prior_shamrock",
             relationship=_relationship(row, "prior_indemnitor"),
             defendant_name=defendant,
+            identity_dob=dobs,
+            identity_zip=zips,
             **_contact_fields(row),
         )
         if candidate:
@@ -1112,6 +1173,12 @@ def _intake_queue_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dic
                 "defendant_address": _first(dfd, "address"),
                 "defendant_zip": _first(dfd, "zip"),
             }))
+        dobs = [_first(ind, "dob")]
+        zips = [zip_code]
+        if "dob" in anchors:
+            dobs.append(_first(dfd, "dob"))
+        if "address_zip" in anchors:
+            zips.append(_first(dfd, "zip"))
         candidate = make_candidate(
             booking_number=booking_number,
             name=name,
@@ -1122,6 +1189,8 @@ def _intake_queue_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dic
             email=email,
             address=" ".join(part for part in (address, zip_code) if part),
             defendant_name=defendant,
+            identity_dob=dobs,
+            identity_zip=zips,
         )
         if candidate:
             found.append(candidate)
@@ -1177,6 +1246,8 @@ def _family_rows(rows: Sequence[Any], booking: Dict[str, Any], collection_name: 
             email=_first(row, "relative_email", "email"),
             address=" ".join(part for part in (address, zip_code) if part),
             defendant_name=defendant,
+            identity_dob=[dob],
+            identity_zip=[zip_code],
         )
         if candidate:
             found.append(candidate)
@@ -1308,6 +1379,12 @@ def _bond_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dict[
                 if zip_code and zip_code not in str(address or "")
                 else str(address or "")
             )
+            dobs = [dob]
+            zips = [zip_code]
+            if "dob" in anchors:
+                dobs.append(str(booking.get("dob") or ""))
+            if "address_zip" in anchors:
+                zips.append(str(booking.get("zip") or ""))
             candidate = make_candidate(
                 booking_number=booking_number,
                 name=name,
@@ -1318,6 +1395,8 @@ def _bond_prior_rows(rows: Sequence[Any], booking: Dict[str, Any]) -> List[Dict[
                 email=email,
                 address=full_addr,
                 defendant_name=defendant,
+                identity_dob=dobs,
+                identity_zip=zips,
             )
             if candidate:
                 found.append(candidate)
@@ -1483,6 +1562,7 @@ async def _provider_same_address(db: Any, booking: Dict[str, Any]) -> List[Dict[
                 phone=_first(row, "phone", "defendant_phone"),
                 address=str(row.get("address") or ""),
                 defendant_name=defendant,
+                identity_zip=[str(row.get("zip") or ""), str(booking.get("zip") or "")],
             )
             if candidate:
                 found.append(candidate)
@@ -1541,6 +1621,8 @@ def _provider_booking_fields(booking: Dict[str, Any]) -> List[Dict[str, Any]]:
             email=str(block.get("email") or ""),
             address=str(block.get("address") or ""),
             defendant_name=defendant,
+            identity_dob=[str(block.get("dob") or "")],
+            identity_zip=[str(block.get("zip") or "")],
         )
         if candidate:
             found.append(candidate)
@@ -1665,6 +1747,7 @@ def _html_candidates(html: str, booking: Dict[str, Any], source: str, relationsh
             phone=person.get("phone") or "",
             address=" ".join(part for part in (person.get("address"), person.get("zip")) if part),
             defendant_name=defendant,
+            identity_zip=[str(person.get("zip") or "")],
         )
         if candidate:
             candidate["defendant_link"] = DEFENDANT_LINK_SHARED_ADDRESS
@@ -1854,6 +1937,8 @@ async def _provider_skiptrace(booking: Dict[str, Any]) -> Dict[str, Any]:
             email=str(row.get("email") or ""),
             address=str(row.get("address") or ""),
             defendant_name=defendant,
+            identity_dob=[str(row.get("dob") or "")],
+            identity_zip=[str(row.get("zip") or ""), str(row.get("address") or "")],
         )
         if candidate:
             found.append(candidate)

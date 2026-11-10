@@ -2181,6 +2181,46 @@ async def _approve_only_candidate(db, decision="approve"):
     )
 
 
+def test_codex_1110_b_arrest_snapshot_query_pins_state():
+    """A posted Lee, GA lead must not read the Lee, FL arrest."""
+    from dashboard.routers.prospective_bonds import arrest_snapshot_query
+
+    scoped = arrest_snapshot_query("B-200", "Lee", "ga")
+    assert scoped["state"] == "GA"
+    assert scoped["booking_number"] == "B-200"
+    assert "Lee" in scoped["county"]["$regex"]
+    legacy = arrest_snapshot_query("B-200", "Lee", "")
+    assert "state" not in legacy and "county" not in legacy
+
+
+def test_codex_1110_b_dob_digest_change_resets_review():
+    """Same phone and anchor labels, different DOB: the approval does not carry.
+
+    The stored pin and the merged row contain the digest, not the DOB.
+    """
+    approved = make_candidate(
+        booking_number="B-200", name="Jordan Sample", anchors=["phone", "dob"],
+        source="prior_shamrock", relationship="prior_indemnitor", phone="5550100100",
+        identity_dob=["1990-01-02"],
+    )
+    fresh = make_candidate(
+        booking_number="B-200", name="Jordan Sample", anchors=["phone", "dob"],
+        source="prior_shamrock", relationship="prior_indemnitor", phone="5550100100",
+        identity_dob=["1991-03-04"],
+    )
+    assert approved["anchor_evidence"]["dob"] != fresh["anchor_evidence"]["dob"]
+    approved["review_status"] = "approved"
+    approved["review_pin"] = review_pin(approved)
+    import json
+    from dashboard.services.contact_discovery import _merge_candidates
+    merged = _merge_candidates([approved], [fresh])
+    assert merged[0]["review_status"] == "unreviewed"
+    assert "dob" in merged[0]["review_reset"]["fields"]
+    blob = json.dumps(merged)
+    assert "1990-01-02" not in blob and "1991-03-04" not in blob
+    assert "1990" not in blob and "1991" not in blob
+
+
 def test_review_pin_normalizes_before_comparing():
     row = {"phone": "(555) 010-0100", "email": " A@Example.COM ", "address": "100  Test St,  Fort Myers",
            "matched_anchors": ["phone", "dob"]}
@@ -2662,6 +2702,10 @@ def test_add_lead_discovery_sends_a_state_and_surfaces_errors():
         if st == "FL" and name != "Manatee Clerk"
     }
     assert set(out["fl_registry"]) == registry_fl and len(out["fl_registry"]) == 67
+    # Codex 11/10 on 0815522: a Lee, GA arrest search must post that state.
+    assert ",'GA')" in out["from_arrest"]["html"]
+    assert out["from_arrest"]["posted_state"] == "GA"
+    assert out["from_arrest"]["blank_state"] is None
 
 
 @pytest.mark.asyncio

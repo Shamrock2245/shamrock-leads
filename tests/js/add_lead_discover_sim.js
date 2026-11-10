@@ -48,7 +48,7 @@ function makeEnv(fields, routes) {
   sandbox.SL = sandbox.window.SL;
   vm.createContext(sandbox);
   vm.runInContext(src + '\n;this.SLProspective = window.SLProspective;', sandbox);
-  return { P: sandbox.SLProspective, calls, toasts };
+  return { P: sandbox.SLProspective, calls, toasts, els };
 }
 
 const ADD_OK = ['/api/prospective-bonds', { status: 200, json: { success: true } }];
@@ -93,6 +93,26 @@ function env_body_only() {
   out.manual_booking = await addLead('Lee', undefined, undefined, { manual: true, refreshAfter: 'MANUAL-1' });
   out.manual_ga_refresh = await addLead('Fulton', 'ga', undefined, { manual: true, refreshAfter: 'MANUAL-1' });
   out.name_body = env_body_only();
+
+  const fromArrest = makeEnv(
+    { alArrestSearch: 'Lee', alArrestResults: '', alStage: 'contacted' },
+    [
+      ['/api/leads', { method: 'GET', status: 200, json: { leads: [{
+        booking_number: 'B-200', full_name: 'Casey Sample', county: 'Lee', state: 'GA',
+        bond_amount: 1000, charges: 'X',
+      }] } }],
+      ['/api/prospective-bonds', { method: 'POST', status: 200, json: { success: true } }],
+    ],
+  );
+  await fromArrest.P.searchArrests();
+  await fromArrest.P.addFromArrest('B-200', 'Casey Sample', 'Lee', 1000, 'GA');
+  await fromArrest.P.addFromArrest('B-200', 'Casey Sample', 'Lee', 1000, '');
+  const posts = fromArrest.calls.filter((c) => c.url === '/api/prospective-bonds' && c.method === 'POST');
+  out.from_arrest = {
+    html: fromArrest.els.alArrestResults.innerHTML,
+    posted_state: posts[0] && posts[0].body ? posts[0].body.state : null,
+    blank_state: posts[1] && posts[1].body ? (posts[1].body.state || null) : null,
+  };
 
   const env = makeEnv({}, [['/api/contacts/B-100/candidates/', { status: 409, json: { error: 'stale_revision' } }]]);
   await env.P.reviewCandidate('B-100', 'cand-1', 'approve', 'Lee', 'FL', 3);

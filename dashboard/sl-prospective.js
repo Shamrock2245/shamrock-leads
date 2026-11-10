@@ -1673,16 +1673,20 @@ window.SLProspective = (function () {
       var leads = d.leads || [];
       if (!leads.length) { el.innerHTML = '<div style="padding:16px;color:var(--muted);text-align:center">No results</div>'; return; }
       el.innerHTML = leads.map(function(l) {
-        return '<div class="al-result-row" onclick="SLProspective.addFromArrest(\'' + l.booking_number + '\',\'' + (l.full_name || '').replace(/'/g, "\\'") + '\',\'' + (l.county || '') + '\',' + (l.bond_amount || 0) + ')"><div style="font-weight:700">' + (l.full_name || '—') + '</div><div style="font-size:12px;color:var(--muted)">' + (l.county || '—') + ' · ' + ((window.slBookingLabel ? window.slBookingLabel(l.booking_number) : l.booking_number) || '') + ' · ' + money(l.bond_amount) + '</div><div style="font-size:11px;color:var(--muted)">' + (l.charges || '—') + '</div></div>';
+        var stateArg = String(l.state || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return '<div class="al-result-row" onclick="SLProspective.addFromArrest(\'' + l.booking_number + '\',\'' + (l.full_name || '').replace(/'/g, "\\'") + '\',\'' + (l.county || '') + '\',' + (l.bond_amount || 0) + ',\'' + stateArg + '\')"><div style="font-weight:700">' + (l.full_name || '—') + '</div><div style="font-size:12px;color:var(--muted)">' + (l.county || '—') + ' · ' + ((window.slBookingLabel ? window.slBookingLabel(l.booking_number) : l.booking_number) || '') + ' · ' + money(l.bond_amount) + '</div><div style="font-size:11px;color:var(--muted)">' + (l.charges || '—') + '</div></div>';
       }).join('');
     } catch (e) { el.innerHTML = '<div style="padding:16px;color:var(--red)">Error: ' + e.message + '</div>'; }
   }
 
-  async function addFromArrest(bk, name, county, bondAmount) {
+  async function addFromArrest(bk, name, county, bondAmount, state) {
     try {
+      var posted = { booking_number: bk, defendant_name: name, county: county, bond_amount: bondAmount, stage: $('alStage') ? $('alStage').value : 'contacted', agent: 'Brendan' };
+      var st = String(state || '').trim().toUpperCase();
+      if (st) posted.state = st;
       var r = await fetch(API + '/api/prospective-bonds', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ booking_number: bk, defendant_name: name, county: county, bond_amount: bondAmount, stage: $('alStage') ? $('alStage').value : 'contacted', agent: 'Brendan' })
+        body: JSON.stringify(posted)
       });
       var d = await r.json();
       if (d.success !== false) { toast(name + ' added to pipeline', 'success'); closeAddModal(); load(); }
