@@ -90,6 +90,20 @@ def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def _status_bucket(value: Any) -> str:
+    """Blank only for None or a blank string.
+
+    ``0``, ``False``, ``[]`` and ``{}`` are falsy but they are not an unknown
+    custody status. They count as ``malformed`` so the Manatee gate, which
+    requires exactly ``{"": rows}``, fails closed.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return "malformed"
+
+
 def _bond_bucket(doc: dict) -> str:
     raw = doc.get("bond_amount_raw")
     if raw is None:
@@ -127,7 +141,7 @@ def summarize(docs: Iterable[dict]) -> dict:
         "multi_charge": sum(1 for c in charges if " | " in c),
         "with_booking_date": sum(1 for d in rows if not _blank(d.get("booking_date"))),
         "with_booking_time": sum(1 for d in rows if not _blank(d.get("booking_time"))),
-        "status": dict(Counter(str(d.get("status") or "") for d in rows).most_common(6)),
+        "status": dict(Counter(_status_bucket(d.get("status")) for d in rows).most_common(6)),
         "with_release_date": sum(1 for d in rows if not _blank(d.get("release_date"))),
         "with_mugshot": sum(1 for d in rows if not _blank(d.get("mugshot_url"))),
         "with_dob": sum(1 for d in rows if not _blank(d.get("dob"))),

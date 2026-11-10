@@ -17,7 +17,7 @@
 ---
 
 ## Codex 11/5 Manatee Clerk smoke (PR #308)
-- Write-smoke gate now requires Manatee-only `booking_number_shapes` (`mc_case_v1:<sha256>` only) and exact blank `status_buckets` `{"": rows}` with integer count. Miami-Dade keys and empty/zero/non-int blank buckets fail closed. Codex 11/10: `internal_key_matches_case` must equal `rows` (the stored key is the digest of that row's case number), and a padded state still selects the gate. The row stays `requested`.
+- Write-smoke gate now requires Manatee-only `booking_number_shapes` (`mc_case_v1:<sha256>` only) and exact blank `status_buckets` `{"": rows}` with integer count. Miami-Dade keys and empty/zero/non-int blank buckets fail closed. Codex 11/10: `internal_key_matches_case` must equal `rows` (the stored key is the digest of that row's case number), and a padded state still selects the gate. Only `None` or a blank string counts as the blank status bucket; `0`, `false`, `[]` and `{}` are `malformed` and fail the gate. The row stays `requested`.
 
 ## Lee County HQ API requires a staff session (2026-10-28)
 

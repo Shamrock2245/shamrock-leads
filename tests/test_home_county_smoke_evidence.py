@@ -536,6 +536,34 @@ def test_codex_1110_manatee_clerk_gate_ignores_label_case_and_space():
     assert sec.identity_gate("Lee (FL)", {"rows": 1}) is None
 
 
+def test_codex_1110_c_falsy_status_is_not_a_blank_bucket():
+    """Codex 11/10 on 8a016ba: 0, false, and empty containers are not blank custody.
+
+    Only None and a blank string count as ``""``. Anything else fails the
+    Manatee gate, which still requires ``status_buckets == {"": rows}``.
+    """
+    sec = _sec()
+    malformed = sec.summarize([
+        {"booking_number": "1", "status": 0},
+        {"booking_number": "2", "status": False},
+        {"booking_number": "3", "status": []},
+        {"booking_number": "4", "status": {}},
+    ])
+    assert "" not in malformed["status"]
+    assert malformed["status"] == {"malformed": 4}
+    blank = sec.summarize([
+        {"booking_number": "a", "status": None},
+        {"booking_number": "b", "status": ""},
+        {"booking_number": "c", "status": "   "},
+        {"booking_number": "d"},
+    ])
+    assert blank["status"] == {"": 4}
+    assert sec.summarize([{"booking_number": "e", "status": "In Custody"}])["status"] == {"In Custody": 1}
+    problems = sec.manatee_clerk_identity_problems(_mc_counters(status_buckets=malformed["status"]))
+    assert any("status_buckets" in problem for problem in problems)
+    assert sec.manatee_clerk_identity_problems(_mc_counters()) == []
+
+
 def test_codex_1110_b_key_must_match_its_case_and_state_label_is_stripped():
     """Codex 11/10 on a4b35de: a swapped key and a padded state must not pass.
 

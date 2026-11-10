@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of 8a016ba on #308)
+
+### Fixed
+- **A falsy status is not a blank custody bucket (P2).** `summarize` used `str(status or "")`, so `0`, `false`, `[]` and `{}` were counted as `""`. Those rows could still produce `status_buckets` of `{"": rows}` and pass the Manatee gate. Only `None` and a blank string count as blank. Any other type is `malformed` and the gate fails. The shapes rule is unchanged and the row stays `requested`.
+
+### Tests
+- `test_codex_1110_c_falsy_status_is_not_a_blank_bucket` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `8a016ba`.
+
 ## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of a4b35de on #308)
 
 ### Fixed
