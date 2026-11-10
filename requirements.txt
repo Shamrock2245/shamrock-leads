@@ -22,7 +22,7 @@ openai>=1.12.0
 # Optional on a roomy host:  pip install 'xgboost>=2.0.0'
 scikit-learn>=1.4.0
 pandas>=2.2.0
-numpy>=1.26.0
+numpy>=2.5.4
 joblib>=1.3.0
 
 # Slack notifications
