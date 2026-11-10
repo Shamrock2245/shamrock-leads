@@ -43,14 +43,28 @@ class Settings:
     dashboard_pin: str
 
 
+def _session_secret() -> str:
+    secret = (os.getenv("SECRET_KEY") or "").strip()
+    if secret:
+        return secret
+    from dashboard.auth.dev_mode import session_secret_fallback_allowed
+
+    if session_secret_fallback_allowed():
+        from dashboard.auth.pin_middleware import DEV_ONLY_SESSION_KEY
+
+        return DEV_ONLY_SESSION_KEY
+    return ""
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Cached settings provider — call once, reuse everywhere."""
     _pin = os.getenv("DASHBOARD_PIN", "")
     return Settings(
-        secret_key=os.getenv("SECRET_KEY") or (
-            "shamrock-" + (_pin or "leads-2245") + "-session-key-v1"
-        ),
+        # Never derived from the PIN or a fixed string outside development.
+        # Empty when SECRET_KEY is unset (sessions then fail closed in
+        # PinAuthMiddleware); the development-only key only under ENV=development.
+        secret_key=_session_secret(),
         dashboard_public_url=os.getenv("DASHBOARD_PUBLIC_URL", "").rstrip("/"),
         client_brand_url=os.getenv(
             "CLIENT_BRAND_URL", "https://www.shamrockbailbonds.biz"

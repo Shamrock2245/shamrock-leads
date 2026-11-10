@@ -14,13 +14,24 @@ from dashboard.services.packet_builder_service import (
 )
 
 
-def test_self_indemnitor_pin_gate():
-    assert verify_self_indemnitor_pin("224545") is True
+def test_self_indemnitor_pin_gate(monkeypatch):
+    monkeypatch.setenv("SELF_INDEMNITOR_PIN", "918273")
+    assert verify_self_indemnitor_pin("918273") is True
     assert verify_self_indemnitor_pin(" wrong ") is False
     assert verify_self_indemnitor_pin("") is False
 
 
-def test_apply_self_indemnitor_copies_defendant():
+def test_self_indemnitor_pin_fails_closed_when_unset(monkeypatch):
+    import dashboard.services.packet_builder_service as pbs
+
+    monkeypatch.delenv("SELF_INDEMNITOR_PIN", raising=False)
+    monkeypatch.setattr(pbs, "SELF_INDEMNITOR_PIN", "")
+    assert verify_self_indemnitor_pin("918273") is False
+    assert verify_self_indemnitor_pin("") is False
+
+
+def test_apply_self_indemnitor_copies_defendant(monkeypatch):
+    monkeypatch.setenv("SELF_INDEMNITOR_PIN", "918273")
     ctx = {
         "defendant": {
             "name": "Jane Defendant",
@@ -32,7 +43,7 @@ def test_apply_self_indemnitor_copies_defendant():
         "indemnitor": {"phone": ""},
         "bond_amount": 1500,
     }
-    out = apply_self_indemnitor(ctx, "224545")
+    out = apply_self_indemnitor(ctx, "918273")
     assert out["self_indemnitor"] is True
     assert out["indemnitor"]["name"] == "Jane Defendant"
     assert out["indemnitor"]["phone"] == "2395550199"

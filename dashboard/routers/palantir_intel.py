@@ -70,7 +70,11 @@ def _require_booking_intake_staff(
     if DASHBOARD_PIN and x_admin_token and secrets.compare_digest(x_admin_token, DASHBOARD_PIN):
         return
     if not BOOKING_INTAKE_ADMIN_KEY and not DASHBOARD_PIN:
-        return  # Development only; production configuration must provide a staff gate.
+        from dashboard.auth.dev_mode import no_pin_passthrough_allowed
+
+        if no_pin_passthrough_allowed():
+            return  # explicit ENV=development only
+        raise HTTPException(status_code=503, detail="Booking intake staff authorization not configured.")
     raise HTTPException(status_code=403, detail="Confirmed booking intake requires an authenticated staff session.")
 
 

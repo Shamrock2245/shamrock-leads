@@ -38,8 +38,10 @@ def require_staff(request: Request) -> str:
     token = (request.headers.get("x-admin-token") or "").strip()
     if pin and token and secrets.compare_digest(token, pin):
         return _actor(request)
-    env = (os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").lower()
-    if not pin and env not in ("production", "prod"):
+    # No PIN configured: fail closed (401) unless explicit ENV=development.
+    from dashboard.auth.dev_mode import no_pin_passthrough_allowed
+
+    if not pin and no_pin_passthrough_allowed():
         return _actor(request)
     return ""
 

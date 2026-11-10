@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from dashboard.auth.recovery_scope import path_allowed_for_recovery
 from dashboard.services import checkin_evidence_service as svc
 
-TEST_PIN = "224545"
+TEST_PIN = "918273"  # synthetic
 JPEG = b"\xff\xd8" + (b"\x11" * 90) + b"\xff\xd9"
 JPEG_B64 = base64.b64encode(JPEG).decode("ascii")
 
