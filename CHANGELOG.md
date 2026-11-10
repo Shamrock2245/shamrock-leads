@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Upgrade FastAPI, Starlette 1.x, and sse-starlette 3.x)
+
+### Changed
+- **Upgraded `fastapi`, `starlette`, and `sse-starlette` across `requirements.txt` and `requirements-dashboard.txt`.** Because `dashboard/main.py` already uses `@asynccontextmanager def lifespan(app)` instead of the removed `on_startup` hook, the legacy `<0.120.0`, `<0.41.0`, and `<2.2` caps are lifted to `fastapi>=0.136.0`, `starlette>=1.0.0`, and `sse-starlette>=3.0.0` so current security and compatibility releases install cleanly.
+
+### Tests
+- Added `tests/test_fastapi_starlette_upgrade.py` (wired into `.github/workflows/ci.yml`) verifying both requirement manifests lift the legacy upper caps and `dashboard/main.py` uses `lifespan=lifespan` without `on_startup`/`on_shutdown`/`.on_event()`.
+
+## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of d31e06a on #280)
+
 ## [Unreleased] — 2026-10-29 (Dependabot ignores scoped to incompatible ranges)
 
 ### Changed
@@ -48,7 +58,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `test_codex_1110_b_key_must_match_its_case_and_state_label_is_stripped` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `a4b35de`. The row stays `requested`.
 
 ## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex 11/10 on #308)## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of d31e06a on #280)
-
 ### Fixed
 - **A blank state on a Florida county still opens that tracking card (P2).** `history_place_query` treated a missing state as no place, so a legacy Lee card shared with another booking returned `booking_scope_ambiguous`. A blank state is Florida only when the county is a registered Florida county. A blank state on any other county still refuses a shared booking.
 - **Tracking pings and court dates follow the selected card (P2).** Location history, check-ins, devices, and court reminders were still read by booking number after the bond itself was scoped, so the second card showed the first arrest's records. Those lookups now use the same county and state.
