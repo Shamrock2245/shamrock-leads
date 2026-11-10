@@ -371,7 +371,8 @@ def _sec():
 def _mc_counters(**over):
     res = {"status": "ok", "rows": 12, "window_hours": 24, "booking_number_blank": 0,
            "booking_number_duplicates": 0, "booking_number_shapes": {"mc_case_v1:<sha256>": 12},
-           "booking_key_internal": 12, "internal_key_valid": 12, "with_case_number": 12,
+           "booking_key_internal": 12, "internal_key_valid": 12, "internal_key_matches_case": 12,
+           "with_case_number": 12,
            "with_obts_number": 9, "booking_equals_case_number": 0, "with_charges": 12,
            "with_booking_date": 0, "status_buckets": {"": 12}}
     res.update(over)
@@ -406,7 +407,8 @@ def test_codex_1104_manatee_clerk_bad_counters_fail_closed(tmp_path, method, ove
         _build(_write(tmp_path, [_mc_passed(method, **over)]))
 
 
-@pytest.mark.parametrize("key", ["booking_key_internal", "internal_key_valid", "with_case_number",
+@pytest.mark.parametrize("key", ["booking_key_internal", "internal_key_valid", "internal_key_matches_case",
+                                 "with_case_number",
                                  "booking_equals_case_number", "with_charges", "with_booking_date",
                                  "status_buckets", "booking_number_shapes"])
 def test_codex_1104_manatee_clerk_missing_counter_fails(tmp_path, key):
@@ -523,6 +525,7 @@ def test_codex_1110_manatee_clerk_gate_ignores_label_case_and_space():
         "  MANATEE   CLERK (fl)",
         "Manatee Clerk (FL)",
         " manatee clerk  (FL)",
+        "Manatee Clerk ( FL )",
     )
     for label in labels:
         problems = sec.identity_gate(label, bad)
@@ -531,3 +534,50 @@ def test_codex_1110_manatee_clerk_gate_ignores_label_case_and_space():
         assert blank is not None and any("status_buckets" in p for p in blank), label
         assert sec.identity_gate(label, _mc_counters()) == [], label
     assert sec.identity_gate("Lee (FL)", {"rows": 1}) is None
+
+
+def test_codex_1110_b_key_must_match_its_case_and_state_label_is_stripped():
+    """Codex 11/10 on a4b35de: a swapped key and a padded state must not pass.
+
+    A well-shaped ``mc_case_v1`` key from a different case number is not valid
+    evidence. ``--state " FL "`` must still select the Manatee Clerk gate.
+    Neither the key nor the case number is printed.
+    """
+    from scrapers.counties.manatee_clerk import mc_case_key
+
+    sec = _sec()
+    case_a = "2026CF009901AX"
+    case_b = "2026MM004402AX"
+    key_a = mc_case_key(case_a)
+    key_b = mc_case_key(case_b)
+    assert sec.mc_case_digest(case_a) == key_a
+    assert sec.mc_case_digest("2026-CF-009901-AX") == key_a
+
+    swapped = {
+        "booking_number": key_b,
+        "booking_key_internal": True,
+        "case_number": case_a,
+        "charges": "BATTERY",
+        "status": "",
+    }
+    out = sec.summarize([swapped])
+    assert out["internal_key_valid"] == 1
+    assert out["internal_key_matches_case"] == 0
+    blob = json.dumps(out)
+    for secret in (key_a, key_b, case_a, case_b, key_a.split(":")[1]):
+        assert secret not in blob
+
+    matched = dict(swapped, booking_number=key_a)
+    good = sec.summarize([matched])
+    assert good["internal_key_matches_case"] == 1
+    assert json.dumps(good).find(case_a) == -1
+
+    counters = _mc_counters()
+    assert sec.manatee_clerk_identity_problems(counters) == []
+    swapped_counters = _mc_counters(internal_key_matches_case=0)
+    problems = sec.manatee_clerk_identity_problems(swapped_counters)
+    assert any("internal_key_matches_case" in p for p in problems)
+    assert sec.identity_gate("Manatee Clerk ( FL )", swapped_counters)
+    assert sec.identity_gate("Manatee Clerk ( FL )", counters) == []
+    assert sec.evidence_label("Manatee Clerk", " FL ") == "Manatee Clerk (FL)"
+    assert sec.evidence_label("  manatee   clerk ", "fl") == "manatee clerk (FL)"

@@ -19,6 +19,8 @@ docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md).
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -59,6 +61,29 @@ def key_shape(value: Any) -> str:
 
 def _case_token(value: Any) -> str:
     return re.sub(r"[^0-9A-Z]", "", str(value or "").upper())
+
+
+def mc_case_digest(case_number: Any) -> str:
+    """``mc_case_v1:`` plus the sha256 of the normalised case number, or ``""``.
+
+    Same rule as ``scrapers.counties.manatee_clerk.mc_case_key``: upper-case,
+    then drop every character that is not A-Z or 0-9. The digest is never printed.
+    """
+    case = _case_token(case_number)
+    if not case:
+        return ""
+    return "mc_case_v1:" + hashlib.sha256(case.encode("utf-8")).hexdigest()
+
+
+def _key_matches_case(doc: dict) -> bool:
+    """True when this row's stored key is the digest of its own case number."""
+    booking = str(doc.get("booking_number") or "")
+    if internal_key_family(booking) != "mc_case_v1":
+        return False
+    derived = mc_case_digest(doc.get("case_number"))
+    if not derived or len(derived) != len(booking):
+        return False
+    return hmac.compare_digest(derived, booking)
 
 
 def _blank(value: Any) -> bool:
@@ -109,6 +134,7 @@ def summarize(docs: Iterable[dict]) -> dict:
         "with_address": sum(1 for d in rows if not _blank(d.get("address"))),
         "booking_key_internal": sum(1 for d in rows if d.get("booking_key_internal") is True),
         "internal_key_valid": sum(1 for k in keys if internal_key_family(k)),
+        "internal_key_matches_case": sum(1 for d in rows if _key_matches_case(d)),
         "with_case_number": sum(1 for d in rows if not _blank(d.get("case_number"))),
         "with_obts_number": sum(1 for d in rows if not _blank(d.get("obts_number"))),
         "booking_equals_case_number": sum(
@@ -125,8 +151,8 @@ def summarize(docs: Iterable[dict]) -> dict:
 # pass. Keyed by the smoke_evidence.json label.
 _COUNTER_KEYS = (
     "rows", "booking_number_blank", "booking_number_duplicates", "booking_key_internal",
-    "internal_key_valid", "with_case_number", "booking_equals_case_number",
-    "with_charges", "with_booking_date",
+    "internal_key_valid", "internal_key_matches_case", "with_case_number",
+    "booking_equals_case_number", "with_charges", "with_booking_date",
 )
 
 
@@ -162,7 +188,8 @@ def manatee_clerk_identity_problems(result: dict) -> list[str]:
                 "with_booking_date"):
         if vals[key] != 0:
             problems.append(f"{key} != 0")
-    for key in ("booking_key_internal", "internal_key_valid", "with_case_number", "with_charges"):
+    for key in ("booking_key_internal", "internal_key_valid", "internal_key_matches_case",
+                "with_case_number", "with_charges"):
         if vals[key] != rows:
             problems.append(f"{key} != rows")
     shapes = result.get("booking_number_shapes")
@@ -191,11 +218,24 @@ def _canonical_gate_label(label: str) -> str:
     The gate lookup must use the same spelling, so ``manatee clerk`` still
     selects ``Manatee Clerk (FL)``.
     """
-    folded = " ".join(str(label or "").split()).casefold()
+    text = " ".join(str(label or "").split())
+    text = re.sub(
+        r"\(\s*([^)]*?)\s*\)",
+        lambda match: "(" + " ".join(match.group(1).split()) + ")",
+        text,
+    )
+    folded = text.casefold()
     for key in IDENTITY_GATES:
         if " ".join(key.split()).casefold() == folded:
             return key
     return " ".join(str(label or "").split())
+
+
+def evidence_label(county: str, state: str) -> str:
+    """``County (ST)`` with whitespace stripped from both parts."""
+    name = " ".join(str(county or "").split())
+    st = " ".join(str(state or "").split()).upper()
+    return f"{name} ({st})"
 
 
 def identity_gate(label: str, result: dict) -> list[str] | None:
@@ -252,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
     since = datetime.now(timezone.utc) - timedelta(hours=args.hours)
     docs = db["arrests"].find(county_query(args.county, args.state, since), PROJECTION)
     out = {
-        "label": f"{args.county} ({args.state.upper()})",
+        "label": evidence_label(args.county, args.state),
         "window_hours": args.hours,
         "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         **summarize(docs),

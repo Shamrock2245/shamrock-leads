@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of a4b35de on #308)
+
+### Fixed
+- **A Manatee key must be the digest of that row's case number (P2).** `internal_key_valid` counted any well-shaped `mc_case_v1` value, so a key from a different case still passed. `summarize` now counts `internal_key_matches_case` by comparing the stored key with a locally derived digest. The identity gate requires that count to equal `rows`. The key, the digest and the case number are not printed.
+- **A padded state still selects the gate (P2).** `--state " FL "` built the label `Manatee Clerk ( FL )`, which missed `Manatee Clerk (FL)`, so invalid counters could exit 0. The printed label and the gate lookup now strip whitespace inside the state parentheses.
+
+### Tests
+- `test_codex_1110_b_key_must_match_its_case_and_state_label_is_stripped` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `a4b35de`. The row stays `requested`.
+
 ## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex 11/10 on #308)
 
 ### Changed
