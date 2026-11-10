@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-10-29 (Production readiness runbooks: Lee County, public endpoints manifest, Mongo & proxy)
+
+### Added
+- **`docs/runbooks/lee-county-scraper-failure.md`:** Triage and recovery runbook for Lee County (`Lee (FL)`), covering all `core/lee_freshness.py` findings (`no_status`, `stale`, `records_write_failed`, `repeated_errors`, `zero_rows_site_has_bookings`, `window_gap`) and `core/scheduler.py` `max_instances` missed-run alerts under plain-HTTPS, fail-closed rules.
+- **`docs/runbooks/public-endpoints-security-manifest.md`:** Complete security gate manifest for every route in `OPEN_PATHS`, `OPEN_PREFIXES`, and `/api/webhooks/*` in `dashboard/auth/pin_middleware.py`.
+- **`docs/runbooks/mongo-backup-restore-and-proxy.md`:** MongoDB Atlas `mongodump`/`mongorestore` runbook (preserving immutable `audit_events` and stored ID scans), `MONGO_PROXY_V2_URL` failure recovery procedure, and proposed hot-path index specifications for human review.
+
+### Tests
+- Added `tests/test_prod_readiness_runbooks.py` (wired into `.github/workflows/ci.yml`).
+
 ## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex review of 176b381 on #308)
 
 ### Fixed
@@ -30,7 +40,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `test_codex_1110_b_key_must_match_its_case_and_state_label_is_stripped` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails on `a4b35de`. The row stays `requested`.
 
 ## [Unreleased] — 2026-11-10 (Manatee Clerk smoke gate: Codex 11/10 on #308)
-
 ## [Unreleased] — 2026-11-10 (Lee co-signer discovery: Codex review of d31e06a on #280)
 
 ### Fixed
@@ -468,7 +477,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `tests/test_cosigner_link.py`: `test_paid_hold_preserves_and_restores_preexisting_unrelated_review_flag`.
-
 ## [Unreleased] — 2026-10-28 (Lee County HQ API needs a staff session)
 
 ### Security
