@@ -461,6 +461,33 @@ def test_codex_1104_script_exits_nonzero_on_a_failed_gate(monkeypatch, capsys):
         assert "2026CF009901AX" not in json.dumps(out)
 
 
+def test_manatee_clerk_smoke_row_is_not_promoted():
+    """The Clerk write-smoke row stays a smoke result, not a source promotion.
+
+    Status may only be requested, passed, or failed. Without a passed row the
+    row and the Health label must not claim verified_public.
+    """
+    from dashboard.extensions import SCRAPER_SOURCE_STATES
+
+    rows = [r for r in json.loads(SMOKE.read_text())["records"] if r.get("label") == "Manatee Clerk (FL)"]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.get("kind") == "write_smoke"
+    assert row.get("status") in {"requested", "passed", "failed"}
+    passed = row.get("status") == "passed"
+    health = SCRAPER_SOURCE_STATES.get("Manatee Clerk (FL)", "unverified")
+    if not passed:
+        assert health != "verified_public"
+        assert row.get("status") != "verified_public"
+        assert "verified_public" not in json.dumps(row)
+    text, _ = _build(B.DEFAULT_SMOKE_EVIDENCE)
+    clerk_lines = [line for line in text.splitlines() if line.startswith("| Manatee Clerk (FL) |")]
+    assert clerk_lines
+    if not passed:
+        assert all("| verified_public |" not in line for line in clerk_lines)
+        assert "| unverified | write_smoke | requested |" in clerk_lines[0]
+
+
 def test_codex_1104_manatee_clerk_row_documents_the_gate():
     row = next(r for r in json.loads(SMOKE.read_text())["records"] if r["label"] == "Manatee Clerk (FL)")
     assert row["status"] == "requested"

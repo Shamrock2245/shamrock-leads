@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-11 (Manatee Clerk smoke note: deploy is done, smoke is not)
+
+### Changed
+- **Manatee Clerk write smoke is waiting on Leads Ops, not a disk-full deploy.** `docs/recon/smoke_evidence.json` `blocked_on` no longer says Hetzner was full as of 2026-11-03. #308 is merged (`0e845b1`) and main `badcf2a` is deployed (Hetzner run `43025037940`, success Nov 11 2026). The row stays `write_smoke` / `requested`.
+- **SWFL queue matches the registry.** Manatee jail is `fail_closed` since 2026-10-09 on the 403 Cloudflare challenge. The residential-proxy / APE path is retired. Manatee Clerk stays `unverified` pending the write smoke. No source state was changed.
+
+### Tests
+- `test_manatee_clerk_smoke_row_is_not_promoted` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails if that smoke row is not `requested`, `passed`, or `failed`, or if it claims `verified_public` without a passed row.
+
 ## [Unreleased] — 2026-11-10 (Portal handoff + self-serve prefill coexistence guard)
 
 ### Fixed

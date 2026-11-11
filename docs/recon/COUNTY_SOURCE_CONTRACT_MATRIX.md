@@ -1043,7 +1043,7 @@ Requested and recorded Leads Ops smokes (`docs/recon/smoke_evidence.json`). A `r
 | Glades (FL) | unverified | write_smoke | requested | 2026-10-08 | — | — | Awaiting Leads Ops. HOLD: run only after the Collier/Glades bond PR (#139) is merged and deployed. Today glades.py writes 0 for an unknown bond. | `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` |
 | Charlotte (FL) | fail_closed | relay_read | requested | 2026-10-08 | — | — | Awaiting Leads Ops. | `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` |
 | Charlotte (FL) | fail_closed | relay_write | requested | 2026-10-08 | — | — | Awaiting Leads Ops. After a passed Charlotte relay_read. | `docs/recon/FL_HOME_COUNTIES_SOURCE_CONTRACT_2026-10-08.md` |
-| Manatee Clerk (FL) | unverified | write_smoke | requested | 2026-10-10 | — | — | Awaiting Leads Ops. Scraper merged (#177 2026-10-14, #256 2026-10-16) and registered every 120 min in main.py; waiting on a VPS deploy (Hetzner deploys blocked by a full disk as of 2026-11-03). Owner exception recorded 2026-10-10 (Brendan). | `docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md` |
+| Manatee Clerk (FL) | unverified | write_smoke | requested | 2026-10-10 | — | — | Awaiting Leads Ops. Waiting on a Leads Ops write smoke. #308 is merged (0e845b1) and main badcf2a is deployed (Hetzner run 43025037940, success Nov 11 2026). Owner exception recorded 2026-10-10 (Brendan). | `docs/recon/FL_MANATEE_CLERK_SCRAPER_2026-10-10.md` |
 
 ## Operating rule
 

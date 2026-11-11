@@ -45,7 +45,7 @@ The site keeps search state per session (a second case-type search in the same s
 
 ## Leads Ops write smoke (hydrate-ready check, 2026-11-03)
 
-The scraper is on main (#177, #256) and registered every 120 min in `main.py`. Health stays `unverified` until this smoke passes and a separate PR adds the source state. It runs once a VPS deploy goes through, wherever Leads Ops has `MONGODB_URI`:
+The scraper is on main (#177, #256) and registered every 120 min in `main.py`. #308 is merged (`0e845b1`) and main `badcf2a` is deployed (Hetzner run `43025037940`, success Nov 11 2026). Health stays `unverified` until a Leads Ops write smoke passes and a separate PR adds the source state. Run it wherever Leads Ops has `MONGODB_URI`:
 
 ```
 python main.py "Manatee Clerk"          # copy the final 'Result: {...}' log line
