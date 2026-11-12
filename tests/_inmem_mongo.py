@@ -108,19 +108,37 @@ def _array_filter_spec(array_filters: List[Dict[str, Any]], ident: str) -> Dict[
     return {"__array_filter_missing__": ident}
 
 
-def _set_array_field(doc: Dict[str, Any], path: str, value: Any, array_filters: List[Dict[str, Any]]) -> None:
-    match = _ARRAY_SET.match(path)
-    if match is None:
-        _set_path(doc, path, copy.deepcopy(value))
-        return
-    bucket = doc.get(match.group("array"))
-    if not isinstance(bucket, list):
-        return
-    spec = _array_filter_spec(array_filters, match.group("ident"))
-    rest = match.group("rest")
-    for item in bucket:
-        if isinstance(item, dict) and matches(item, spec):
-            _set_path(item, rest, copy.deepcopy(value))
+def _apply_array_sets(
+    doc: Dict[str, Any],
+    updates: List[tuple],
+    array_filters: List[Dict[str, Any]],
+) -> None:
+    """Apply every ``array.$[name].field`` set to the elements that matched first.
+
+    MongoDB identifies those elements on the pre-update document, then applies
+    every set. Matching again after the first field changes would drop the rest.
+    """
+    grouped: Dict[tuple, List[tuple]] = {}
+    order: List[tuple] = []
+    for path, value in updates:
+        match = _ARRAY_SET.match(path)
+        if match is None:
+            _set_path(doc, path, copy.deepcopy(value))
+            continue
+        key = (match.group("array"), match.group("ident"))
+        if key not in grouped:
+            order.append(key)
+            grouped[key] = []
+        grouped[key].append((match.group("rest"), value))
+    for array_name, ident in order:
+        bucket = doc.get(array_name)
+        if not isinstance(bucket, list):
+            continue
+        spec = _array_filter_spec(array_filters, ident)
+        matched = [item for item in bucket if isinstance(item, dict) and matches(item, spec)]
+        for item in matched:
+            for rest, value in grouped[(array_name, ident)]:
+                _set_path(item, rest, copy.deepcopy(value))
 
 
 def _return_before(return_document: Any) -> bool:
@@ -193,11 +211,16 @@ class FakeCollection:
 
     def _apply(self, d, update, inserting, array_filters=None):
         filters = list(array_filters or [])
+        plain = []
+        array_sets = []
         for k, v in (update.get("$set") or {}).items():
             if ".$[" in k:
-                _set_array_field(d, k, v, filters)
+                array_sets.append((k, v))
             else:
-                _set_path(d, k, copy.deepcopy(v))
+                plain.append((k, v))
+        for k, v in plain:
+            _set_path(d, k, copy.deepcopy(v))
+        _apply_array_sets(d, array_sets, filters)
         for k, v in (update.get("$inc") or {}).items():
             current = _get(d, k)
             try:

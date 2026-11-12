@@ -1998,6 +1998,7 @@ async def _audit_scan_role(
     reason: str,
     event_type: str,
     attempted_role: str = "",
+    created_at: str = "",
 ) -> None:
     """One immutable audit row. No phone, token, or ID fields."""
     event = {
@@ -2006,7 +2007,7 @@ async def _audit_scan_role(
         "entity_id": scan_id,
         "actor": "portal_client",
         "agent_name": "pin_portal",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": created_at or datetime.now(timezone.utc).isoformat(),
         "reason": reason,
         "session_id": str(doc.get("_id") or ""),
         "packet_id": str(doc.get("packet_id") or ""),
@@ -2029,6 +2030,33 @@ async def _audit_scan_role(
         return
     event["event_id"] = str(uuid.uuid4())
     await audits.insert_one(event)
+
+
+async def _ensure_claimed_role_audit(doc: Dict[str, Any], scan_id: str, role: str) -> None:
+    """Insert the claim audit when this blank scan was claimed and the row is missing.
+
+    The compare-and-swap stamps ``role_claimed_at`` on that scan. A later confirm
+    of the same role uses the stamp to write the audit if the first insert failed,
+    then continues. A scan that already had a role has no stamp, so confirming it
+    does not invent a claim. The audit id is derived from the scan id, so a second insert is a no-op.
+    """
+    row = _scan_row(doc, scan_id) or {}
+    claimed_at = str(row.get("role_claimed_at") or "").strip()
+    if not claimed_at:
+        return
+    prior = row.get("role_claimed_prior_session_role")
+    prior_session = _normalize_client_role(prior) if isinstance(prior, str) else ""
+    await _audit_scan_role(
+        doc,
+        scan_id,
+        old_role="",
+        new_role=role,
+        old_state={"role": "", "session_role": prior_session},
+        new_state=_role_state(doc, scan_id),
+        reason="unbound_scan_role_claimed",
+        event_type="id_scan_role_claimed",
+        created_at=claimed_at,
+    )
 
 
 async def _reject_conflicting_role(doc: Dict[str, Any], scan_id: str, attempted: str) -> str:
@@ -2054,7 +2082,9 @@ async def _claim_unbound_scan_role(session: Dict[str, Any], scan_id: str, role: 
     The role write is one compare-and-swap against the blank value just read.
     Only one concurrent confirm can take that blank role. The other fails
     closed and does not continue under a second role. A successful change and
-    a conflicting refusal each write an ``audit_events`` row.
+    a conflicting refusal each write an ``audit_events`` row. If that claim
+    insert fails, the next confirm of the same role writes the missing row
+    and then continues.
 
     Returns ``""`` when this scan may be confirmed as ``role``.
     """
@@ -2077,6 +2107,7 @@ async def _claim_unbound_scan_role(session: Dict[str, Any], scan_id: str, role: 
     if current and current != role:
         return await _reject_conflicting_role(fresh, scan_id, role)
     if current == role:
+        await _ensure_claimed_role_audit(fresh, scan_id, role)
         _adopt_claimed_scan(session, fresh, role)
         return ""
 
@@ -2087,7 +2118,12 @@ async def _claim_unbound_scan_role(session: Dict[str, Any], scan_id: str, role: 
         "role": old_session_raw,
         "id_scan_records": {"$elemMatch": {"scan_id": scan_id, "role": old_scan_raw}},
     }
-    set_doc: Dict[str, Any] = {"id_scan_records.$[scan].role": role}
+    claimed_at = datetime.now(timezone.utc).isoformat()
+    set_doc: Dict[str, Any] = {
+        "id_scan_records.$[scan].role_claimed_at": claimed_at,
+        "id_scan_records.$[scan].role_claimed_prior_session_role": fresh_role,
+        "id_scan_records.$[scan].role": role,
+    }
     array_filters: list = [
         {"scan.scan_id": scan_id, "scan.role": old_scan_raw},
     ]
@@ -2112,19 +2148,8 @@ async def _claim_unbound_scan_role(session: Dict[str, Any], scan_id: str, role: 
             if isinstance(after, dict) and (after_state["role"] or after_state["session_role"]):
                 return await _reject_conflicting_role(after, scan_id, role)
             return "scan_required"
-        before_state = _role_state(before, scan_id)
-        if not before_state["role"]:
-            await _audit_scan_role(
-                after if isinstance(after, dict) else before,
-                scan_id,
-                old_role=before_state["role"],
-                new_role=role,
-                old_state=before_state,
-                new_state=after_state,
-                reason="unbound_scan_role_claimed",
-                event_type="id_scan_role_claimed",
-            )
         if isinstance(after, dict):
+            await _ensure_claimed_role_audit(after, scan_id, role)
             _adopt_claimed_scan(session, after, role)
         return ""
 
@@ -2133,6 +2158,7 @@ async def _claim_unbound_scan_role(session: Dict[str, Any], scan_id: str, role: 
         return "scan_required"
     raced_state = _role_state(raced, scan_id)
     if raced_state["role"] == role and raced_state["session_role"] in {"", role}:
+        await _ensure_claimed_role_audit(raced, scan_id, role)
         _adopt_claimed_scan(session, raced, role)
         return ""
     if raced_state["role"] or raced_state["session_role"]:

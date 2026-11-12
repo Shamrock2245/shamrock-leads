@@ -325,3 +325,88 @@ async def test_missing_role_fields_still_claim_once(monkeypatch):
     assert refused == "role_mismatch"
     assert stored["role"] == "defendant"
     assert len(_audits(db["audit_events"], "id_scan_role_claimed")) == 1
+
+
+class _FailOnceAudits(FakeCollection):
+    def __init__(self):
+        super().__init__()
+        self.remaining = 1
+
+    async def insert_one(self, doc):
+        if self.remaining:
+            self.remaining -= 1
+            raise RuntimeError("audit_write_failed")
+        await super().insert_one(doc)
+
+
+@pytest.mark.asyncio
+async def test_same_role_retry_writes_the_claim_audit_after_insert_failure(monkeypatch):
+    pins = FakeCollection()
+    pins.docs.append(_doc())
+    audits = _FailOnceAudits()
+    _install(monkeypatch, pins, audits)
+    accepted: list[str] = []
+
+    async def _accept(**kwargs):
+        row = next(item for item in kwargs["session"]["id_scan_records"] if item["scan_id"] == SCAN_ID)
+        assert row["role"] == kwargs["role"]
+        accepted.append(kwargs["role"])
+        return {
+            "ok": True,
+            "saved": True,
+            "signing_link": "https://sign.shamrockbailbonds.biz/s/TEST-ROLE",
+            "role": kwargs["role"],
+        }
+
+    monkeypatch.setattr("dashboard.services.paperwork_self_serve.accept_confirmed_id", _accept)
+
+    with pytest.raises(RuntimeError, match="audit_write_failed"):
+        await _claim_unbound_scan_role(copy.deepcopy(_doc()), SCAN_ID, "defendant")
+
+    stored = pins.docs[0]
+    assert stored["role"] == "defendant"
+    assert stored["id_scan_records"][0]["role"] == "defendant"
+    assert stored["id_scan_records"][0]["role_claimed_prior_session_role"] == ""
+    assert stored["id_scan_records"][0]["role_claimed_at"]
+    assert "role_claimed_at" not in stored["id_scan_records"][1]
+    assert audits.docs == []
+
+    repaired = await _self_serve_remaining_fields(copy.deepcopy(_doc()), _request("defendant"))
+    assert not isinstance(repaired, JSONResponse)
+    assert repaired["role"] == "defendant"
+    assert accepted == ["defendant"]
+    claimed = _audits(audits, "id_scan_role_claimed")
+    assert len(claimed) == 1
+    row = claimed[0]
+    assert row["old_role"] == ""
+    assert row["new_role"] == "defendant"
+    assert row["actor"] == "portal_client"
+    assert row["reason"] == "unbound_scan_role_claimed"
+    assert row["old_state"] == {"role": "", "session_role": ""}
+    assert row["new_state"] == {"role": "defendant", "session_role": "defendant"}
+    assert row["created_at"] == stored["id_scan_records"][0]["role_claimed_at"]
+    assert row["event_id"] == row["_id"]
+
+    again = await _claim_unbound_scan_role(copy.deepcopy(_doc()), SCAN_ID, "defendant")
+    assert again == ""
+    assert len(_audits(audits, "id_scan_role_claimed")) == 1
+    assert audits.docs[0]["event_id"] == row["event_id"]
+    _assert_no_pii(audits)
+
+
+@pytest.mark.asyncio
+async def test_claim_records_an_existing_session_role_as_the_prior_role(monkeypatch):
+    db = FakeDB()
+    doc = _doc()
+    doc["role"] = "defendant"
+    db["portal_pins"].docs.append(doc)
+    _install(monkeypatch, db["portal_pins"], db["audit_events"])
+
+    claimed = await _claim_unbound_scan_role(copy.deepcopy(doc), SCAN_ID, "defendant")
+    assert claimed == ""
+    stored = db["portal_pins"].docs[0]
+    assert stored["role"] == "defendant"
+    assert stored["id_scan_records"][0]["role_claimed_prior_session_role"] == "defendant"
+    row = _audits(db["audit_events"], "id_scan_role_claimed")[0]
+    assert row["old_state"] == {"role": "", "session_role": "defendant"}
+    assert row["new_state"] == {"role": "defendant", "session_role": "defendant"}
