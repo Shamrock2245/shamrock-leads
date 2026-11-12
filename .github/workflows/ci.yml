@@ -230,6 +230,7 @@ jobs:
             tests/test_bb_send_normalize.py \
             tests/test_bb_diagnostic_smoke.py \
             tests/test_bb_servers_init.py \
+            tests/test_bb_tailscale_fallback.py \
             tests/test_outreach_queue.py \
             tests/test_docuseal_initial_delivery.py \
             tests/test_defendant_delivery_authorization.py \

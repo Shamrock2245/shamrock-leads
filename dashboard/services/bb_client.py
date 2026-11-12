@@ -18,12 +18,19 @@ Usage:
     bb = get_default_bb_client()          # always returns first configured server
 """
 import logging
+import time
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from bson import ObjectId
 from core.booking_identity import redact_internal_keys
 
 logger = logging.getLogger(__name__)
+
+# After a failed or inconclusive Tailscale probe, wait before probing again.
+# get_bb_client() is on the send path; an open probe must not run on every text.
+_TAILSCALE_PROBE_COOLDOWN_SECONDS = 60.0
+_tailscale_retry_after = 0.0
 
 
 def _mask(phone) -> str:
@@ -39,6 +46,54 @@ async def _consent_blocked(phone: str, purpose: str) -> Optional[dict]:
     """STOP/TCPA per-recipient gate — see dashboard.services.sms_consent_ledger."""
     from dashboard.services.sms_consent_ledger import check_send_allowed
     return await check_send_allowed(phone, purpose)
+
+
+def _bb_url_is_tailscale(url: str) -> bool:
+    """True when the host is the office iMac on the tailnet.
+
+    The check is the hostname only. A path or username that happens to
+    contain ``100.`` is not a Tailscale address.
+    """
+    try:
+        host = (urlparse(str(url or "")).hostname or "").lower()
+    except ValueError:
+        return False
+    return host.startswith("100.") or "shamrocksimac" in host
+
+
+def _recover_primary_tailscale(ext, server: Dict[str, Any]) -> tuple[Dict[str, Any], str]:
+    """Use the 0178 Tailscale URL when that peer is up.
+
+    ``init_bluebubbles`` already prefers Tailscale for suffix ``0178`` and
+    leaves every other line alone. This only refreshes ``0178`` after the
+    in-memory URL has fallen back to frp. It does not delete runtime URL
+    overrides, and a probe that does not actually switch the URL is not
+    repeated on the next send.
+    """
+    global _tailscale_retry_after
+    url = str(server.get("url") or "")
+    if str(server.get("suffix") or "") != "0178" or not url or _bb_url_is_tailscale(url):
+        return server, url
+    now = time.monotonic()
+    if now < _tailscale_retry_after:
+        return server, url
+    try:
+        from config.tailscale import ts_config
+        if not ts_config.enabled or not ts_config.is_imac_reachable(timeout=1.5):
+            _tailscale_retry_after = time.monotonic() + _TAILSCALE_PROBE_COOLDOWN_SECONDS
+            return server, url
+        ext.init_bluebubbles()
+        refreshed = ext.BB_SERVERS.get("2399550178") or server
+        new_url = str(refreshed.get("url") or "")
+        if not _bb_url_is_tailscale(new_url):
+            _tailscale_retry_after = time.monotonic() + _TAILSCALE_PROBE_COOLDOWN_SECONDS
+            return server, url
+        _tailscale_retry_after = 0.0
+        return refreshed, new_url
+    except Exception:
+        _tailscale_retry_after = time.monotonic() + _TAILSCALE_PROBE_COOLDOWN_SECONDS
+        logger.warning("[bb_client] Tailscale refresh failed; keeping the current 0178 URL")
+        return server, url
 
 
 def get_bb_client(phone: Optional[str] = None):
@@ -76,20 +131,13 @@ def get_bb_client(phone: Optional[str] = None):
             logger.warning("[bb_client] No BlueBubbles server configured for phone=%s", _mask(phone))
             return None
 
-        url = server.get("url", "")
-        if url and "100." not in url and "shamrocksimac" not in url:
-            try:
-                from config.tailscale import ts_config
-                if ts_config.enabled and ts_config.is_imac_reachable(timeout=1.5):
-                    ext._BB_URL_OVERRIDES.pop(server.get("suffix", "0178"), None)
-                    ext.init_bluebubbles()
-                    server = ext.BB_SERVERS.get(f"239955{server.get('suffix', '0178')}") or server
-                    url = server.get("url", "")
-            except Exception:
-                pass
+        server, url = _recover_primary_tailscale(ext, server)
         password = server.get("password", "")
         if not url or not password:
-            logger.warning("[bb_client] BB server missing url or password: %s", server)
+            logger.warning(
+                "[bb_client] BB server missing url or password suffix=%s",
+                server.get("suffix") or "",
+            )
             return None
 
         return BlueBubblesClient(url, password)
