@@ -222,7 +222,12 @@ async def _resolve_packet_for_client(
         "role": "",
         "message": (
             "We found your case file, but the e-sign link is not ready yet. "
-            "Please call (239) 332-2245 and we will resend your signing link."
+            "Scan your ID to continue, or call (239) 332-2245."
+            if _self_serve_flag()
+            else (
+                "We found your case file, but the e-sign link is not ready yet. "
+                "Please call (239) 332-2245 and we will resend your signing link."
+            )
         ),
     }
 
@@ -546,7 +551,8 @@ _CLIENT_FIELD_ALLOWLIST = frozenset({
     "coindemnitor_address", "coindemnitor_city", "coindemnitor_state", "coindemnitor_zip",
     "coindemnitor_city_state_zip", "coindemnitor_dob", "coindemnitor_dl",
     "coindemnitor_dl_state", "coindemnitor_sex", "coindemnitor_dl_expiration",
-    "coindemnitor_phone", "coindemnitor_email", "Ind2Name",
+    "coindemnitor_phone", "coindemnitor_email", "coindemnitor_relationship",
+    "coindemnitor_employer", "coindemnitor_employer_phone", "Ind2Name",
     "indemnitor_dl_state", "indemnitor_sex", "indemnitor_dl_expiration",
     "indemnitor_first_name", "indemnitor_last_name",
     "defendant_sex", "defendant_dl_expiration", "defendant_license_number",
@@ -596,6 +602,54 @@ def _sanitize_client_fields(raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return clean
 
 
+def _fields_for_signer(role: str, raw: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Keep this signer's keys. Another role's identity never comes along."""
+    from dashboard.services.paperwork_self_serve import restrict_to_role
+
+    role = _normalize_client_role(role)
+    if not role:
+        return {}
+    source = raw if isinstance(raw, dict) else {}
+    scoped = restrict_to_role(source, role)
+    clean = _sanitize_client_fields(source)
+    if role == "defendant":
+        for key, value in clean.items():
+            if key.startswith("def_"):
+                scoped[key] = value
+        return scoped
+    if role == "indemnitor":
+        for key, value in clean.items():
+            if key == "Ind2Name" or key.startswith(("defendant_", "coindemnitor_", "def_", "Def")):
+                continue
+            scoped[key] = value
+    return scoped
+
+
+def _submitter_values_for_role(role: str, fields: Dict[str, str]) -> Dict[str, str]:
+    """Co-indemnitor DocuSeal copies use indemnitor_* names on that submitter only."""
+    values = dict(fields)
+    if role == "coindemnitor":
+        for key, value in fields.items():
+            if key.startswith("coindemnitor_"):
+                values["indemnitor_" + key[len("coindemnitor_"):]] = value
+    return values
+
+
+def _packet_field_update(packet: Optional[Dict[str, Any]], role: str, fields: Dict[str, str]) -> Dict[str, Any]:
+    """Merge this role onto the packet without replacing another signer's keys."""
+    existing = (packet or {}).get("client_fields") if isinstance((packet or {}).get("client_fields"), dict) else {}
+    now = datetime.now(timezone.utc).isoformat()
+    update: Dict[str, Any] = {
+        "client_fields": {**existing, **fields},
+        "client_fields_updated_at": now,
+    }
+    if role == "coindemnitor":
+        current = (packet or {}).get("coindemnitor_fields") if isinstance((packet or {}).get("coindemnitor_fields"), dict) else {}
+        update["coindemnitor_fields"] = {**current, **fields}
+        update["coindemnitor_fields_updated_at"] = now
+    return update
+
+
 def client_fields_from_id_ocr(
     extracted: Optional[Dict[str, Any]],
     role: str,
@@ -627,7 +681,11 @@ def client_fields_from_id_ocr(
     zip_code = str(extracted.get("zip") or "").strip()
     dob = str(extracted.get("dob") or "").strip()
     dl_number = str(extracted.get("dl_number") or extracted.get("dl") or "").strip()
-    dl_state = str(extracted.get("dl_state") or extracted.get("state") or "").strip()
+    dl_state = str(
+        extracted.get("dl_state") or extracted.get("issuing_state") or extracted.get("state") or ""
+    ).strip()
+    expiration = str(extracted.get("expiration_date") or extracted.get("dl_expiration") or "").strip()
+    sex = str(extracted.get("sex") or "").strip()[:1]
     if role == "defendant":
         raw = {
             "defendant_name": full_name,
@@ -641,6 +699,8 @@ def client_fields_from_id_ocr(
             "defendant_dob": dob,
             "defendant_dl": dl_number,
             "defendant_dl_state": dl_state,
+            "defendant_dl_expiration": expiration,
+            "defendant_sex": sex,
         }
     elif role == "coindemnitor":
         raw = {
@@ -654,6 +714,9 @@ def client_fields_from_id_ocr(
             "coindemnitor_zip": zip_code,
             "coindemnitor_dob": dob,
             "coindemnitor_dl": dl_number,
+            "coindemnitor_dl_state": dl_state,
+            "coindemnitor_dl_expiration": expiration,
+            "coindemnitor_sex": sex,
         }
         if city or state or zip_code:
             raw["coindemnitor_city_state_zip"] = ", ".join(p for p in (city, f"{state} {zip_code}".strip()) if p)
@@ -669,6 +732,9 @@ def client_fields_from_id_ocr(
             "indemnitor_zip": zip_code,
             "indemnitor_dob": dob,
             "indemnitor_dl": dl_number,
+            "indemnitor_dl_state": dl_state,
+            "indemnitor_dl_expiration": expiration,
+            "indemnitor_sex": sex,
         }
         if city or state or zip_code:
             raw["indemnitor_city_state_zip"] = ", ".join(p for p in (city, f"{state} {zip_code}".strip()) if p)
@@ -680,54 +746,43 @@ async def _push_client_fields_to_issued_packet(
     session: Dict[str, Any],
     fields: Dict[str, str],
 ) -> bool:
-    """PATCH a staff-issued DocuSeal submitter. No-op if no packet exists."""
-    if not fields:
-        return False
+    """PATCH the matching DocuSeal submitter. No-op if no packet exists.
+
+    A phone match never selects a different role. Fields are stored either way.
+    """
     meta = await _resolve_packet_for_client(
         session.get("phone") or "",
         booking=session.get("booking_number") or "",
         intake=session.get("intake_id") or session.get("client_intake_id") or "",
     )
+    role = _normalize_client_role(session.get("role")) or _normalize_client_role(meta.get("role"))
+    fields = _fields_for_signer(role, fields)
     packet_id = meta.get("packet_id") or ""
-    if not packet_id:
+    if not packet_id or not role or not fields:
         return False
     from dashboard.services.paperwork_signers import normalize_role
     packets = get_collection("paperwork_packets")
     packet = await packets.find_one({"packet_id": packet_id})
     submitters = list((packet or {}).get("docuseal_submitters") or [])
-    want_role = normalize_role(session.get("role") or meta.get("role") or "")
-    session_phone = _digits_phone(session.get("phone") or "")
+    want_role = normalize_role(role)
     target = None
     for item in submitters:
-        item_role = normalize_role((item or {}).get("role"))
-        if want_role and item_role == want_role:
+        if normalize_role((item or {}).get("role")) == want_role:
             target = item
             break
-    if not target and session_phone:
-        for item in submitters:
-            if _digits_phone((item or {}).get("phone")) == session_phone:
-                target = item
-                break
+    update = _packet_field_update(packet, role, fields)
+    update["id_ocr_pushed_at"] = datetime.now(timezone.utc).isoformat()
+    await packets.update_one({"packet_id": packet_id}, {"$set": update})
     submitter_id = (target or {}).get("id")
     if not submitter_id:
         return False
     from dashboard.services.docuseal_service import DocuSealService
     from dashboard.services.docuseal_signing_ux import submission_fields_from_values
-    svc = DocuSealService()
-    await svc.update_submitter(
+    values = _submitter_values_for_role(role, fields)
+    await DocuSealService().update_submitter(
         submitter_id,
-        values=fields,
-        fields=submission_fields_from_values(fields, force_editable=True),
-    )
-    existing_packet_fields = (packet or {}).get("client_fields") if isinstance((packet or {}).get("client_fields"), dict) else {}
-    merged = {**existing_packet_fields, **fields}
-    await packets.update_one(
-        {"packet_id": packet_id},
-        {"$set": {
-            "client_fields": merged,
-            "client_fields_updated_at": datetime.now(timezone.utc).isoformat(),
-            "id_ocr_pushed_at": datetime.now(timezone.utc).isoformat(),
-        }},
+        values=values,
+        fields=submission_fields_from_values(values, force_editable=True),
     )
     return True
 
@@ -752,6 +807,14 @@ def _split_name(full_name: str) -> tuple[str, str]:
     if not parts:
         return "", ""
     return parts[0], " ".join(parts[1:])
+
+
+def _pick(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
 
 async def _upsert_deferred_client_intake(
@@ -835,55 +898,75 @@ async def _upsert_deferred_client_intake(
     ).strip()
 
     if role == "defendant":
-        full_name = fields.get("defendant_name") or fields.get("DefName") or extracted.get("full_name") or ""
+        full_name = _pick(fields.get("defendant_name"), fields.get("DefName"), extracted.get("full_name"))
         first_name, last_name = _split_name(full_name)
         defendant.update({
             "name": full_name,
-            "firstName": fields.get("DefFirstName") or first_name,
-            "lastName": fields.get("DefLastName") or last_name,
-            "dob": fields.get("defendant_dob") or extracted.get("dob") or "",
-            "street": fields.get("defendant_address") or extracted.get("address") or "",
-            "city": fields.get("defendant_city") or extracted.get("city") or "",
-            "state": fields.get("defendant_state") or extracted.get("state") or "",
-            "zip": fields.get("defendant_zip") or extracted.get("zip") or "",
-            "dl": fields.get("defendant_dl") or extracted.get("dl_number") or "",
-            "dlState": fields.get("defendant_dl_state") or extracted.get("dl_state") or "",
-            "phone": fields.get("defendant_phone") or phone,
-            "email": fields.get("defendant_email") or "",
+            "firstName": _pick(fields.get("DefFirstName"), first_name),
+            "lastName": _pick(fields.get("DefLastName"), last_name),
+            "dob": _pick(fields.get("defendant_dob"), extracted.get("dob")),
+            "street": _pick(fields.get("defendant_address"), extracted.get("address")),
+            "city": _pick(fields.get("defendant_city"), extracted.get("city")),
+            "state": _pick(fields.get("defendant_state"), extracted.get("state")),
+            "zip": _pick(fields.get("defendant_zip"), extracted.get("zip")),
+            "dl": _pick(fields.get("defendant_dl"), extracted.get("dl_number")),
+            "dlState": _pick(fields.get("defendant_dl_state"), extracted.get("dl_state")),
+            "phone": _pick(fields.get("defendant_phone"), phone),
+            "email": _pick(fields.get("defendant_email")),
+            "employer": _pick(fields.get("defendant_employer")),
+            "employerPhone": _pick(fields.get("defendant_employer_phone")),
             "bookingNumber": session_booking,
             "county": session_county,
         })
+    elif role == "coindemnitor":
+        full_name = _pick(fields.get("coindemnitor_name"), fields.get("Ind2Name"), extracted.get("full_name"))
+        first_name, last_name = _split_name(full_name)
+        indemnitor.update({
+            "firstName": first_name,
+            "lastName": last_name,
+            "relationship": _pick(fields.get("coindemnitor_relationship")),
+            "dob": _pick(fields.get("coindemnitor_dob"), extracted.get("dob")),
+            "dl": _pick(fields.get("coindemnitor_dl"), extracted.get("dl_number")),
+            "dlState": _pick(fields.get("coindemnitor_dl_state"), extracted.get("dl_state")),
+            "phone": _pick(fields.get("coindemnitor_phone"), phone),
+            "email": _pick(fields.get("coindemnitor_email")),
+            "address": _pick(fields.get("coindemnitor_address"), extracted.get("address")),
+            "city": _pick(fields.get("coindemnitor_city"), extracted.get("city")),
+            "state": _pick(fields.get("coindemnitor_state"), extracted.get("state")),
+            "zip": _pick(fields.get("coindemnitor_zip"), extracted.get("zip")),
+            "employer": _pick(fields.get("coindemnitor_employer")),
+            "employerPhone": _pick(fields.get("coindemnitor_employer_phone")),
+            "role": "coindemnitor",
+        })
     else:
-        full_name = (
-            fields.get("indemnitor_name")
-            or fields.get("coindemnitor_name")
-            or fields.get("IndemnitorName")
-            or fields.get("IndName")
-            or fields.get("Ind2Name")
-            or fields.get("FullName")
-            or extracted.get("full_name")
-            or ""
+        full_name = _pick(
+            fields.get("indemnitor_name"),
+            fields.get("IndemnitorName"),
+            fields.get("IndName"),
+            fields.get("FullName"),
+            extracted.get("full_name"),
         )
         first_name, last_name = _split_name(full_name)
         indemnitor.update({
             "firstName": first_name,
             "lastName": last_name,
-            "relationship": fields.get("indemnitor_relationship") or "",
-            "dob": fields.get("indemnitor_dob") or fields.get("coindemnitor_dob") or extracted.get("dob") or "",
-            "dl": fields.get("indemnitor_dl") or fields.get("coindemnitor_dl") or extracted.get("dl_number") or "",
-            "dlState": fields.get("indemnitor_dl_state") or fields.get("coindemnitor_dl_state") or extracted.get("dl_state") or "",
-            "phone": fields.get("indemnitor_phone") or fields.get("coindemnitor_phone") or phone,
-            "email": fields.get("indemnitor_email") or fields.get("coindemnitor_email") or "",
-            "address": fields.get("indemnitor_address") or fields.get("coindemnitor_address") or extracted.get("address") or "",
-            "city": fields.get("indemnitor_city") or fields.get("coindemnitor_city") or extracted.get("city") or "",
-            "state": fields.get("indemnitor_state") or fields.get("coindemnitor_state") or extracted.get("state") or "",
-            "zip": fields.get("indemnitor_zip") or fields.get("coindemnitor_zip") or extracted.get("zip") or "",
-            "employer": fields.get("indemnitor_employer") or "",
-            "employerPhone": fields.get("indemnitor_employer_phone") or fields.get("indemnitor_work_phone") or "",
-            "ref1Name": fields.get("reference_1_name") or "",
-            "ref1Phone": fields.get("reference_1_phone") or "",
-            "role": "coindemnitor" if role == "coindemnitor" else "primary",
+            "relationship": _pick(fields.get("indemnitor_relationship")),
+            "dob": _pick(fields.get("indemnitor_dob"), extracted.get("dob")),
+            "dl": _pick(fields.get("indemnitor_dl"), extracted.get("dl_number")),
+            "dlState": _pick(fields.get("indemnitor_dl_state"), extracted.get("dl_state")),
+            "phone": _pick(fields.get("indemnitor_phone"), phone),
+            "email": _pick(fields.get("indemnitor_email")),
+            "address": _pick(fields.get("indemnitor_address"), extracted.get("address")),
+            "city": _pick(fields.get("indemnitor_city"), extracted.get("city")),
+            "state": _pick(fields.get("indemnitor_state"), extracted.get("state")),
+            "zip": _pick(fields.get("indemnitor_zip"), extracted.get("zip")),
+            "employer": _pick(fields.get("indemnitor_employer")),
+            "employerPhone": _pick(fields.get("indemnitor_employer_phone"), fields.get("indemnitor_work_phone")),
+            "ref1Name": _pick(fields.get("reference_1_name")),
+            "ref1Phone": _pick(fields.get("reference_1_phone")),
+            "role": "primary",
         })
+    if role != "defendant":
         if session_def_name:
             def_first, def_last = _split_name(session_def_name)
             defendant.update({
@@ -1335,6 +1418,10 @@ async def portal_id_ocr(request: Request):
         from dashboard.services.paperwork_self_serve import ocr_snapshot
 
         record = _id_upload_record(session, extracted, True)
+        # A session with no role has not chosen defendant vs cosigner yet.
+        # Leave the scan unbound so confirm can claim it once.
+        if not _normalize_client_role(session.get("role")):
+            record["role"] = ""
         denial = await _insert_id_upload(session, record)
         if denial:
             return _id_upload_denied(denial)
@@ -1782,28 +1869,59 @@ async def portal_id_upload(request: Request):
     })
 
 
-@pin_portal_router.post("/selfie")
-async def portal_selfie(request: Request):
-    """Mark selfie captured on the PIN session. Does not create a packet."""
+_SELFIE_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _looks_like_selfie(raw: bytes) -> bool:
+    """True for a small JPEG, PNG, WEBP, or HEIC. The bytes are not stored."""
+    if not raw or len(raw) > _SELFIE_MAX_BYTES:
+        return False
+    if raw.startswith(b"\xff\xd8\xff") or raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return True
+    if len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return True
+    if len(raw) >= 12 and raw[4:8] == b"ftyp":
+        return raw[8:12] in {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"avif"}
+    return False
+
+
+async def _selfie_token_and_image(request: Request) -> tuple[str, bytes]:
+    """Session token and image from the body only.
+
+    Query strings and headers are ignored. A token in the URL would leak into
+    access logs, and a header is not how this portal authenticates a selfie.
+    """
     content_type = (request.headers.get("content-type") or "").lower()
-    token = ""
     if "multipart/form-data" in content_type:
         try:
             form = await request.form()
-            token = str(form.get("session_token") or form.get("token") or "").strip()
         except Exception:
-            token = ""
-    else:
-        try:
-            body = (await request.json()) or {}
-            token = str(body.get("session_token") or body.get("token") or "").strip()
-        except Exception:
-            token = ""
+            return "", b""
+        token = str(form.get("session_token") or form.get("token") or "").strip()
+        upload = form.get("selfie") or form.get("file") or form.get("image")
+        raw = b""
+        if upload is not None and hasattr(upload, "read"):
+            raw = await upload.read() or b""
+        return token, raw
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        return "", b""
+    return str(body.get("session_token") or body.get("token") or "").strip(), b""
+
+
+@pin_portal_router.post("/selfie")
+async def portal_selfie(request: Request):
+    """Mark selfie captured on a verified PIN session. Does not store the photo."""
+    token, image = await _selfie_token_and_image(request)
     session = await _load_verified_session(token)
     if not session:
         return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
-    pins_col = get_collection("portal_pins")
-    await pins_col.update_one(
+    if not _looks_like_selfie(image):
+        return JSONResponse({"success": False, "error": "selfie_required"}, status_code=400)
+    await get_collection("portal_pins").update_one(
         {"session_token": session.get("session_token")},
         {"$set": {"selfie_captured_at": datetime.now(timezone.utc).isoformat()}},
     )
@@ -1836,17 +1954,107 @@ def _public_self_serve_payload(result: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+async def _claim_unbound_scan_role(session: Dict[str, Any], scan_id: str, role: str) -> str:
+    """Bind a blank scan to ``role`` once. A different role is refused.
+
+    Returns ``""`` when this scan may be confirmed as ``role``.
+    """
+    scan_id = (scan_id or "").strip()
+    role = _normalize_client_role(role)
+    if not scan_id or not role:
+        return "scan_required"
+    token = str(session.get("session_token") or "").strip()
+    fresh = await get_collection("portal_pins").find_one({"session_token": token})
+    if not isinstance(fresh, dict):
+        return "scan_required"
+    fresh_role = _normalize_client_role(fresh.get("role"))
+    if fresh_role and fresh_role != role:
+        return "role_mismatch"
+    records = fresh.get("id_scan_records")
+    if not isinstance(records, list):
+        return "scan_required"
+    target = next(
+        (row for row in records if isinstance(row, dict) and str(row.get("scan_id") or "") == scan_id),
+        None,
+    )
+    if not isinstance(target, dict):
+        return "scan_required"
+    current = _normalize_client_role(target.get("role"))
+    if current and current != role:
+        return "role_mismatch"
+    if not current:
+        updated_records = []
+        for row in records:
+            if isinstance(row, dict) and str(row.get("scan_id") or "") == scan_id:
+                updated_records.append({**row, "role": role})
+            else:
+                updated_records.append(row)
+        snapshots = fresh.get("id_ocr_snapshots")
+        updated_snaps = snapshots
+        if isinstance(snapshots, list):
+            updated_snaps = []
+            for row in snapshots:
+                if (
+                    isinstance(row, dict)
+                    and str(row.get("scan_id") or "") == scan_id
+                    and not _normalize_client_role(row.get("role"))
+                ):
+                    updated_snaps.append({**row, "role": role})
+                else:
+                    updated_snaps.append(row)
+        set_doc: Dict[str, Any] = {"id_scan_records": updated_records}
+        if isinstance(updated_snaps, list):
+            set_doc["id_ocr_snapshots"] = updated_snaps
+        if not fresh_role:
+            set_doc["role"] = role
+        await get_collection("portal_pins").update_one({"session_token": token}, {"$set": set_doc})
+        check = await get_collection("portal_pins").find_one({"session_token": token})
+        check_rows = (check or {}).get("id_scan_records") if isinstance(check, dict) else None
+        check_row = next(
+            (
+                row for row in (check_rows or [])
+                if isinstance(row, dict) and str(row.get("scan_id") or "") == scan_id
+            ),
+            None,
+        )
+        if not isinstance(check_row, dict) or _normalize_client_role(check_row.get("role")) != role:
+            return "role_mismatch"
+        session["id_scan_records"] = check_rows
+        if isinstance(check.get("id_ocr_snapshots"), list):
+            session["id_ocr_snapshots"] = check["id_ocr_snapshots"]
+        if not _normalize_client_role(session.get("role")):
+            session["role"] = role
+        return ""
+    session["id_scan_records"] = records
+    if isinstance(fresh.get("id_ocr_snapshots"), list):
+        session["id_ocr_snapshots"] = fresh["id_ocr_snapshots"]
+    return ""
+
+
 async def _self_serve_remaining_fields(session: Dict[str, Any], req: RemainingFieldsRequest):
     from dashboard.services.paperwork_self_serve import accept_confirmed_id
 
-    role = _normalize_client_role(session.get("role")) or _normalize_client_role(req.role) or "indemnitor"
+    # A role already on the session wins. The request role is used only while
+    # the scan is still unbound, and it cannot switch a scan that was claimed.
+    role = _normalize_client_role(session.get("role")) or _normalize_client_role(req.role)
+    if not role:
+        return JSONResponse(
+            {"success": False, "error": "role_required", "signing_link": ""},
+            status_code=400,
+        )
+    claim_error = await _claim_unbound_scan_role(session, str(req.scan_id or ""), role)
+    if claim_error:
+        return JSONResponse(
+            {"success": False, "error": claim_error, "signing_link": ""},
+            status_code=400,
+        )
     email = str(req.email or (req.fields or {}).get(f"{'defendant' if role == 'defendant' else 'coindemnitor' if role == 'coindemnitor' else 'indemnitor'}_email") or "").strip()
     phone = _digits_phone(session.get("phone") or "")
     result = await accept_confirmed_id(
         session=session,
         scan_id=str(req.scan_id or ""),
         role=role,
-        edits=req.fields or {},
+        edits=_fields_for_signer(role, req.fields or {}),
         email=email,
         phone=phone,
     )
@@ -1890,7 +2098,7 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
             status_code=400,
         )
 
-    fields = _sanitize_client_fields(req.fields)
+    fields = _fields_for_signer(role, req.fields)
     csz = _city_state_zip(fields)
     if csz and role == "indemnitor":
         fields["indemnitor_city_state_zip"] = csz
@@ -1960,55 +2168,43 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
             staff_review_acknowledged=True,
         )
     if packet_id and fields:
-        try:
-            from dashboard.services.paperwork_signers import normalize_role
+        from dashboard.services.paperwork_signers import normalize_role
 
-            packets = get_collection("paperwork_packets")
-            packet = await packets.find_one({"packet_id": packet_id})
-            submitters = list((packet or {}).get("docuseal_submitters") or [])
-            want_role = normalize_role(session.get("role") or meta.get("role") or "")
-            session_phone = _digits_phone(session.get("phone") or "")
-            target = None
-            for item in submitters:
-                item_role = normalize_role((item or {}).get("role"))
-                if want_role and item_role == want_role:
-                    target = item
-                    break
-            if not target and session_phone:
-                for item in submitters:
-                    if _digits_phone((item or {}).get("phone")) == session_phone:
-                        target = item
-                        break
-            if not target and submitters:
-                target = submitters[0]
-            submitter_id = (target or {}).get("id")
-            if submitter_id:
-                from dashboard.services.docuseal_service import DocuSealService
-                from dashboard.services.docuseal_signing_ux import submission_fields_from_values
-                svc = DocuSealService()
-                submitter_values = dict(fields)
-                if role == "coindemnitor":
-                    for k, v in fields.items():
-                        if k.startswith("coindemnitor_"):
-                            submitter_values["indemnitor_" + k[len("coindemnitor_"):]] = v
-                await svc.update_submitter(
-                    submitter_id,
-                    values=submitter_values,
-                    fields=submission_fields_from_values(submitter_values, force_editable=True),
-                )
-                existing_packet_fields = (packet or {}).get("client_fields") if isinstance((packet or {}).get("client_fields"), dict) else {}
-                merged_packet_fields = {**existing_packet_fields, **fields}
-                await packets.update_one(
-                    {"packet_id": packet_id},
-                    {"$set": {
-                        "client_fields": merged_packet_fields,
-                        "client_fields_updated_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                )
-                pushed = True
+        packets = get_collection("paperwork_packets")
+        packet = await packets.find_one({"packet_id": packet_id})
+        try:
+            await packets.update_one(
+                {"packet_id": packet_id},
+                {"$set": _packet_field_update(packet, role, fields)},
+            )
         except Exception as exc:
             push_error = "Could not update the signing packet. You can still sign — fill any blank fields on the document."
-            logger.warning("[PIN Portal] remaining-fields DocuSeal update failed: %s", type(exc).__name__)
+            logger.warning("[PIN Portal] remaining-fields packet save failed: %s", type(exc).__name__)
+        else:
+            try:
+                submitters = list((packet or {}).get("docuseal_submitters") or [])
+                want_role = normalize_role(role)
+                target = next(
+                    (
+                        item for item in submitters
+                        if normalize_role((item or {}).get("role")) == want_role
+                    ),
+                    None,
+                )
+                submitter_id = (target or {}).get("id")
+                if submitter_id:
+                    from dashboard.services.docuseal_service import DocuSealService
+                    from dashboard.services.docuseal_signing_ux import submission_fields_from_values
+                    values = _submitter_values_for_role(role, fields)
+                    await DocuSealService().update_submitter(
+                        submitter_id,
+                        values=values,
+                        fields=submission_fields_from_values(values, force_editable=True),
+                    )
+                    pushed = True
+            except Exception as exc:
+                push_error = "Could not update the signing packet. You can still sign — fill any blank fields on the document."
+                logger.warning("[PIN Portal] remaining-fields DocuSeal update failed: %s", type(exc).__name__)
 
     return {
         "success": True,
@@ -3295,15 +3491,24 @@ async def get_portal_ui(request: Request):
             if (selfieInput) {
                 selfieInput.addEventListener('change', async () => {
                     const st = document.getElementById('portalSelfieStatus');
-                    if (selfieInput.files && selfieInput.files[0]) {
+                    const file = selfieInput.files && selfieInput.files[0];
+                    if (!file) return;
+                    if (st) st.textContent = 'Uploading selfie…';
+                    try {
+                        const body = new FormData();
+                        body.append('session_token', portalMem.sessionToken || '');
+                        body.append('selfie', file, file.name || 'selfie.jpg');
+                        const r = await fetch('/api/portal/selfie', { method: 'POST', body });
+                        const d = await r.json();
+                        if (!r.ok || !d.success) {
+                            if (st) st.textContent = 'Selfie was not accepted. Try again.';
+                            selfieInput.value = '';
+                            return;
+                        }
                         if (st) st.textContent = '✅ Selfie ready';
-                        try {
-                            await fetch('/api/portal/selfie', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ session_token: portalMem.sessionToken })
-                            });
-                        } catch (e) {}
+                    } catch (e) {
+                        if (st) st.textContent = 'Selfie was not accepted. Try again.';
+                        selfieInput.value = '';
                     }
                 });
             }
@@ -3333,13 +3538,13 @@ async def get_portal_ui(request: Request):
                 if (form.expiration && form.expiration.value.trim()) fields[P + 'dl_expiration'] = form.expiration.value.trim();
                 if (form.sex && form.sex.value.trim()) fields[P + 'sex'] = form.sex.value.trim();
                 if (P !== 'defendant_' && form.relationship && form.relationship.value.trim()) {
-                    fields.indemnitor_relationship = form.relationship.value.trim();
+                    fields[P + 'relationship'] = form.relationship.value.trim();
                 }
                 if (form.employer && form.employer.value.trim()) {
-                    fields[(P === 'defendant_' ? 'defendant_' : 'indemnitor_') + 'employer'] = form.employer.value.trim();
+                    fields[P + 'employer'] = form.employer.value.trim();
                 }
                 if (form.employer_phone && form.employer_phone.value.trim()) {
-                    fields[(P === 'defendant_' ? 'defendant_' : 'indemnitor_') + 'employer_phone'] = form.employer_phone.value.trim();
+                    fields[P + 'employer_phone'] = form.employer_phone.value.trim();
                 }
                 if (phone) fields[P + 'phone'] = phone;
                 if (form.email.value.trim()) fields[P + 'email'] = form.email.value.trim();
@@ -3659,13 +3864,14 @@ async def get_portal_ui(request: Request):
                         if (SELF_SERVE_PREFILL) {
                             showAuthTab('scan');
                             statusEl.className = 'status success';
+                            statusEl.textContent = d.message || '✅ Verified. Scan your ID to continue.';
                         } else {
                             statusEl.className = 'status error';
+                            statusEl.textContent = d.message
+                                || (d.has_packet
+                                    ? '✅ Verified — e-sign link not ready yet. Call (239) 332-2245.'
+                                    : '✅ Verified — no packet on file for this phone. Call (239) 332-2245.');
                         }
-                        statusEl.textContent = d.message
-                            || (d.has_packet
-                                ? '✅ Verified — e-sign link not ready yet. Call (239) 332-2245.'
-                                : '✅ Verified — no packet on file for this phone. Call (239) 332-2245.');
                     }
                 } else {
                     statusEl.className = 'status error';

@@ -239,6 +239,27 @@ async def test_flag_on_replaces_the_dead_end_copy(monkeypatch):
     assert "Scan your ID" in message
 
 
+@pytest.mark.asyncio
+async def test_flag_on_packet_without_a_link_points_back_at_the_id_scan(monkeypatch):
+    monkeypatch.setenv("PAPERWORK_SELF_SERVE_PREFILL", "1")
+    db = FakeDB()
+    db["paperwork_packets"].docs.append({
+        "packet_id": "PKT-NOLINK",
+        "indemnitor_phone": PHONE,
+        "status": "pending_signature",
+        "voided": False,
+        "defendant_name": "Test Defendant",
+        "created_at": "2026-11-12T00:00:00+00:00",
+    })
+    monkeypatch.setattr("dashboard.routers.pin_portal.get_collection", db.get_collection)
+    from dashboard.routers.pin_portal import _resolve_packet_for_client
+
+    meta = await _resolve_packet_for_client(PHONE)
+    assert meta["has_packet"] is True
+    assert meta["signing_link"] == ""
+    assert "Scan your ID" in meta["message"]
+
+
 def test_invalid_token_is_refused_before_ocr(monkeypatch):
     db = FakeDB()
     db["portal_pins"].docs.append(_session(verified=False))
@@ -1488,3 +1509,63 @@ async def test_unsigned_osi_packet_does_not_expose_a_pay_link(monkeypatch):
     state = await load_done_state(packet_id, "indemnitor")
     assert not state.get("pay_url")
     assert not state.get("pay_amount")
+
+
+def test_unbound_scan_confirms_as_the_chosen_role_only(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_session(role=""))
+    _install(monkeypatch, db)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    uploaded = _ocr(db)
+    assert uploaded.status_code == 200, uploaded.text
+    assert uploaded.json()["role"] == ""
+    assert db["portal_pins"].docs[0]["id_scan_records"][0]["role"] == ""
+    scan_id = uploaded.json()["scan_id"]
+    fields = role_fields_from_scan(OCR, "defendant")
+    fields["indemnitor_name"] = "Not The Defendant"
+    fields["indemnitor_dl"] = "OTHER-DL"
+    fields["coindemnitor_name"] = "Not The Cosigner"
+    saved = _confirm(scan_id, fields, role="defendant")
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["role"] == "defendant"
+    assert len(db["bond_cases"].docs) == 1
+    case = db["bond_cases"].docs[0]
+    pending = case["pending_id_prefills"][-1]["fields"]
+    assert pending["defendant_name"] == NAME
+    assert "indemnitor_name" not in pending
+    assert "indemnitor_dl" not in pending
+    assert "coindemnitor_name" not in pending
+    assert case.get("indemnitor_name") in ("", None)
+    assert db["portal_pins"].docs[0]["role"] == "defendant"
+    assert db["portal_pins"].docs[0]["id_scan_records"][0]["role"] == "defendant"
+
+    again = _confirm(scan_id, role_fields_from_scan(OCR, "coindemnitor"), role="coindemnitor")
+    assert again.status_code == 200, again.text
+    assert again.json()["role"] == "defendant"
+    assert len(db["bond_cases"].docs) == 1
+    again_fields = db["bond_cases"].docs[0]["pending_id_prefills"][-1]["fields"]
+    assert "coindemnitor_name" not in again_fields
+    assert again_fields["defendant_name"] == NAME
+
+
+def test_locked_session_role_ignores_a_different_requested_role(monkeypatch):
+    db = FakeDB()
+    db["portal_pins"].docs.append(_session(role="indemnitor"))
+    _install(monkeypatch, db)
+    _scanner(monkeypatch)
+    calls = {"n": 0, "kwargs": {}}
+    _submission(monkeypatch, calls)
+    scan_id = _ocr(db).json()["scan_id"]
+    fields = role_fields_from_scan(OCR, "defendant")
+    fields["defendant_employer"] = "Should Not Stick"
+    saved = _confirm(scan_id, fields, role="defendant")
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["role"] == "indemnitor"
+    pending = db["bond_cases"].docs[0]["pending_id_prefills"][-1]["fields"]
+    assert pending["indemnitor_name"] == NAME
+    assert "defendant_name" not in pending
+    assert "defendant_dl" not in pending
+    assert "defendant_employer" not in pending
+    assert db["defendants"].docs == []

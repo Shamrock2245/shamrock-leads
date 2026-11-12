@@ -147,6 +147,125 @@ async def test_defendant_intake_uses_defendant_fields_without_making_a_bond_matc
     assert saved["match_strategy"] == "pending_auto"
 
 
+@pytest.mark.asyncio
+async def test_defendant_intake_ignores_cosigner_identity_and_keeps_email():
+    intakes = _Collection()
+    pins = _Collection()
+
+    def collection_for(name):
+        return {"intake_queue": intakes, "portal_pins": pins}[name]
+
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=collection_for):
+        await _upsert_deferred_client_intake(
+            session={"session_token": "PORTAL-def", "phone": "2395550102"},
+            role="defendant",
+            fields={
+                "defendant_name": "Taylor Defendant",
+                "defendant_email": "taylor@example.com",
+                "defendant_dl_state": "FL",
+                "defendant_employer": "County Kitchen",
+                "indemnitor_name": "Casey Cosigner",
+                "indemnitor_dl": "C999",
+                "coindemnitor_name": "Other Cosigner",
+            },
+            staff_review_acknowledged=True,
+        )
+    saved = intakes.update_one.await_args.args[1]["$set"]
+    assert saved["defendant_name"] == "Taylor Defendant"
+    assert saved["defendant"]["email"] == "taylor@example.com"
+    assert saved["defendant"]["dlState"] == "FL"
+    assert saved["defendant"]["employer"] == "County Kitchen"
+    assert saved["defendant"]["dl"] == ""
+    assert saved["indemnitor_name"] == ""
+    assert saved["indemnitor"]["dl"] == ""
+    assert saved["indemnitor_email"] == ""
+
+
+@pytest.mark.asyncio
+async def test_coindemnitor_intake_does_not_use_indemnitor_or_defendant_fields():
+    intakes = _Collection()
+    pins = _Collection()
+
+    def collection_for(name):
+        return {"intake_queue": intakes, "portal_pins": pins}[name]
+
+    session = {
+        "session_token": "PORTAL-co",
+        "phone": "2395550104",
+        "selfie_captured_at": "2026-11-12T12:00:00+00:00",
+        "id_extracted": {
+            "full_name": "Scan Fallback",
+            "dl_number": "SCAN-DL",
+            "dl_state": "FL",
+        },
+    }
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=collection_for):
+        await _upsert_deferred_client_intake(
+            session=session,
+            role="coindemnitor",
+            fields={
+                "indemnitor_name": "Primary Person",
+                "indemnitor_dl": "P111",
+                "indemnitor_dl_state": "NY",
+                "indemnitor_email": "primary@example.com",
+                "indemnitor_employer": "Publix",
+                "indemnitor_relationship": "Parent",
+                "coindemnitor_name": "Casey Cosigner",
+                "coindemnitor_dl": "C222",
+                "coindemnitor_dl_state": "GA",
+                "coindemnitor_email": "casey@example.com",
+                "coindemnitor_employer": "School",
+                "coindemnitor_relationship": "Sibling",
+                "defendant_name": "Named Defendant",
+                "defendant_dl": "D-ATTACK",
+            },
+            staff_review_acknowledged=True,
+        )
+    saved = intakes.update_one.await_args.args[1]["$set"]
+    assert saved["role"] == "coindemnitor"
+    assert saved["indemnitor_name"] == "Casey Cosigner"
+    assert saved["indemnitor_email"] == "casey@example.com"
+    assert saved["indemnitor"]["dl"] == "C222"
+    assert saved["indemnitor"]["dlState"] == "GA"
+    assert saved["indemnitor"]["employer"] == "School"
+    assert saved["indemnitor"]["relationship"] == "Sibling"
+    assert saved["indemnitor"]["role"] == "coindemnitor"
+    assert saved["selfie_captured"] is True
+    assert saved["defendant_name"] == "Named Defendant"
+    assert saved["defendant"].get("dl", "") == ""
+    assert saved["defendant"].get("email", "") == ""
+
+
+@pytest.mark.asyncio
+async def test_indemnitor_intake_does_not_fall_through_to_coindemnitor_fields():
+    intakes = _Collection()
+    pins = _Collection()
+
+    def collection_for(name):
+        return {"intake_queue": intakes, "portal_pins": pins}[name]
+
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=collection_for):
+        await _upsert_deferred_client_intake(
+            session={
+                "session_token": "PORTAL-ind",
+                "phone": "2395550105",
+                "id_extracted": {"full_name": "Jamie Client", "dl_number": "D1234567"},
+            },
+            role="indemnitor",
+            fields={
+                "coindemnitor_name": "Casey Cosigner",
+                "coindemnitor_dl": "C999",
+                "coindemnitor_email": "casey@example.com",
+            },
+            staff_review_acknowledged=True,
+        )
+    saved = intakes.update_one.await_args.args[1]["$set"]
+    assert saved["indemnitor_name"] == "Jamie Client"
+    assert saved["indemnitor"]["dl"] == "D1234567"
+    assert saved["indemnitor_email"] == ""
+    assert saved["indemnitor"]["role"] == "primary"
+
+
 class _Request:
     def __init__(self, payload):
         self.payload = payload

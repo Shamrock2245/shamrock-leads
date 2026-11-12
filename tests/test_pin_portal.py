@@ -149,6 +149,11 @@ def test_portal_ui_route():
     assert response.status_code == 200
     assert "Shamrock Bail Bonds" in response.text
     assert "Official E-Sign Paperwork Portal" in response.text
+    assert "fields[P + 'employer']" in response.text
+    assert "fields[P + 'relationship']" in response.text
+    assert "body.append('selfie'" in response.text
+    assert "fields.indemnitor_relationship" not in response.text
+    assert "Verified. Scan your ID to continue." in response.text
 
 
 def test_done_landing_page():
@@ -487,3 +492,210 @@ def test_id_ocr_defendant_role_does_not_overwrite_indemnitor():
     assert fields["defendant_name"] == "John Inmate"
     assert fields["defendant_dl"] == "D999"
     assert "indemnitor_name" not in fields
+
+
+def test_id_ocr_coindemnitor_keeps_dl_state_off_the_indemnitor():
+    from dashboard.routers.pin_portal import client_fields_from_id_ocr
+    fields = client_fields_from_id_ocr(
+        {
+            "full_name": "Casey Cosigner",
+            "dl_number": "C123",
+            "dl_state": "GA",
+            "state": "FL",
+            "expiration_date": "2030-01-01",
+            "sex": "F",
+        },
+        "coindemnitor",
+    )
+    assert fields["coindemnitor_name"] == "Casey Cosigner"
+    assert fields["coindemnitor_dl_state"] == "GA"
+    assert fields["coindemnitor_dl_expiration"] == "2030-01-01"
+    assert fields["coindemnitor_sex"] == "F"
+    assert "indemnitor_name" not in fields
+    assert "indemnitor_dl" not in fields
+    assert "defendant_name" not in fields
+
+
+def test_fields_for_signer_drops_other_roles():
+    from dashboard.routers.pin_portal import _fields_for_signer
+    raw = {
+        "indemnitor_name": "Primary Person",
+        "indemnitor_employer": "Publix",
+        "coindemnitor_name": "Casey Cosigner",
+        "coindemnitor_employer": "School",
+        "defendant_name": "DOE, JOHN",
+        "defendant_dl": "D999",
+        "reference_1_name": "Pat Friend",
+        "poa_number": "SHOULD-DROP",
+    }
+    indemnitor = _fields_for_signer("indemnitor", raw)
+    assert indemnitor["indemnitor_name"] == "Primary Person"
+    assert indemnitor["indemnitor_employer"] == "Publix"
+    assert indemnitor["reference_1_name"] == "Pat Friend"
+    assert "coindemnitor_name" not in indemnitor
+    assert "defendant_name" not in indemnitor
+    assert "poa_number" not in indemnitor
+
+    cosigner = _fields_for_signer("coindemnitor", raw)
+    assert cosigner == {
+        "coindemnitor_name": "Casey Cosigner",
+        "coindemnitor_employer": "School",
+    }
+
+    defendant = _fields_for_signer("defendant", raw)
+    assert defendant["defendant_name"] == "DOE, JOHN"
+    assert defendant["defendant_dl"] == "D999"
+    assert "indemnitor_name" not in defendant
+    assert "coindemnitor_employer" not in defendant
+
+
+def _verified_pin(role="indemnitor"):
+    mock_pins = MagicMock()
+    mock_pins.find_one = AsyncMock(return_value={
+        "phone": "2395550100",
+        "session_token": "PORTAL-abc",
+        "verified": True,
+        "role": role,
+        "expires_at": "2099-01-01T00:00:00+00:00",
+    })
+    mock_pins.update_one = AsyncMock()
+    return mock_pins
+
+
+def test_selfie_requires_a_verified_session_and_an_image():
+    mock_pins = _verified_pin()
+    with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_pins):
+        missing = client.post("/api/portal/selfie", json={"session_token": "PORTAL-abc"})
+        query = client.post("/api/portal/selfie?session_token=PORTAL-abc")
+        header = client.post("/api/portal/selfie", headers={"x-portal-session": "PORTAL-abc"})
+        text = client.post(
+            "/api/portal/selfie",
+            data={"session_token": "PORTAL-abc"},
+            files={"selfie": ("note.txt", b"not-an-image", "text/plain")},
+        )
+        ok = client.post(
+            "/api/portal/selfie",
+            data={"session_token": "PORTAL-abc"},
+            files={"selfie": ("selfie.jpg", b"\xff\xd8\xff\xd9", "image/jpeg")},
+        )
+    assert missing.status_code == 400
+    assert missing.json()["error"] == "selfie_required"
+    assert query.status_code == 401
+    assert header.status_code == 401
+    assert text.status_code == 400
+    assert ok.status_code == 200
+    assert ok.json() == {"success": True}
+    assert "ffd8" not in ok.text.lower()
+    mock_pins.update_one.assert_awaited_once()
+    saved = mock_pins.update_one.await_args.args[1]["$set"]
+    assert saved["selfie_captured_at"]
+
+
+def test_selfie_rejects_an_oversized_image(monkeypatch):
+    monkeypatch.setattr("dashboard.routers.pin_portal._SELFIE_MAX_BYTES", 4)
+    mock_pins = _verified_pin()
+    with patch("dashboard.routers.pin_portal.get_collection", return_value=mock_pins):
+        response = client.post(
+            "/api/portal/selfie",
+            data={"session_token": "PORTAL-abc"},
+            files={"selfie": ("selfie.jpg", b"\xff\xd8\xff\xd9extra", "image/jpeg")},
+        )
+    assert response.status_code == 400
+    mock_pins.update_one.assert_not_called()
+
+
+def test_remaining_fields_keeps_other_signers_when_coindemnitor_saves():
+    mock_pins = _verified_pin("coindemnitor")
+    mock_packets = MagicMock()
+    mock_packets.find_one = AsyncMock(return_value={
+        "packet_id": "PKT-1",
+        "defendant_name": "DOE, JOHN",
+        "status": "pending_signature",
+        "client_fields": {
+            "indemnitor_name": "Primary Person",
+            "indemnitor_employer": "Publix",
+            "defendant_name": "DOE, JOHN",
+        },
+        "docuseal_submitters": [
+            {"id": 10, "role": "indemnitor", "phone": "2395550100"},
+            {"id": 22, "role": "coindemnitor", "phone": "2395550199"},
+        ],
+    })
+    mock_packets.update_one = AsyncMock()
+
+    def _col(name):
+        return mock_pins if name == "portal_pins" else mock_packets
+
+    mock_svc = MagicMock()
+    mock_svc.update_submitter = AsyncMock(return_value={"id": 22})
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=_col), \
+         patch("dashboard.services.docuseal_service.DocuSealService", return_value=mock_svc):
+        response = client.post("/api/portal/remaining-fields", json={
+            "session_token": "PORTAL-abc",
+            "role": "indemnitor",
+            "staff_review_acknowledged": True,
+            "fields": {
+                "indemnitor_name": "SHOULD NOT STICK",
+                "indemnitor_employer": "SHOULD NOT STICK",
+                "defendant_name": "SHOULD NOT STICK",
+                "defendant_dl": "D-ATTACK",
+                "coindemnitor_name": "Casey Cosigner",
+                "coindemnitor_employer": "School",
+                "coindemnitor_city": "Fort Myers",
+                "coindemnitor_state": "FL",
+                "coindemnitor_zip": "33901",
+            },
+        })
+    assert response.status_code == 200, response.text
+    assert response.json()["role"] == "coindemnitor"
+    assert response.json()["pushed_to_docuseal"] is True
+    assert mock_svc.update_submitter.await_args.args[0] == 22
+    sent = mock_svc.update_submitter.await_args.kwargs["values"]
+    assert sent["coindemnitor_name"] == "Casey Cosigner"
+    assert sent["indemnitor_name"] == "Casey Cosigner"
+    assert sent["indemnitor_employer"] == "School"
+    assert "SHOULD NOT STICK" not in sent.values()
+    assert "D-ATTACK" not in sent.values()
+    saved = mock_packets.update_one.await_args.args[1]["$set"]
+    assert saved["client_fields"]["indemnitor_name"] == "Primary Person"
+    assert saved["client_fields"]["indemnitor_employer"] == "Publix"
+    assert saved["client_fields"]["defendant_name"] == "DOE, JOHN"
+    assert saved["client_fields"]["coindemnitor_name"] == "Casey Cosigner"
+    assert saved["coindemnitor_fields"]["coindemnitor_name"] == "Casey Cosigner"
+    assert saved["coindemnitor_fields"]["coindemnitor_employer"] == "School"
+    assert "indemnitor_name" not in saved["coindemnitor_fields"]
+
+
+def test_remaining_fields_does_not_fall_back_to_the_first_submitter():
+    mock_pins = _verified_pin("coindemnitor")
+    mock_packets = MagicMock()
+    mock_packets.find_one = AsyncMock(return_value={
+        "packet_id": "PKT-1",
+        "defendant_name": "DOE, JOHN",
+        "status": "pending_signature",
+        "client_fields": {"indemnitor_name": "Primary Person"},
+        "docuseal_submitters": [
+            {"id": 10, "role": "indemnitor", "phone": "2395550100"},
+        ],
+    })
+    mock_packets.update_one = AsyncMock()
+
+    def _col(name):
+        return mock_pins if name == "portal_pins" else mock_packets
+
+    mock_svc = MagicMock()
+    mock_svc.update_submitter = AsyncMock()
+    with patch("dashboard.routers.pin_portal.get_collection", side_effect=_col), \
+         patch("dashboard.services.docuseal_service.DocuSealService", return_value=mock_svc):
+        response = client.post("/api/portal/remaining-fields", json={
+            "session_token": "PORTAL-abc",
+            "role": "coindemnitor",
+            "staff_review_acknowledged": True,
+            "fields": {"coindemnitor_name": "Casey Cosigner", "indemnitor_name": "SHOULD NOT STICK"},
+        })
+    assert response.status_code == 200, response.text
+    assert response.json()["pushed_to_docuseal"] is False
+    mock_svc.update_submitter.assert_not_called()
+    saved = mock_packets.update_one.await_args.args[1]["$set"]
+    assert saved["client_fields"]["indemnitor_name"] == "Primary Person"
+    assert saved["client_fields"]["coindemnitor_name"] == "Casey Cosigner"

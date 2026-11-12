@@ -3,6 +3,19 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-12 (Portal role scoping and BlueBubbles Tailscale retry)
+
+### Fixed
+- **Signer identity stays on the role that owns it.** Deferred intake reads defendant, indemnitor, and co-indemnitor fields only from that role. A co-indemnitor name, license, email, or employer no longer falls through to the primary indemnitor keys, and a defendant intake no longer copies a cosigner's identity. Confirmed packet fields are filtered the same way before they are merged, so one signer cannot replace another signer's name, license, or employer. Co-indemnitor values are also kept on `coindemnitor_fields`. DocuSeal is updated only on the submitter for that role. There is no fallback to the first signer, and no phone match onto a different role. The co-indemnitor's own DocuSeal copy still receives `indemnitor_*` aliases.
+- **An unbound self-serve scan can be confirmed as defendant or co-indemnitor once.** When the PIN session has no role yet, the scan is not stamped indemnitor. The first confirm claims that role. A scan that already has a different role is refused. A session that already has a role keeps that role.
+- **The launchpad writes employer and relationship under the selected role**, including `coindemnitor_employer` and `coindemnitor_relationship`.
+- **A selfie is recorded only for a verified session that uploaded an image.** The token is read from the multipart body or JSON body. Query strings and headers are ignored. JSON with only a token does not set `selfie_captured_at`, and the photo bytes are not stored.
+- **After PIN verification with self-serve prefill on and no signing link, the ID scan tab stays open** and the status text tells the client to scan. A case file with no link says to scan or call.
+- **BlueBubbles Tailscale recovery runs only for the 0178 line.** A non-tailscale 0314 URL is not probed and its runtime override is not deleted. A failed probe, or a probe that does not actually switch 0178 to a Tailscale host, waits 60 seconds before trying again. The current URL is kept when Tailscale is down.
+
+### Tests
+- `tests/test_pin_portal.py`, `tests/test_deferred_client_intake.py`, `tests/test_paperwork_id_prefill.py`, and `tests/test_bb_tailscale_fallback.py`.
+
 ## [Unreleased] — 2026-11-11 (Manatee Clerk smoke note: deploy is done, smoke is not)
 
 ### Changed
