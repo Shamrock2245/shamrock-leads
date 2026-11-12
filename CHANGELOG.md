@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-12 (Tenant scope for the iMessage SMS fallback log)
+
+### Fixed
+- **`bb_sms_fallback_log` is tenant-owned.** The BlueBubbles delivery-failure fallback writes that collection. The tenant-scope contract now lists it with the other outreach logs, so each agency's fallback rows stay on that agency's book. SMS/RCS fallback behavior is unchanged.
+
+### Tests
+- `tests/test_tenant_scope.py` known-collection count is 127.
+
 ## [Unreleased] — 2026-11-12 (Portal role scoping and BlueBubbles Tailscale retry)
 
 ### Fixed

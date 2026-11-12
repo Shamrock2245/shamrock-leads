@@ -80,6 +80,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "bb_contact_syncs",
         "bb_group_chats",
         "bb_health_checks",
+        "bb_sms_fallback_log",
         "blog_publish_log",
         "bond_alerts",
         "bond_cases",
