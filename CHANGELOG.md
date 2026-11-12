@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-12 (Atomic unbound scan role claim)
+
+### Fixed
+- **The first confirm of a blank ID scan claims that role once.** Two confirms of the same unbound scan no longer each read the blank role and write their own. The write matches the role that was just read. One confirm keeps that role. The other is refused and does not continue into case creation under a second role. A scan that already has the requested role can still be confirmed again.
+- **That claim writes an `audit_events` row.** The row records the old role, the new role, the actor (`portal_client`), and the reason. A refused conflicting role writes its own row and does not change the stored role. The audit does not include the phone, the session token, or the ID fields.
+- **A same-role retry writes that claim audit when the first insert failed.** The compare-and-swap records that the blank role was claimed. If the audit insert then fails, the role stays claimed and the request errors. The next confirm of that same role inserts the missing `id_scan_role_claimed` row, then continues. A scan that was stored with a role already set does not gain that row.
+
+### Tests
+- `tests/test_scan_role_claim.py`
+
 ## [Unreleased] — 2026-11-12 (Portal role scoping and BlueBubbles Tailscale retry)
 
 ### Fixed
