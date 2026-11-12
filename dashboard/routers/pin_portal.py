@@ -847,24 +847,37 @@ async def _upsert_deferred_client_intake(
             "state": fields.get("defendant_state") or extracted.get("state") or "",
             "zip": fields.get("defendant_zip") or extracted.get("zip") or "",
             "dl": fields.get("defendant_dl") or extracted.get("dl_number") or "",
-            "phone": phone,
+            "dlState": fields.get("defendant_dl_state") or extracted.get("dl_state") or "",
+            "phone": fields.get("defendant_phone") or phone,
+            "email": fields.get("defendant_email") or "",
             "bookingNumber": session_booking,
             "county": session_county,
         })
     else:
-        full_name = fields.get("indemnitor_name") or fields.get("IndemnitorName") or fields.get("IndName") or fields.get("FullName") or extracted.get("full_name") or ""
+        full_name = (
+            fields.get("indemnitor_name")
+            or fields.get("coindemnitor_name")
+            or fields.get("IndemnitorName")
+            or fields.get("IndName")
+            or fields.get("Ind2Name")
+            or fields.get("FullName")
+            or extracted.get("full_name")
+            or ""
+        )
         first_name, last_name = _split_name(full_name)
         indemnitor.update({
             "firstName": first_name,
             "lastName": last_name,
             "relationship": fields.get("indemnitor_relationship") or "",
-            "dob": fields.get("indemnitor_dob") or extracted.get("dob") or "",
-            "dl": fields.get("indemnitor_dl") or extracted.get("dl_number") or "",
-            "phone": phone,
-            "address": fields.get("indemnitor_address") or extracted.get("address") or "",
-            "city": fields.get("indemnitor_city") or extracted.get("city") or "",
-            "state": fields.get("indemnitor_state") or extracted.get("state") or "",
-            "zip": fields.get("indemnitor_zip") or extracted.get("zip") or "",
+            "dob": fields.get("indemnitor_dob") or fields.get("coindemnitor_dob") or extracted.get("dob") or "",
+            "dl": fields.get("indemnitor_dl") or fields.get("coindemnitor_dl") or extracted.get("dl_number") or "",
+            "dlState": fields.get("indemnitor_dl_state") or fields.get("coindemnitor_dl_state") or extracted.get("dl_state") or "",
+            "phone": fields.get("indemnitor_phone") or fields.get("coindemnitor_phone") or phone,
+            "email": fields.get("indemnitor_email") or fields.get("coindemnitor_email") or "",
+            "address": fields.get("indemnitor_address") or fields.get("coindemnitor_address") or extracted.get("address") or "",
+            "city": fields.get("indemnitor_city") or fields.get("coindemnitor_city") or extracted.get("city") or "",
+            "state": fields.get("indemnitor_state") or fields.get("coindemnitor_state") or extracted.get("state") or "",
+            "zip": fields.get("indemnitor_zip") or fields.get("coindemnitor_zip") or extracted.get("zip") or "",
             "employer": fields.get("indemnitor_employer") or "",
             "employerPhone": fields.get("indemnitor_employer_phone") or fields.get("indemnitor_work_phone") or "",
             "ref1Name": fields.get("reference_1_name") or "",
@@ -893,7 +906,7 @@ async def _upsert_deferred_client_intake(
         "updated_at": now,
         "indemnitor": indemnitor,
         "indemnitor_name": " ".join(part for part in [indemnitor.get("firstName"), indemnitor.get("lastName")] if part),
-        "indemnitor_email": "",
+        "indemnitor_email": indemnitor.get("email") or "",
         "indemnitor_phone": indemnitor.get("phone") or "",
         "defendant": defendant,
         "defendant_name": defendant.get("name") or "",
@@ -904,6 +917,7 @@ async def _upsert_deferred_client_intake(
         "consent_timestamp": now.isoformat(),
         "role": role,
         "id_scanned_at": session.get("id_scanned_at") or now.isoformat(),
+        "selfie_captured": bool(session.get("selfie_captured_at")),
         "gas_sync_status": "pending",
         "gas_sync_timestamp": None,
         "matched_booking_number": None,
@@ -1771,11 +1785,21 @@ async def portal_id_upload(request: Request):
 @pin_portal_router.post("/selfie")
 async def portal_selfie(request: Request):
     """Mark selfie captured on the PIN session. Does not create a packet."""
-    try:
-        body = (await request.json()) or {}
-    except Exception:
-        body = {}
-    session = await _load_verified_session(str(body.get("session_token") or ""))
+    content_type = (request.headers.get("content-type") or "").lower()
+    token = ""
+    if "multipart/form-data" in content_type:
+        try:
+            form = await request.form()
+            token = str(form.get("session_token") or form.get("token") or "").strip()
+        except Exception:
+            token = ""
+    else:
+        try:
+            body = (await request.json()) or {}
+            token = str(body.get("session_token") or body.get("token") or "").strip()
+        except Exception:
+            token = ""
+    session = await _load_verified_session(token)
     if not session:
         return JSONResponse({"success": False, "error": "Session expired. Request a new PIN."}, status_code=401)
     pins_col = get_collection("portal_pins")
@@ -1870,6 +1894,12 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
     csz = _city_state_zip(fields)
     if csz and role == "indemnitor":
         fields["indemnitor_city_state_zip"] = csz
+    elif role == "coindemnitor" and not fields.get("coindemnitor_city_state_zip"):
+        co_city = fields.get("coindemnitor_city") or ""
+        co_rest = " ".join(p for p in [fields.get("coindemnitor_state") or "", fields.get("coindemnitor_zip") or ""] if p).strip()
+        co_csz = f"{co_city}, {co_rest}" if (co_city and co_rest) else (co_city or co_rest)
+        if co_csz:
+            fields["coindemnitor_city_state_zip"] = co_csz
 
     pins_col = get_collection("portal_pins")
     if session.get("auth_method") == "handoff":
@@ -1956,15 +1986,22 @@ async def portal_remaining_fields(req: RemainingFieldsRequest):
                 from dashboard.services.docuseal_service import DocuSealService
                 from dashboard.services.docuseal_signing_ux import submission_fields_from_values
                 svc = DocuSealService()
+                submitter_values = dict(fields)
+                if role == "coindemnitor":
+                    for k, v in fields.items():
+                        if k.startswith("coindemnitor_"):
+                            submitter_values["indemnitor_" + k[len("coindemnitor_"):]] = v
                 await svc.update_submitter(
                     submitter_id,
-                    values=fields,
-                    fields=submission_fields_from_values(fields, force_editable=True),
+                    values=submitter_values,
+                    fields=submission_fields_from_values(submitter_values, force_editable=True),
                 )
+                existing_packet_fields = (packet or {}).get("client_fields") if isinstance((packet or {}).get("client_fields"), dict) else {}
+                merged_packet_fields = {**existing_packet_fields, **fields}
                 await packets.update_one(
                     {"packet_id": packet_id},
                     {"$set": {
-                        "client_fields": fields,
+                        "client_fields": merged_packet_fields,
                         "client_fields_updated_at": datetime.now(timezone.utc).isoformat(),
                     }},
                 )
