@@ -3206,19 +3206,27 @@ async def get_portal_ui(request: Request):
         // Confirm order: name/address → phone → email.
         function renderPortalConfirm(ext, portrait) {
             const resEl = document.getElementById('portalIdResult');
-            const P = portalMem.role === 'defendant' ? 'defendant_' : (portalMem.role === 'coindemnitor' ? 'coindemnitor_' : 'indemnitor_');
-            const extra = SELF_SERVE_PREFILL ? `
+            const initRole = portalMem.role || 'indemnitor';
+            const extra = `
                         <input name="dob" placeholder="Date of birth" value="${escHtml(ext.dob || '')}">
                         <input name="dl" placeholder="ID number" value="${escHtml(ext.dl_number || '')}">
                         <input name="dl_state" placeholder="ID issuing state" maxlength="2" value="${escHtml(ext.dl_state || ext.issuing_state || '')}">
                         <input name="expiration" placeholder="ID expiration" value="${escHtml(ext.expiration_date || '')}">
-                        <input name="sex" placeholder="Sex" maxlength="1" value="${escHtml(ext.sex || '')}">` : '';
+                        <input name="sex" placeholder="Sex" maxlength="1" value="${escHtml(ext.sex || '')}">
+                        <input name="relationship" placeholder="Relationship to defendant (cosigners)" value="">
+                        <input name="employer" placeholder="Employer" value="">
+                        <input name="employer_phone" type="tel" inputmode="numeric" placeholder="Employer phone" value="">`;
             resEl.innerHTML = `
                 <form id="portalConfirm" class="id-extracted-card" autocomplete="off">
                     <div class="id-extracted-title">Check your details</div>
                     ${portrait ? `<img alt="ID portrait" src="data:image/jpeg;base64,${portrait}" style="width:72px;height:90px;object-fit:cover;border-radius:6px;margin-bottom:8px">` : ''}
                     <div data-step="1">
-                        <p class="id-extracted-hint"><strong>1.</strong> Is this your name and address?</p>
+                        <p class="id-extracted-hint"><strong>1.</strong> Choose your role &amp; confirm your ID details</p>
+                        <select name="role" style="width:100%;padding:12px;margin:8px 0;border-radius:10px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.4);color:var(--text);font-size:15px">
+                            <option value="indemnitor" ${initRole === 'indemnitor' ? 'selected' : ''}>Cosigner / Indemnitor</option>
+                            <option value="coindemnitor" ${initRole === 'coindemnitor' ? 'selected' : ''}>Co-Indemnitor</option>
+                            <option value="defendant" ${initRole === 'defendant' ? 'selected' : ''}>Defendant</option>
+                        </select>
                         <input name="name" placeholder="Full name" value="${escHtml(ext.full_name || '')}">
                         <input name="address" placeholder="Street address" value="${escHtml(ext.address || '')}">
                         <input name="city" placeholder="City" value="${escHtml(ext.city || '')}">
@@ -3233,14 +3241,35 @@ async def get_portal_ui(request: Request):
                         <button type="button" class="btn-primary" data-next="3">Next</button>
                     </div>
                     <div data-step="3" hidden>
-                        <p class="id-extracted-hint"><strong>3.</strong> Best email</p>
+                        <p class="id-extracted-hint"><strong>3.</strong> Best email &amp; live selfie verification</p>
                         <input name="email" type="email" inputmode="email" placeholder="you@example.com">
+                        <label class="id-scan-dropzone" style="display:block;padding:14px;margin:10px 0">
+                            <span style="font-size:22px;display:block">🤳 Take a quick selfie</span>
+                            <span id="portalSelfieStatus" style="display:block;font-size:12px;color:var(--muted);margin-top:4px">Tap to open front camera</span>
+                            <input type="file" name="selfie" id="portalSelfieInput" accept="image/*" capture="user" style="display:none">
+                        </label>
                         <label class="id-extracted-hint"><input type="checkbox" name="ack" style="width:auto;min-height:auto"> ${SELF_SERVE_PREFILL ? 'This is correct.' : 'This is correct. I understand staff will review it.'}</label>
                         <button type="submit" class="btn-primary">Save &amp; continue</button>
                     </div>
                     <p id="portalConfirmErr" class="status error" style="display:none"></p>
                 </form>`;
             const form = document.getElementById('portalConfirm');
+            const selfieInput = document.getElementById('portalSelfieInput');
+            if (selfieInput) {
+                selfieInput.addEventListener('change', async () => {
+                    const st = document.getElementById('portalSelfieStatus');
+                    if (selfieInput.files && selfieInput.files[0]) {
+                        if (st) st.textContent = '✅ Selfie ready';
+                        try {
+                            await fetch('/api/portal/selfie', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ session_token: portalMem.sessionToken })
+                            });
+                        } catch (e) {}
+                    }
+                });
+            }
             const show = (n) => form.querySelectorAll('[data-step]').forEach(el => { el.hidden = el.getAttribute('data-step') !== String(n); });
             form.querySelectorAll('[data-next]').forEach(b => b.addEventListener('click', () => show(b.getAttribute('data-next'))));
             form.addEventListener('submit', async (ev) => {
@@ -3249,24 +3278,35 @@ async def get_portal_ui(request: Request):
                 const phone = String(form.phone.value || '').replace(/[^0-9]/g, '').slice(-10);
                 if (!form.ack.checked) { err.style.display = 'block'; err.textContent = 'Please confirm your details.'; return; }
                 if (form.phone.value && phone.length !== 10) { show(2); err.style.display = 'block'; err.textContent = 'Enter a 10-digit mobile number.'; return; }
+                const chosenRole = (form.role && form.role.value) || portalMem.role || 'indemnitor';
+                portalMem.role = chosenRole;
+                const P = chosenRole === 'defendant' ? 'defendant_' : (chosenRole === 'coindemnitor' ? 'coindemnitor_' : 'indemnitor_');
                 const fields = {};
                 fields[P + 'name'] = form.name.value.trim();
                 if (P === 'indemnitor_') fields.FullName = fields[P + 'name'];
                 if (P === 'coindemnitor_') fields.Ind2Name = fields[P + 'name'];
+                if (P === 'defendant_') fields.DefName = fields[P + 'name'];
                 fields[P + 'address'] = form.address.value.trim();
                 fields[P + 'city'] = form.city.value.trim();
                 fields[P + 'state'] = form.state.value.trim();
                 fields[P + 'zip'] = form.zip.value.trim();
-                if (SELF_SERVE_PREFILL) {
-                    fields[P + 'dob'] = form.dob.value.trim();
-                    fields[P + 'dl'] = form.dl.value.trim();
-                    fields[P + 'dl_state'] = form.dl_state.value.trim();
-                    fields[P + 'dl_expiration'] = form.expiration.value.trim();
-                    fields[P + 'sex'] = form.sex.value.trim();
+                if (form.dob && form.dob.value.trim()) fields[P + 'dob'] = form.dob.value.trim();
+                if (form.dl && form.dl.value.trim()) fields[P + 'dl'] = form.dl.value.trim();
+                if (form.dl_state && form.dl_state.value.trim()) fields[P + 'dl_state'] = form.dl_state.value.trim();
+                if (form.expiration && form.expiration.value.trim()) fields[P + 'dl_expiration'] = form.expiration.value.trim();
+                if (form.sex && form.sex.value.trim()) fields[P + 'sex'] = form.sex.value.trim();
+                if (P !== 'defendant_' && form.relationship && form.relationship.value.trim()) {
+                    fields.indemnitor_relationship = form.relationship.value.trim();
+                }
+                if (form.employer && form.employer.value.trim()) {
+                    fields[(P === 'defendant_' ? 'defendant_' : 'indemnitor_') + 'employer'] = form.employer.value.trim();
+                }
+                if (form.employer_phone && form.employer_phone.value.trim()) {
+                    fields[(P === 'defendant_' ? 'defendant_' : 'indemnitor_') + 'employer_phone'] = form.employer_phone.value.trim();
                 }
                 if (phone) fields[P + 'phone'] = phone;
                 if (form.email.value.trim()) fields[P + 'email'] = form.email.value.trim();
-                const payload = { session_token: portalMem.sessionToken, fields, role: portalMem.role,
+                const payload = { session_token: portalMem.sessionToken, fields, role: chosenRole,
                                    address_confirmed: true, staff_review_acknowledged: true };
                 if (SELF_SERVE_PREFILL && portalMem.scanId) payload.scan_id = portalMem.scanId;
                 if (form.email.value.trim()) payload.email = form.email.value.trim();
