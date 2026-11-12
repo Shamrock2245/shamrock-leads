@@ -244,13 +244,81 @@ class BlueBubblesClient:
         if selected_message_guid:
             body["selectedMessageGuid"] = selected_message_guid
         res = await self._request("POST", "/api/v1/message/text", json_body=body)
-        # Auto-fallback: If private-api encounters an uninitialized chat (500 Chat does not exist),
-        # automatically fallback to apple-script which triggers native Messages creation.
-        if not res.get("success") and method == "private-api":
+        if res.get("success") or res.get("blocked") or res.get("error") == "tenant_suspended":
+            return res
+
+        # Auto-fallback 1: If private-api encounters an uninitialized chat (500 Chat does not exist)
+        # or Private API failure, retry with apple-script which triggers native Messages creation.
+        if method == "private-api":
             body["method"] = "apple-script"
             logger.info("[bb] private-api send error on %s, falling back to apple-script method", chat_guid)
-            return await self._request("POST", "/api/v1/message/text", json_body=body)
+            res = await self._request("POST", "/api/v1/message/text", json_body=body)
+            if res.get("success") or res.get("blocked") or res.get("error") == "tenant_suspended":
+                return res
+
+        # Auto-fallback 2: For universal ("any;-;") or explicit SMS ("SMS;-;") chats,
+        # escalate to explicit SMS;-; (Text Message Forwarding -> RCS/SMS) and /api/v1/chat/new
+        # when the chat does not yet exist in macOS chat.db or iMessage routing fails.
+        if chat_guid.startswith(("any;-;", "SMS;-;")) and ";-;" in chat_guid:
+            addr = chat_guid.split(";-;", 1)[1]
+            if chat_guid.startswith("any;-;"):
+                sms_guid = f"SMS;-;{addr}"
+                sms_body = {
+                    "chatGuid": sms_guid,
+                    "message": message,
+                    "tempGuid": f"shamrock-sms-{uuid.uuid4()}",
+                    "method": "apple-script",
+                }
+                logger.info("[bb] any;-; send failed for ...%s, falling back to %s (SMS/RCS)", addr[-4:], sms_guid[:8])
+                sms_res = await self._request("POST", "/api/v1/message/text", json_body=sms_body)
+                if sms_res.get("success"):
+                    sms_res["fallback_channel"] = "sms"
+                    return sms_res
+                if sms_res.get("blocked") or sms_res.get("error") == "tenant_suspended":
+                    return sms_res
+
+            # Final fallback: create the SMS/RCS chat directly via /api/v1/chat/new
+            logger.info("[bb] Creating new SMS/RCS chat via /api/v1/chat/new for ...%s", addr[-4:])
+            chat_res = await self.create_chat(
+                addr,
+                message=message,
+                service="SMS",
+                method="apple-script",
+                purpose=purpose,
+            )
+            if chat_res.get("success"):
+                chat_res["fallback_channel"] = "sms"
+            return chat_res
+
         return res
+
+    async def create_chat(
+        self,
+        address: str,
+        message: str | None = None,
+        service: str = "SMS",
+        method: str = "apple-script",
+        purpose: str | None = None,
+    ) -> dict:
+        """Create a 1:1 chat (e.g. brand-new SMS/RCS thread) and optionally send an initial message.
+
+        BlueBubbles Server 1.9.x often rejects ``/api/v1/message/text`` with
+        ``500 Chat does not exist`` for a phone number that has never had an
+        SMS/RCS thread in macOS ``chat.db``. ``POST /api/v1/chat/new`` with
+        ``service="SMS"`` forces Messages.app to create the Text Message
+        Forwarding (RCS/SMS) thread.
+        """
+        blocked = await self._consent_gate(address, purpose)
+        if blocked:
+            return blocked
+        body: dict = {
+            "addresses": [address],
+            "service": service,
+            "method": method,
+        }
+        if message:
+            body["message"] = message
+        return await self._request("POST", "/api/v1/chat/new", json_body=body)
 
     async def get_messages(self, after: int | None = None,
                            limit: int = 50, sort: str = "DESC") -> dict:

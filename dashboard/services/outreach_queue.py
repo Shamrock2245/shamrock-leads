@@ -140,15 +140,20 @@ async def process_outreach_queue(db=None) -> dict:
             blocked += 1
         elif success:
             logger.info("[outreach_queue] ✅ Successfully sent queued message %s to ...%s", msg_id, phone[-4:])
+            sent_update = {
+                "status": "sent",
+                "sent_at": now_updated,
+                "updated_at": now_updated,
+            }
+            if isinstance(res, dict):
+                msg_data = res.get("data") if isinstance(res.get("data"), dict) else {}
+                if msg_data.get("guid"):
+                    sent_update["bb_message_guid"] = msg_data["guid"]
+                if res.get("fallback_channel"):
+                    sent_update["channel"] = res["fallback_channel"]
             await queue_col.update_one(
                 {"_id": msg_id},
-                {
-                    "$set": {
-                        "status": "sent",
-                        "sent_at": now_updated,
-                        "updated_at": now_updated
-                    }
-                }
+                {"$set": sent_update},
             )
             sent += 1
         else:

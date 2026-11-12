@@ -178,6 +178,7 @@ async def _send_message_direct(
     message: str,
     purpose: str = "direct",
     server_phone: Optional[str] = None,
+    chat_prefix: str = "any",
 ) -> dict:
     """Send text directly via BlueBubbles without writing to queue first.
 
@@ -187,13 +188,16 @@ async def _send_message_direct(
     ``phone`` is the recipient. ``server_phone`` picks the outbound BlueBubbles
     host when the recipient is also a configured line (for example text 0314
     from the 0178 server). Omitted, the recipient selects the host as before.
+    ``chat_prefix`` defaults to ``"any"`` and can be ``"SMS"`` when iMessage
+    availability has definitively returned False.
     """
     bb = get_bb_client(server_phone or phone)
     if not bb:
         return {"success": False, "error": "no_bb_server"}
     from dashboard.extensions import format_phone
     e164 = format_phone(phone) or (f"+1{phone}" if len(phone) == 10 else phone)
-    chat_guid = f"any;-;{e164}"
+    prefix = chat_prefix if chat_prefix in ("any", "SMS", "iMessage") else "any"
+    chat_guid = f"{prefix};-;{e164}"
     try:
         return await bb.send_text(chat_guid, message, purpose=purpose)
     except Exception as exc:
@@ -424,20 +428,29 @@ async def send_message_universal(
             "error": "no_bb_server",
         })
 
-    # 2. Check iMessage availability for channel reporting (not routing)
+    # 2. Check iMessage availability for smart channel routing + reporting
     channel = "sms"  # default assumption
+    chat_prefix = "any"
     try:
         avail = await bb.check_imessage_availability(phone)
-        if avail.get("available", False) or avail.get("data", {}).get("available", False):
+        is_avail = bool(avail.get("available", False) or (avail.get("data") or {}).get("available", False))
+        if is_avail:
             channel = "imessage"
+        elif avail.get("success") is True:
+            # Apple IDS definitively confirmed non-iMessage -> route straight to SMS/RCS
+            chat_prefix = "SMS"
     except Exception:
         pass  # availability check failed — still send via any;-;
 
     # 3. Attempt immediate direct send
     try:
-        result = await _send_message_direct(
-            phone, message, purpose=purpose, server_phone=server_phone,
-        )
+        send_kwargs: Dict[str, Any] = {
+            "purpose": purpose,
+            "server_phone": server_phone,
+        }
+        if chat_prefix != "any":
+            send_kwargs["chat_prefix"] = chat_prefix
+        result = await _send_message_direct(phone, message, **send_kwargs)
         if result.get("blocked"):
             # Opted out between enqueue and send — never leave it for retry.
             await get_collection("outreach_queue").update_one(
@@ -447,20 +460,29 @@ async def send_message_universal(
             )
             return normalize_bb_send_result(result)
         if result.get("success"):
+            if result.get("fallback_channel") == "sms":
+                channel = "sms"
+            msg_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            bb_message_guid = msg_data.get("guid")
+            bb_chat_guid = msg_data.get("chatGuid") or (msg_data.get("chats") or [{}])[0].get("guid") if isinstance(msg_data.get("chats"), list) and msg_data.get("chats") else msg_data.get("chatGuid")
             logger.info(
                 "[bb_client] ✅ Message sent to %s via %s (Queue ID: %s)",
                 _mask(phone), channel, queue_id,
             )
-            # Update queue record to sent
+            # Update queue record to sent (recording BB guid for async delivery-failure correlation)
+            queue_update: Dict[str, Any] = {
+                "status": "sent",
+                "channel": channel,
+                "sent_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+            if bb_message_guid:
+                queue_update["bb_message_guid"] = bb_message_guid
+            if bb_chat_guid:
+                queue_update["chat_guid"] = bb_chat_guid
             await get_collection("outreach_queue").update_one(
                 {"_id": ObjectId(queue_id)},
-                {
-                    "$set": {
-                        "status": "sent",
-                        "sent_at": datetime.now(timezone.utc),
-                        "updated_at": datetime.now(timezone.utc),
-                    }
-                },
+                {"$set": queue_update},
             )
             return normalize_bb_send_result({
                 "success": True,
