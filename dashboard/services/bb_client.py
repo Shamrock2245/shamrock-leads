@@ -140,7 +140,18 @@ def get_bb_client(phone: Optional[str] = None):
             )
             return None
 
-        return BlueBubblesClient(url, password)
+        import os
+        fallback_urls = []
+        if str(server.get("suffix") or "") == "0178":
+            for env_key in ("BLUEBUBBLES_FRP_URL", "BLUEBUBBLES_URL_0178", "BLUEBUBBLES_URL"):
+                cand = (os.getenv(env_key) or "").strip().rstrip("/")
+                if cand and cand != url.rstrip("/") and cand not in fallback_urls:
+                    fallback_urls.append(cand)
+
+        client = BlueBubblesClient(url, password)
+        if fallback_urls and hasattr(client, "fallback_urls"):
+            client.fallback_urls = [u for u in fallback_urls if u != url.rstrip("/")]
+        return client
 
     except Exception as exc:
         logger.error("[bb_client] Failed to create BB client: %s", exc)

@@ -106,10 +106,16 @@ class BlueBubblesClient:
         await client.unsend_message("msg-guid-here")
     """
 
-    def __init__(self, base_url: str, password: str, timeout: float = 15.0):
+    def __init__(self, base_url: str, password: str, timeout: float = 15.0,
+                 fallback_urls: list[str] | None = None):
         self.base_url = base_url.rstrip("/")
         self.password = password
         self.timeout = timeout
+        self.fallback_urls = [
+            u.rstrip("/")
+            for u in (fallback_urls or [])
+            if u and u.rstrip("/") != self.base_url
+        ]
 
     async def _consent_gate(self, recipient, purpose: str | None) -> dict | None:
         """Per-recipient STOP/TCPA gate (see dashboard.services.sms_consent_ledger).
@@ -138,13 +144,35 @@ class BlueBubblesClient:
             blocked = await _suspended_send_result()
             if blocked:
                 return blocked
-        url = f"{self.base_url}{path}"
         merged_params = self._params(params)
+        candidate_urls = [self.base_url] + [u for u in self.fallback_urls if u != self.base_url]
+        last_res: dict | None = None
+        for idx, base in enumerate(candidate_urls):
+            url = f"{base}{path}"
+            res = await self._single_http_request(method, url, path, merged_params, json_body)
+            # Retry on next transport URL (e.g. Tailscale -> frp) only for transport/tunnel failures
+            is_transport_err = (
+                res.get("status_code") in (0, 502, 503, 504)
+                or res.get("error") in ("unreachable", "timeout")
+                or (res.get("error") == "non_json_response" and (res.get("status_code") or 0) >= 500)
+            )
+            if res.get("success") or not is_transport_err:
+                if idx > 0 and res.get("success"):
+                    logger.warning("BB transport failover succeeded via %s (%s %s)", base, method, path)
+                    self.base_url = base
+                return res
+            last_res = res
+            if idx + 1 < len(candidate_urls):
+                logger.warning(
+                    "BB primary transport %s failed (%s), failing over to backup URL for %s %s",
+                    base, res.get("error") or res.get("status_code"), method, path,
+                )
+        return last_res or {"success": False, "error": "unreachable", "status_code": 0}
+
+    async def _single_http_request(self, method: str, url: str, path: str,
+                                   merged_params: dict, json_body: dict | None) -> dict:
+        """Execute a single HTTP request against one BlueBubbles base URL."""
         try:
-            # Headers required to bypass tunnel browser interstitial pages:
-            #   - ngrok free-tier: ngrok-skip-browser-warning
-            #   - ngrok: ngrok-skip-browser-warning header (already set above)
-            #   Both headers are safe to send together for either tunnel type.
             headers = {
                 "ngrok-skip-browser-warning": "true",
                 "User-Agent": "ShamrockLeads-Dashboard/1.0 (BlueBubbles-Client)",
@@ -157,8 +185,6 @@ class BlueBubblesClient:
                     json=json_body,
                     timeout=self.timeout,
                 )
-                # Safely parse JSON — BB can return HTML (ngrok interstitial,
-                # tunnel 502, Cloudflare challenge) which isn't valid JSON.
                 content_type = r.headers.get("content-type", "")
                 try:
                     data = r.json()
@@ -260,7 +286,14 @@ class BlueBubblesClient:
         # escalate to explicit SMS;-; (Text Message Forwarding -> RCS/SMS) and /api/v1/chat/new
         # when the chat does not yet exist in macOS chat.db or iMessage routing fails.
         if chat_guid.startswith(("any;-;", "SMS;-;")) and ";-;" in chat_guid:
-            addr = chat_guid.split(";-;", 1)[1]
+            raw_addr = chat_guid.split(";-;", 1)[1]
+            digits = "".join(ch for ch in raw_addr if ch.isdigit())
+            if "@" not in raw_addr and len(digits) == 10:
+                addr = f"+1{digits}"
+            elif "@" not in raw_addr and len(digits) == 11 and digits.startswith("1"):
+                addr = f"+{digits}"
+            else:
+                addr = raw_addr
             if chat_guid.startswith("any;-;"):
                 sms_guid = f"SMS;-;{addr}"
                 sms_body = {

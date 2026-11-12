@@ -214,3 +214,117 @@ async def test_webhook_sms_error_does_not_loop():
     assert res["delivery_failed"] is True
     assert res["sms_fallback"] == "already_sms"
     assert fake_bb.send_text.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_transport_url_failover_tailscale_to_frp():
+    from dashboard.routers.bb_private_api import BlueBubblesClient
+
+    client = BlueBubblesClient(
+        "http://100.102.10.86:1234",
+        "pw",
+        fallback_urls=["http://178.156.179.237:12434"],
+    )
+    tried_urls = []
+
+    async def fake_single(method, url, path, merged_params, json_body):
+        tried_urls.append(url)
+        if url.startswith("http://100.102.10.86:1234"):
+            return {"success": False, "error": "unreachable", "status_code": 0}
+        return {"success": True, "status_code": 200, "data": {"guid": "frp-msg-1"}}
+
+    with patch.object(client, "_consent_gate", AsyncMock(return_value=None)), \
+         patch.object(client, "_single_http_request", side_effect=fake_single):
+        res = await client.send_text("any;-;+12395550108", "Via backup tunnel")
+
+    assert res["success"] is True
+    assert tried_urls == [
+        "http://100.102.10.86:1234/api/v1/message/text",
+        "http://178.156.179.237:12434/api/v1/message/text",
+    ]
+    assert client.base_url == "http://178.156.179.237:12434"
+
+
+@pytest.mark.asyncio
+async def test_send_text_normalizes_10digit_phone_on_sms_fallback():
+    from dashboard.routers.bb_private_api import BlueBubblesClient
+
+    client = BlueBubblesClient("http://127.0.0.1:1234", "pw")
+    calls = []
+
+    async def fake_request(method, path, params=None, json_body=None):
+        calls.append((path, dict(json_body or {})))
+        if json_body.get("chatGuid") == "SMS;-;+12395550107":
+            return {"success": True, "status_code": 200, "data": {"guid": "sms-e164"}}
+        return {"success": False, "status_code": 500, "message": "Chat does not exist"}
+
+    with patch.object(client, "_consent_gate", AsyncMock(return_value=None)), \
+         patch.object(client, "_request", side_effect=fake_request):
+        res = await client.send_text("any;-;2395550107", "Normalized SMS")
+
+    assert res["success"] is True
+    assert res["fallback_channel"] == "sms"
+    assert calls[-1][1]["chatGuid"] == "SMS;-;+12395550107"
+
+
+@pytest.mark.asyncio
+async def test_outreach_queue_reclaims_stale_sending_messages():
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace
+    from dashboard.services import outreach_queue
+
+    stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    doc = {
+        "_id": "stale-1",
+        "phone": "+12395550109",
+        "message": "Stuck sending",
+        "status": "sending",
+        "retries": 0,
+        "next_attempt": stale_time,
+        "updated_at": stale_time,
+    }
+
+    class StaleQueueCol:
+        async def update_many(self, flt, upd):
+            if doc["status"] == "sending" and doc["updated_at"] <= flt["updated_at"]["$lte"]:
+                doc.update(upd.get("$set", {}))
+                return SimpleNamespace(modified_count=1)
+            return SimpleNamespace(modified_count=0)
+
+        def find(self, flt):
+            items = [doc] if doc["status"] == flt.get("status") else []
+
+            class _Cur:
+                def sort(self, *a, **kw):
+                    return self
+
+                def __aiter__(self):
+                    self._it = iter(items)
+                    return self
+
+                async def __anext__(self):
+                    try:
+                        return next(self._it)
+                    except StopIteration:
+                        raise StopAsyncIteration
+
+            return _Cur()
+
+        async def update_one(self, flt, upd):
+            if doc["_id"] == flt.get("_id"):
+                doc.update(upd.get("$set", {}))
+            return SimpleNamespace(modified_count=1)
+
+    queue_col = StaleQueueCol()
+
+    class FakeDB:
+        def __getitem__(self, name):
+            return queue_col
+
+    with patch("dashboard.services.bb_client._send_message_direct", AsyncMock(return_value={"success": True, "data": {"guid": "reclaimed-guid"}})):
+        summary = await outreach_queue.process_outreach_queue(db=FakeDB())
+
+    assert summary["processed"] == 1
+    assert summary["sent"] == 1
+    assert doc["status"] == "sent"
+    assert doc["bb_message_guid"] == "reclaimed-guid"

@@ -907,7 +907,7 @@ async def deliver_packet(request: Request, packet_id: str):
         bb = get_bb_client(phone)
         if not bb:
             return JSONResponse({"error": "BlueBubbles server not configured"}, status_code=503)
-        chat_guid = f"iMessage;-;{phone}"
+        chat_guid = f"any;-;{phone}"
         # Staff-triggered DocuSeal signing link (B3 BlueBubbles exception):
         # allowed unless THIS recipient opted out (STOP/TCPA gate in the BB client).
         result = await bb.send_text(chat_guid, message, purpose="docuseal_signing_link")

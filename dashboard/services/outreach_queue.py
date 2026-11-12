@@ -69,7 +69,22 @@ async def process_outreach_queue(db=None) -> dict:
     """
     queue_col = get_collection("outreach_queue") if db is None else db["outreach_queue"]
     now = datetime.now(timezone.utc)
-    
+
+    # Reclaim any orphaned messages left in 'sending' for > 5 minutes (e.g. worker restart)
+    stale_cutoff = now - timedelta(minutes=5)
+    try:
+        reclaimed = await queue_col.update_many(
+            {"status": "sending", "updated_at": {"$lte": stale_cutoff}},
+            {"$set": {"status": "pending", "next_attempt": now, "updated_at": now}},
+        )
+        if getattr(reclaimed, "modified_count", 0) > 0:
+            logger.warning(
+                "[outreach_queue] Reclaimed %d stale 'sending' message(s) back to pending",
+                reclaimed.modified_count,
+            )
+    except Exception:
+        pass
+
     # Query for pending messages whose next_attempt time is now or in the past
     query = {
         "status": "pending",
