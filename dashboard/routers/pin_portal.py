@@ -3619,7 +3619,12 @@ async def get_portal_ui(request: Request):
                         });
                     } else {
                         preselectHintsAfterPin();
-                        statusEl.className = 'status error';
+                        if (SELF_SERVE_PREFILL) {
+                            showAuthTab('scan');
+                            statusEl.className = 'status success';
+                        } else {
+                            statusEl.className = 'status error';
+                        }
                         statusEl.textContent = d.message
                             || (d.has_packet
                                 ? '✅ Verified — e-sign link not ready yet. Call (239) 332-2245.'
