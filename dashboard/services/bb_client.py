@@ -77,6 +77,16 @@ def get_bb_client(phone: Optional[str] = None):
             return None
 
         url = server.get("url", "")
+        if url and "100." not in url and "shamrocksimac" not in url:
+            try:
+                from config.tailscale import ts_config
+                if ts_config.enabled and ts_config.is_imac_reachable(timeout=1.5):
+                    ext._BB_URL_OVERRIDES.pop(server.get("suffix", "0178"), None)
+                    ext.init_bluebubbles()
+                    server = ext.BB_SERVERS.get(f"239955{server.get('suffix', '0178')}") or server
+                    url = server.get("url", "")
+            except Exception:
+                pass
         password = server.get("password", "")
         if not url or not password:
             logger.warning("[bb_client] BB server missing url or password: %s", server)
