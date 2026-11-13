@@ -37,7 +37,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 - **Per-county fetch plan (owner directive, Brendan, 2026-11-13).** Manatee jail and Sarasota jail may use a solver and a stealth browser. The order is the owner Mac residential relay, then stealth browser + the existing SolveCaptcha helper if the relay is unreachable and `SOLVECAPTCHA_KEY` is set, then fail closed with nothing emitted. Hillsborough does not use a solver. Other counties are unchanged.
-- **`scripts/mac_roster_relay.py`.** Stdlib relay the Mac can run. It fetches only the Manatee bookings page and the Sarasota listing, and only with `SHAMROCK_MAC_RELAY_TOKEN`.
+- **`scripts/mac_roster_relay.py`.** The Mac relay fetches the Manatee bookings page and the Sarasota listing with one headed Patchright Chromium window (live check 2026-11-13: urllib and headless Chromium both get HTTP 403; headed Chromium gets HTTP 200). It waits out a "Just a moment" / "Attention Required" title and returns non-200 if the challenge stays. `--headless` defaults off. No solver on the relay. The Mac needs a logged-in GUI session and a user LaunchAgent, not a LaunchDaemon.
 
 ### Changed
 - Both scrapers stay `SOURCE_CONTRACT_VALIDATED=False` and Health `fail_closed`. `scrape()` still returns `[]` and does not request the source. Sarasota's listing person id is still not a booking number.

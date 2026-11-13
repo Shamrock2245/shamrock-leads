@@ -199,3 +199,111 @@ def test_mac_relay_allowlist_rejects_other_counties():
     assert read_allowlisted("Manatee", "FL", fetch) == (200, ROSTER)
     assert read_allowlisted("Hillsborough", "FL", fetch) == (404, "")
     assert read_allowlisted("Lee", "FL", lambda *_a: (_ for _ in ()).throw(AssertionError("fetched"))) == (404, "")
+
+
+class _Titles:
+    def __init__(self, titles, html, status=200):
+        self._titles = list(titles)
+        self.html = html
+        self.status = status
+        self.urls = []
+        self.inflight = 0
+        self.max_inflight = 0
+
+    def goto(self, url, **kwargs):
+        self.inflight += 1
+        self.max_inflight = max(self.max_inflight, self.inflight)
+        self.urls.append(url)
+        self.inflight -= 1
+        return type("Resp", (), {"status": self.status})()
+
+    def title(self):
+        if len(self._titles) > 1:
+            return self._titles.pop(0)
+        return self._titles[0]
+
+    def content(self):
+        return self.html
+
+
+def _load_relay():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "mac_roster_relay.py"
+    spec = importlib.util.spec_from_file_location("mac_roster_relay_browser", path)
+    relay = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(relay)
+    return relay
+
+
+def test_headed_browser_returns_200_after_the_challenge_clears():
+    relay = _load_relay()
+    page = _Titles(["Just a moment...", "Manatee Sheriff Search"], "<html>booking table</html>", status=403)
+    browser = relay.HeadedBrowser(page_factory=lambda: page, timeout_s=5, sleep=lambda _s: None)
+    status, html = browser.fetch("https://manatee-sheriff.revize.com/bookings")
+    assert status == 200
+    assert html == "<html>booking table</html>"
+    status2, html2 = browser.fetch("https://cms.revize.com/revize/apps/sarasota/")
+    assert status2 == 200 and html2 == "<html>booking table</html>"
+    assert page.urls == [
+        "https://manatee-sheriff.revize.com/bookings",
+        "https://cms.revize.com/revize/apps/sarasota/",
+    ]
+    assert relay.parse_args([]).headless is False
+    assert relay.parse_args(["--headless"]).headless is True
+    assert "solvecaptcha" not in Path_source(relay)
+
+
+def Path_source(relay):
+    return open(relay.__file__, encoding="utf-8").read().lower()
+
+
+def test_headed_browser_returns_non_200_when_the_challenge_stays():
+    relay = _load_relay()
+    page = _Titles(["Attention Required! | Cloudflare"], "<html>Attention Required</html>", status=403)
+    browser = relay.HeadedBrowser(page_factory=lambda: page, timeout_s=0, sleep=lambda _s: None)
+    status, html = browser.fetch("https://manatee-sheriff.revize.com/bookings")
+    assert status != 200 and status >= 400
+    assert "Attention Required" in html
+    assert relay.read_allowlisted("Hillsborough", "FL", browser.fetch) == (404, "")
+
+
+def test_browser_fetches_do_not_overlap():
+    relay = _load_relay()
+    import threading
+
+    class _Gate(_Titles):
+        def __init__(self):
+            super().__init__(["Manatee Sheriff Search"], "<html>ok</html>", status=200)
+            self._mu = threading.Lock()
+
+        def goto(self, url, **kwargs):
+            with self._mu:
+                self.inflight += 1
+                self.max_inflight = max(self.max_inflight, self.inflight)
+            import time as _time
+            _time.sleep(0.05)
+            with self._mu:
+                self.inflight -= 1
+            self.urls.append(url)
+            return type("Resp", (), {"status": self.status})()
+
+    page = _Gate()
+    browser = relay.HeadedBrowser(page_factory=lambda: page, timeout_s=2, sleep=lambda _s: None)
+    errors = []
+
+    def one(url):
+        try:
+            browser.fetch(url)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=one, args=(f"https://example.invalid/{i}",)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert page.max_inflight == 1
+    assert len(page.urls) == 2

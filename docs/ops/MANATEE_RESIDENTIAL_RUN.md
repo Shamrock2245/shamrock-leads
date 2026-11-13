@@ -6,7 +6,14 @@ Manatee's public roster (`https://manatee-sheriff.revize.com/bookings`) sits beh
 
 **Manatee jail stays fail_closed** (`SOURCE_CONTRACT_VALIDATED=False`), so `python main.py Manatee` still emits nothing. Owner directive 2026-11-13: when a later PR allows a fetch, the order is the Mac relay, then a stealth browser plus SolveCaptcha on the VPS if the relay is unreachable, then fail closed. See `scrapers/access_strategy.py` and `scripts/mac_roster_relay.py`.
 
-**The Mac path is Brendan's own exit, which Leads Ops operates.** It is not a proxy service. The VPS calls the Mac only when `SHAMROCK_MAC_RELAY_URL` and `SHAMROCK_MAC_RELAY_TOKEN` are set. If either is missing, or the Mac does not answer, that step is unreachable and the VPS may try the stealth path. A missing `SOLVECAPTCHA_KEY` skips the solver and emits nothing.
+**The Mac path is Brendan's own exit, which Leads Ops operates.** It is not a proxy service. The VPS calls the Mac only when `SHAMROCK_MAC_RELAY_URL` and `SHAMROCK_MAC_RELAY_TOKEN` are set. If either is missing, or the Mac does not answer, that step is unreachable and the VPS may try the stealth path. A missing `SOLVECAPTCHA_KEY` skips the solver on the VPS and emits nothing. The relay itself does not call a solver.
+
+The relay opens a **headed** Patchright Chromium window. Plain urllib and headless Chromium both received HTTP 403 on the office Mac (2026-11-13); the headed window received HTTP 200. That means:
+
+- The Mac user must be logged into a GUI session. A window has to be able to open.
+- Install the process as a **LaunchAgent** in `~/Library/LaunchAgents` (user session). Do not install it as a LaunchDaemon. A daemon has no window server, so headed Chromium cannot start.
+- Keep the Mac awake. One browser and one profile (`~/.shamrock-mac-relay`) stay open for every request.
+- `--headless` exists and defaults off. Leave it off.
 
 ## What was removed (2026-10-07, owner decision via CoS)
 
