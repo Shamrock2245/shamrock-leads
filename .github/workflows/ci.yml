@@ -168,6 +168,7 @@ jobs:
             tests/test_cf_browser.py \
             tests/test_residential_proxy.py \
             tests/test_manatee_no_proxy_path.py \
+            tests/test_jail_access_strategy.py \
             tests/test_charlotte_no_proxy_path.py \
             tests/test_relay_only_scheduling.py \
             tests/test_fl_charlotte_manatee_fail_closed.py \

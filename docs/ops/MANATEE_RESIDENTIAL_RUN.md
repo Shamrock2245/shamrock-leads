@@ -4,7 +4,9 @@
 
 Manatee's public roster (`https://manatee-sheriff.revize.com/bookings`) sits behind Cloudflare. Datacenter exits get an HTTP 403 `cf-mitigated: challenge` page; the agent box got this on 2026-10-07. The VPS and the office Comcast line have also been blocked in the past.
 
-**Manatee runs only on Brendan's home relay, which Leads Ops operates.** The scraper runs *on* that host and uses the host's own home-ISP exit. "Residential" means that connection. It is **not** a proxy service.
+**Manatee jail stays fail_closed** (`SOURCE_CONTRACT_VALIDATED=False`), so `python main.py Manatee` still emits nothing. Owner directive 2026-11-13: when a later PR allows a fetch, the order is the Mac relay, then a stealth browser plus SolveCaptcha on the VPS if the relay is unreachable, then fail closed. See `scrapers/access_strategy.py` and `scripts/mac_roster_relay.py`.
+
+**The Mac path is Brendan's own exit, which Leads Ops operates.** It is not a proxy service. The VPS calls the Mac only when `SHAMROCK_MAC_RELAY_URL` and `SHAMROCK_MAC_RELAY_TOKEN` are set. If either is missing, or the Mac does not answer, that step is unreachable and the VPS may try the stealth path. A missing `SOLVECAPTCHA_KEY` skips the solver and emits nothing.
 
 ## What was removed (2026-10-07, owner decision via CoS)
 

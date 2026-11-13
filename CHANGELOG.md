@@ -33,6 +33,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `test_manatee_clerk_smoke_row_is_not_promoted` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails if that smoke row is not `requested`, `passed`, or `failed`, or if it claims `verified_public` without a passed row.
 
+## [Unreleased] — 2026-11-13 (Manatee and Sarasota jail fetch strategy)
+
+### Added
+- **Per-county fetch plan (owner directive, Brendan, 2026-11-13).** Manatee jail and Sarasota jail may use a solver and a stealth browser. The order is the owner Mac residential relay, then stealth browser + the existing SolveCaptcha helper if the relay is unreachable and `SOLVECAPTCHA_KEY` is set, then fail closed with nothing emitted. Hillsborough does not use a solver. Other counties are unchanged.
+- **`scripts/mac_roster_relay.py`.** Stdlib relay the Mac can run. It fetches only the Manatee bookings page and the Sarasota listing, and only with `SHAMROCK_MAC_RELAY_TOKEN`.
+
+### Changed
+- Both scrapers stay `SOURCE_CONTRACT_VALIDATED=False` and Health `fail_closed`. `scrape()` still returns `[]` and does not request the source. Sarasota's listing person id is still not a booking number.
+
+### Tests
+- `tests/test_jail_access_strategy.py` (on the CI list): strategy selection, missing solver, relay success, relay unreachable then stealth, all paths failing, parsers still closed.
+
 ## [Unreleased] — 2026-11-10 (Portal handoff + self-serve prefill coexistence guard)
 
 ### Fixed
