@@ -14,14 +14,20 @@ import logging
 from typing import List
 
 from core.models import ArrestRecord
+from scrapers.access_strategy import SARASOTA_JAIL
 from scrapers.jailtracker_base import JailTrackerBaseScraper
 
 logger = logging.getLogger(__name__)
 
 
 class SarasotaCountyScraper(JailTrackerBaseScraper):
-    """Fail closed pending an official Sarasota booking-safe roster contract."""
+    """Fail closed pending an official Sarasota booking-safe roster contract.
 
+    Owner directive 2026-11-13 keeps this flag false. A person link id is not
+    a booking number. ``ACCESS_PLAN`` names the later fetch order.
+    """
+
+    ACCESS_PLAN = SARASOTA_JAIL
     county_jt_id = "SARASOTA_COUNTY_FL"
     facility_name = "Sarasota County Jail"
     SOURCE_CONTRACT_VALIDATED = False

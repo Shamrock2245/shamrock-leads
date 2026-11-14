@@ -33,6 +33,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `test_manatee_clerk_smoke_row_is_not_promoted` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails if that smoke row is not `requested`, `passed`, or `failed`, or if it claims `verified_public` without a passed row.
 
+## [Unreleased] — 2026-11-13 (Manatee and Sarasota jail fetch strategy)
+
+### Added
+- **Per-county fetch plan (owner directive, Brendan, 2026-11-13).** Manatee jail and Sarasota jail may use a solver and a stealth browser. The order is the owner Mac residential relay, then stealth browser + the existing SolveCaptcha helper if the relay is unreachable and `SOLVECAPTCHA_KEY` is set, then fail closed with nothing emitted. Hillsborough does not use a solver. Other counties are unchanged.
+- **`scripts/mac_roster_relay.py`.** The Mac relay fetches the Manatee bookings page and the Sarasota listing with one headed Patchright Chromium window (live check 2026-11-13: urllib and headless Chromium both get HTTP 403; headed Chromium gets HTTP 200). It waits out a "Just a moment" / "Attention Required" title and returns non-200 if the challenge stays. A real 404, 429, or 5xx whose title is not a challenge keeps that status. `--headless` defaults off. No solver on the relay. The Mac needs a logged-in GUI session and a user LaunchAgent, not a LaunchDaemon.
+- **A blocked Mac relay does not fall through to the solver (Codex on 6ac6cd9, tightened on 58101fd).** If the relay answers 403, 429, 503, or a challenge page, the run stops with `relay_blocked` and emits nothing. The solver fallback remains only when the relay is not configured or does not answer. The Mac install command for this relay is `python -m patchright install chromium`.
+
+### Changed
+- Both scrapers stay `SOURCE_CONTRACT_VALIDATED=False` and Health `fail_closed`. `scrape()` still returns `[]` and does not request the source. Sarasota's listing person id is still not a booking number.
+
+### Tests
+- `tests/test_jail_access_strategy.py` (on the CI list): strategy selection, missing solver, relay success, relay unreachable then stealth, all paths failing, parsers still closed.
+
 ## [Unreleased] — 2026-11-10 (Portal handoff + self-serve prefill coexistence guard)
 
 ### Fixed
