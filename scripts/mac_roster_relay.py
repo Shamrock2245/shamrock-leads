@@ -81,13 +81,19 @@ def read_cleared_page(page, url: str, *, timeout_s: float, sleep: Callable[[floa
     status = getattr(resp, "status", None) if resp is not None else None
     deadline = time.monotonic() + timeout_s
     title = page.title()
+    saw_challenge = title_is_challenged(title)
     while title_is_challenged(title):
         if time.monotonic() >= deadline:
             code = status if isinstance(status, int) and status >= 400 else 403
             return int(code), clip_body(page.content())
         sleep(CF_POLL_S)
         title = page.title()
-    return 200, clip_body(page.content())
+    html = clip_body(page.content())
+    # A cleared interstitial may report 200. A real 404, 429, or 5xx whose
+    # title is not a challenge must keep that status.
+    if not saw_challenge and isinstance(status, int) and status >= 400:
+        return int(status), html
+    return 200, html
 
 
 class HeadedBrowser:

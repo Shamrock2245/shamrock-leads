@@ -133,6 +133,41 @@ def test_relay_unreachable_falls_back_to_stealth():
     assert [a.reason for a in result.attempts] == ["relay_unreachable", "stealth_ok"]
 
 
+def test_relay_blocked_does_not_fall_through_to_the_solver():
+    """A relay that reached the site and got a challenge stops. No solver call."""
+    def stealth(*_a, **_k):
+        raise AssertionError("solver must not run after relay_blocked")
+
+    blocked = run_access(
+        plan_for("Manatee"),
+        env=_env(**{
+            RELAY_URL_ENV: "http://100.64.0.2:8765",
+            RELAY_TOKEN_ENV: "tok",
+            SOLVER_ENV: "solver-key",
+        }),
+        relay_get=lambda *_a, **_k: (403, "Attention Required"),
+        stealth_fetch=stealth,
+    )
+    assert blocked.ok is False
+    assert blocked.strategy == FAIL_CLOSED
+    assert blocked.reason == "relay_blocked"
+    assert blocked.body == ""
+    assert [a.reason for a in blocked.attempts] == ["relay_blocked", "relay_blocked"]
+
+    challenged = run_access(
+        plan_for("Sarasota"),
+        env=_env(**{
+            RELAY_URL_ENV: "http://100.64.0.2:8765",
+            RELAY_TOKEN_ENV: "tok",
+            SOLVER_ENV: "solver-key",
+        }),
+        relay_get=lambda *_a, **_k: (200, "<html>Just a moment...</html>"),
+        stealth_fetch=stealth,
+    )
+    assert challenged.reason == "relay_blocked"
+    assert [a.strategy for a in challenged.attempts] == [MAC_RELAY, FAIL_CLOSED]
+
+
 def test_all_paths_failing_stays_fail_closed_and_emits_nothing():
     def stealth(*_a, **_k):
         return 403, "Just a moment"
@@ -245,7 +280,9 @@ def test_headed_browser_returns_200_after_the_challenge_clears():
     assert status == 200
     assert html == "<html>booking table</html>"
     status2, html2 = browser.fetch("https://cms.revize.com/revize/apps/sarasota/")
-    assert status2 == 200 and html2 == "<html>booking table</html>"
+    # The second navigation's title is not a challenge and the fake response
+    # status is still 403, so that status is kept.
+    assert status2 == 403 and html2 == "<html>booking table</html>"
     assert page.urls == [
         "https://manatee-sheriff.revize.com/bookings",
         "https://cms.revize.com/revize/apps/sarasota/",
@@ -257,6 +294,16 @@ def test_headed_browser_returns_200_after_the_challenge_clears():
 
 def Path_source(relay):
     return open(relay.__file__, encoding="utf-8").read().lower()
+
+
+def test_non_challenge_http_errors_keep_their_status():
+    relay = _load_relay()
+    for status, title in ((404, "Not Found"), (429, "Too Many Requests"), (500, "Server Error"), (503, "Unavailable")):
+        page = _Titles([title], f"<html>{title}</html>", status=status)
+        browser = relay.HeadedBrowser(page_factory=lambda p=page: p, timeout_s=1, sleep=lambda _s: None)
+        got, html = browser.fetch("https://manatee-sheriff.revize.com/bookings")
+        assert got == status, title
+        assert title in html
 
 
 def test_headed_browser_returns_non_200_when_the_challenge_stays():
