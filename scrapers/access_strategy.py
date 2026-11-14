@@ -125,7 +125,10 @@ def _mac_relay(plan: AccessPlan, env: Mapping[str, str], relay_get: RelayGet) ->
         logger.warning("[access] mac relay unreachable error_type=%s", type(exc).__name__)
         return Attempt(MAC_RELAY, False, "relay_unreachable")
     if status != 200 or looks_like_challenge(body, status):
-        return Attempt(MAC_RELAY, False, "relay_blocked" if status == 200 or status == 403 else "relay_rejected")
+        # 403, 429, 503, and a challenge body are all relay_blocked. The solver
+        # runs only when the relay is missing or does not answer.
+        reason = "relay_blocked" if looks_like_challenge(body, status) else "relay_rejected"
+        return Attempt(MAC_RELAY, False, reason)
     return Attempt(MAC_RELAY, True, "relay_ok", body)
 
 

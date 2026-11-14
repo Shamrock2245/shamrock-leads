@@ -168,6 +168,29 @@ def test_relay_blocked_does_not_fall_through_to_the_solver():
     assert [a.strategy for a in challenged.attempts] == [MAC_RELAY, FAIL_CLOSED]
 
 
+def test_relay_429_and_503_are_blocked_and_do_not_call_the_solver():
+    """A reachable relay rate-limit or 503 is a challenge, not a reason to solve."""
+    def stealth(*_a, **_k):
+        raise AssertionError("solver must not run after a challenge status")
+
+    env = _env(**{
+        RELAY_URL_ENV: "http://100.64.0.2:8765",
+        RELAY_TOKEN_ENV: "tok",
+        SOLVER_ENV: "solver-key",
+    })
+    for status in (429, 503):
+        result = run_access(
+            plan_for("Manatee"),
+            env=env,
+            relay_get=lambda *_a, status=status, **_k: (status, "busy"),
+            stealth_fetch=stealth,
+        )
+        assert result.ok is False
+        assert result.reason == "relay_blocked"
+        assert result.body == ""
+        assert [a.strategy for a in result.attempts] == [MAC_RELAY, FAIL_CLOSED]
+
+
 def test_all_paths_failing_stays_fail_closed_and_emits_nothing():
     def stealth(*_a, **_k):
         return 403, "Just a moment"

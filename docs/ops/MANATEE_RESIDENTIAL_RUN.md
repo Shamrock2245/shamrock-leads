@@ -13,6 +13,7 @@ The relay opens a **headed** Patchright Chromium window. Plain urllib and headle
 - The Mac user must be logged into a GUI session. A window has to be able to open.
 - Install the process as a **LaunchAgent** in `~/Library/LaunchAgents` (user session). Do not install it as a LaunchDaemon. A daemon has no window server, so headed Chromium cannot start.
 - Keep the Mac awake. One browser and one profile (`~/.shamrock-mac-relay`) stay open for every request.
+- Install the browser the relay launches: `python -m patchright install chromium`. Do not use `python -m playwright install chromium` for this relay.
 - `--headless` exists and defaults off. Leave it off.
 
 ## What was removed (2026-10-07, owner decision via CoS)
@@ -45,7 +46,7 @@ Manatee is **relay-only** (`config/relay_only.py`, together with Charlotte). The
 ## Run it on the home relay
 
 1. Make sure the relay host's VPN is off so its exit is the home ISP.
-2. From the repo checkout (with Playwright Chromium installed: `python -m playwright install chromium`), run a **read smoke**. It writes nothing and prints no names:
+2. From the repo checkout (with Patchright Chromium installed: `python -m patchright install chromium`), run a **read smoke**. It writes nothing and prints no names:
 
    ```bash
    MANATEE_EGRESS_MODE=direct python scripts/manatee_residential_smoke.py
