@@ -774,21 +774,31 @@ window.SLiMessage = (() => {
       if ($('bbComposeText')) $('bbComposeText').value = '';
       if (btn) btn.innerHTML = '✅';
       setTimeout(() => { if (btn) { btn.innerHTML = _sendSvg; btn.disabled = false; } }, 1800);
-      showToast('Message sent via iMessage', 'success');
+      const isQueued = Boolean(data?.queued && !data?.sent);
+      const ch = data?.fallback_channel || data?.channel || (data?.result && (data.result.fallback_channel || data.result.channel)) || 'imessage';
+      const isSms = String(ch).toLowerCase() === 'sms';
+      const toastMsg = isQueued
+        ? 'Queued — will send automatically when iMac reconnects'
+        : isSms
+          ? 'Message sent via SMS/RCS'
+          : 'Message sent via iMessage';
+      showToast(toastMsg, isQueued ? 'warning' : 'success');
 
       /* Append sent bubble to thread immediately (optimistic) */
       const threadView = $('bbThreadMessages');
       if (threadView) {
         const now = new Date();
         const time = now.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+        const channelTag = isQueued ? 'queued' : isSms ? 'SMS/RCS' : 'iMessage';
+        const bubbleStyle = isSms ? ' style="background:#10b981;color:#fff"' : '';
         const bubbleHtml = `
           <div class="im-bubble-row outbound">
             <div>
-              <div class="im-bubble">${_esc(text)}</div>
+              <div class="im-bubble"${bubbleStyle}>${_esc(text)}</div>
               <div class="im-bubble-meta">
                 <span>${time}</span>
-                <span>• dashboard</span>
-                <span class="im-bubble-status">↑</span>
+                <span>• ${channelTag}</span>
+                <span class="im-bubble-status">${isQueued ? '⏳' : '↑'}</span>
               </div>
             </div>
           </div>`;
