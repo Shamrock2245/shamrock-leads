@@ -145,8 +145,51 @@ class HeadedBrowser:
                     )
             except Exception as exc:  # noqa: BLE001 - returned to the request thread
                 box["error"] = exc
+                if self._browser_state_dead(exc):
+                    self._reset_browser()
             finally:
                 box["done"].set()
+
+    def _browser_state_dead(self, exc: BaseException | None = None) -> bool:
+        """True when the cached page or context cannot serve another request."""
+        if exc is not None:
+            name = type(exc).__name__.casefold()
+            text = str(exc).casefold()
+            if "closed" in name or "has been closed" in text or "target closed" in text:
+                return True
+        page = self._page
+        if page is not None:
+            checker = getattr(page, "is_closed", None)
+            if callable(checker):
+                try:
+                    if checker():
+                        return True
+                except Exception:
+                    return True
+        context = self._context
+        if context is not None:
+            checker = getattr(context, "is_closed", None)
+            if callable(checker):
+                try:
+                    if checker():
+                        return True
+                except Exception:
+                    return True
+        return False
+
+    def _reset_browser(self) -> None:
+        for closer in (self._context, self._pw):
+            if closer is None:
+                continue
+            stop = getattr(closer, "close", None) or getattr(closer, "stop", None)
+            if callable(stop):
+                try:
+                    stop()
+                except Exception:
+                    pass
+        self._page = None
+        self._context = None
+        self._pw = None
 
     def _open(self):
         if self._page_factory is not None:

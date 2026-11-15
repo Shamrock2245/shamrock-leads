@@ -179,11 +179,15 @@ def run_access(
         )
         if attempt.ok:
             return AccessResult(True, attempt.strategy, attempt.reason, attempt.body, attempts)
-        # The relay reached the county and was challenged. Do not pay for a
-        # solver fallback; that path is only for an unreachable relay.
-        if attempt.reason == "relay_blocked":
-            attempts.append(Attempt(FAIL_CLOSED, False, "relay_blocked"))
-            return AccessResult(False, FAIL_CLOSED, "relay_blocked", "", attempts)
+        # The solver runs only when the relay is missing or the connection
+        # fails. Any answer from a reachable relay (challenge, 401, 404, 500,
+        # 502) stops here with an empty body.
+        if (
+            attempt.strategy == MAC_RELAY
+            and attempt.reason not in {"relay_not_configured", "relay_unreachable"}
+        ):
+            attempts.append(Attempt(FAIL_CLOSED, False, attempt.reason))
+            return AccessResult(False, FAIL_CLOSED, attempt.reason, "", attempts)
         if attempt.strategy == FAIL_CLOSED:
             break
     return AccessResult(False, FAIL_CLOSED, "all_paths_failed", "", attempts)

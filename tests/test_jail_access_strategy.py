@@ -191,6 +191,29 @@ def test_relay_429_and_503_are_blocked_and_do_not_call_the_solver():
         assert [a.strategy for a in result.attempts] == [MAC_RELAY, FAIL_CLOSED]
 
 
+def test_any_reachable_relay_error_does_not_call_the_solver():
+    """401, 404, 500, and 502 from a live relay stop. Only a dead relay falls through."""
+    def stealth(*_a, **_k):
+        raise AssertionError("solver must not run after the relay answered")
+
+    env = _env(**{
+        RELAY_URL_ENV: "http://100.64.0.2:8765",
+        RELAY_TOKEN_ENV: "tok",
+        SOLVER_ENV: "solver-key",
+    })
+    for status in (401, 404, 500, 502):
+        result = run_access(
+            plan_for("Sarasota"),
+            env=env,
+            relay_get=lambda *_a, status=status, **_k: (status, "nope"),
+            stealth_fetch=stealth,
+        )
+        assert result.ok is False
+        assert result.reason == "relay_rejected"
+        assert result.body == ""
+        assert [a.strategy for a in result.attempts] == [MAC_RELAY, FAIL_CLOSED]
+
+
 def test_all_paths_failing_stays_fail_closed_and_emits_nothing():
     def stealth(*_a, **_k):
         return 403, "Just a moment"
@@ -377,3 +400,45 @@ def test_browser_fetches_do_not_overlap():
     assert errors == []
     assert page.max_inflight == 1
     assert len(page.urls) == 2
+
+
+def test_closed_browser_is_recreated_on_the_next_request():
+    relay = _load_relay()
+    made = []
+
+    class _Dead:
+        def __init__(self):
+            self.closed = False
+        def goto(self, url, **kwargs):
+            self.closed = True
+            raise RuntimeError("Target page, context or browser has been closed")
+        def is_closed(self):
+            return self.closed
+
+    class _Live:
+        def goto(self, url, **kwargs):
+            self.url = url
+            return type("Resp", (), {"status": 200})()
+        def title(self):
+            return "Manatee Sheriff Search"
+        def content(self):
+            return "<html>booking</html>"
+        def is_closed(self):
+            return False
+
+    def factory():
+        page = _Dead() if not made else _Live()
+        made.append(page)
+        return page
+
+    browser = relay.HeadedBrowser(page_factory=factory, timeout_s=1, sleep=lambda _s: None)
+    try:
+        browser.fetch("https://manatee-sheriff.revize.com/bookings")
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised
+    status, html = browser.fetch("https://manatee-sheriff.revize.com/bookings")
+    assert status == 200
+    assert html == "<html>booking</html>"
+    assert len(made) == 2
