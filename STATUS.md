@@ -16,6 +16,10 @@
 
 ---
 
+## Manatee jail and Sarasota jail fetch strategy (2026-11-13)
+
+Owner directive (Brendan, 2026-11-13): a solver and a stealth browser are allowed, and the stack should be adaptable per county. He also asked that these two jails run through his Mac when that works. The exception is only Manatee jail (`manatee-sheriff.revize.com/bookings`) and Sarasota jail. Order, once a fetch is allowed: Mac residential relay, then stealth browser + the existing SolveCaptcha helper if the relay is unreachable and `SOLVECAPTCHA_KEY` is set, then fail closed with nothing emitted. The Mac relay uses one headed Patchright window (urllib and headless Chromium got HTTP 403 on the office Mac, 2026-11-13). It needs a logged-in GUI session and a user LaunchAgent, not a LaunchDaemon. The relay does not call a solver. Both stay `fail_closed` / `SOURCE_CONTRACT_VALIDATED=False` until a separate PR after a Leads Ops write smoke. Hillsborough does not use a solver. Sarasota's public listing still publishes only an opaque `viewInmate.php` person id, not a booking number, so a successful fetch does not reopen it.
+
 ## Codex 11/5 Manatee Clerk smoke (PR #308)
 - Write-smoke gate now requires Manatee-only `booking_number_shapes` (`mc_case_v1:<sha256>` only) and exact blank `status_buckets` `{"": rows}` with integer count. Miami-Dade keys and empty/zero/non-int blank buckets fail closed. Codex 11/10: `internal_key_matches_case` must equal `rows` (the stored key is the digest of that row's case number), and a padded state still selects the gate. Only `None` or a blank string counts as the blank status bucket; `0`, `false`, `[]` and `{}` are `malformed` and fail the gate. Bond buckets may only be `empty`, `zero`, or `positive` and must sum to `rows`. `--state Florida` is the same gate as `FL`. The row stays `requested`.
 

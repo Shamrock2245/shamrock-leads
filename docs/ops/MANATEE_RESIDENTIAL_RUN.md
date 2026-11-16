@@ -4,7 +4,17 @@
 
 Manatee's public roster (`https://manatee-sheriff.revize.com/bookings`) sits behind Cloudflare. Datacenter exits get an HTTP 403 `cf-mitigated: challenge` page; the agent box got this on 2026-10-07. The VPS and the office Comcast line have also been blocked in the past.
 
-**Manatee runs only on Brendan's home relay, which Leads Ops operates.** The scraper runs *on* that host and uses the host's own home-ISP exit. "Residential" means that connection. It is **not** a proxy service.
+**Manatee jail stays fail_closed** (`SOURCE_CONTRACT_VALIDATED=False`), so `python main.py Manatee` still emits nothing. Owner directive 2026-11-13: when a later PR allows a fetch, the order is the Mac relay, then a stealth browser plus SolveCaptcha on the VPS if the relay is unreachable, then fail closed. See `scrapers/access_strategy.py` and `scripts/mac_roster_relay.py`.
+
+**The Mac path is Brendan's own exit, which Leads Ops operates.** It is not a proxy service. The VPS calls the Mac only when `SHAMROCK_MAC_RELAY_URL` and `SHAMROCK_MAC_RELAY_TOKEN` are set. If either is missing, or the Mac does not answer, that step is unreachable and the VPS may try the stealth path. A missing `SOLVECAPTCHA_KEY` skips the solver on the VPS and emits nothing. The relay itself does not call a solver.
+
+The relay opens a **headed** Patchright Chromium window. Plain urllib and headless Chromium both received HTTP 403 on the office Mac (2026-11-13); the headed window received HTTP 200. That means:
+
+- The Mac user must be logged into a GUI session. A window has to be able to open.
+- Install the process as a **LaunchAgent** in `~/Library/LaunchAgents` (user session). Do not install it as a LaunchDaemon. A daemon has no window server, so headed Chromium cannot start.
+- Keep the Mac awake. One browser and one profile (`~/.shamrock-mac-relay`) stay open for every request.
+- Install the browser the relay launches: `python -m patchright install chromium`. Do not use `python -m playwright install chromium` for this relay.
+- `--headless` exists and defaults off. Leave it off.
 
 ## What was removed (2026-10-07, owner decision via CoS)
 
@@ -36,7 +46,7 @@ Manatee is **relay-only** (`config/relay_only.py`, together with Charlotte). The
 ## Run it on the home relay
 
 1. Make sure the relay host's VPN is off so its exit is the home ISP.
-2. From the repo checkout (with Playwright Chromium installed: `python -m playwright install chromium`), run a **read smoke**. It writes nothing and prints no names:
+2. From the repo checkout (with Patchright Chromium installed: `python -m patchright install chromium`), run a **read smoke**. It writes nothing and prints no names:
 
    ```bash
    MANATEE_EGRESS_MODE=direct python scripts/manatee_residential_smoke.py
