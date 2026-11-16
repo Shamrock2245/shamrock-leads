@@ -1,289 +1,329 @@
 """
 OSINT PDF Export Service — ShamrockLeads
 ========================================
-Generates executive-grade PDF summary reports for OSINT scans.
-Uses fpdf2 for PDF generation.
+Renders the recovery-agent dossier from ``build_osint_report``.
+
+Layout (letter-size, portrait):
+  Page 1  case header · search inputs · KPI strip · recovery leads · next steps
+  Then    accounts by category · other entities · risk signals · engine log
+
+fpdf2 core fonts are Latin-1 only. Every string goes through ``_t`` so an emoji
+or em dash in a scraped profile cannot crash the export.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Sequence
+
+from dashboard.services.osint_report import build_osint_report
+
+GREEN = (0, 100, 60)
+GREEN_SOFT = (232, 245, 238)
+INK = (15, 23, 42)
+BODY = (51, 65, 85)
+MUTED = (100, 116, 139)
+LINE = (226, 232, 240)
+ZEBRA = (248, 250, 252)
+LINK = (29, 78, 216)
+RED = (185, 28, 28)
+AMBER = (180, 83, 9)
+OK = (21, 128, 61)
+
+_REPLACE = {
+    "\u2014": "-", "\u2013": "-", "\u2012": "-", "\u2212": "-",
+    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201c": '"', "\u201d": '"',
+    "\u2026": "...", "\u2022": "*", "\u00b7": "-", "\u2192": "->", "\u2190": "<-",
+    "\u00a0": " ", "\u200b": "", "\u2122": "(TM)",
+}
 
 
-class ShamrockOSINTPDF:
-    """Custom FPDF subclass with executive headers, footers, and page numbers."""
+def _t(value: Any, limit: Optional[int] = None) -> str:
+    s = "" if value is None else str(value)
+    for k, v in _REPLACE.items():
+        s = s.replace(k, v)
+    s = s.encode("latin-1", "ignore").decode("latin-1")
+    s = " ".join(s.split())
+    if limit and len(s) > limit:
+        s = s[: max(0, limit - 3)] + "..."
+    return s
 
-    def __init__(self, doc: Dict[str, Any]):
-        from fpdf import FPDF
-        super().__init__()
-        self._doc = doc
 
-    def header(self):
-        # Top Shamrock Bar
-        self.set_fill_color(0, 100, 60)  # Shamrock green
-        self.rect(0, 0, 210, 14, fill="F")
-        self.set_font("Helvetica", "B", 10)
-        self.set_text_color(255, 255, 255)
-        self.set_xy(10, 3)
-        self.cell(0, 8, "SHAMROCK BAIL BONDS — OSINT INTELLIGENCE DOSSIER", ln=False)
+def _make_pdf(report: Dict[str, Any]):
+    from fpdf import FPDF
 
-    def footer(self):
-        self.set_y(-15)
-        self.set_draw_color(200, 200, 200)
-        self.line(10, self.get_y(), 200, self.get_y())
-        self.set_y(-12)
-        self.set_font("Helvetica", "I", 8)
-        self.set_text_color(120, 120, 120)
-        self.cell(0, 6, f"CONFIDENTIAL & PROPRIETARY — Page {self.page_no()}", align="C")
+    header = report["header"]
+
+    class DossierPDF(FPDF):
+        def header(self):  # noqa: D401 - fpdf hook
+            self.set_fill_color(*GREEN)
+            self.rect(0, 0, self.w, 12, style="F")
+            self.set_xy(10, 3)
+            self.set_font("Helvetica", "B", 9)
+            self.set_text_color(255, 255, 255)
+            self.cell(0, 6, "SHAMROCK BAIL BONDS  |  OSINT RECOVERY DOSSIER  |  CONFIDENTIAL")
+            self.set_xy(-80, 3)
+            self.set_font("Helvetica", "", 8)
+            self.cell(70, 6, _t(header["subject_name"], 40), align="R")
+            self.set_y(16)
+
+        def footer(self):  # noqa: D401 - fpdf hook
+            self.set_y(-13)
+            self.set_draw_color(*LINE)
+            self.line(10, self.get_y(), self.w - 10, self.get_y())
+            self.set_font("Helvetica", "I", 7)
+            self.set_text_color(*MUTED)
+            self.cell(0, 6, _t(f"Scan {header['scan_id']}  -  Leads require verification before any action  -  "
+                               f"Internal use only"), align="L")
+            self.set_x(-30)
+            self.cell(20, 6, f"Page {self.page_no()}/{{nb}}", align="R")
+
+    pdf = DossierPDF(orientation="P", unit="mm", format="Letter")
+    pdf.alias_nb_pages()
+    pdf.set_auto_page_break(auto=True, margin=16)
+    pdf.set_margins(10, 16, 10)
+    return pdf
+
+
+def _section(pdf, title: str, count: Optional[int] = None) -> None:
+    if pdf.get_y() > pdf.h - 40:
+        pdf.add_page()
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*GREEN)
+    label = title if count is None else f"{title} ({count})"
+    pdf.cell(0, 7, _t(label), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_draw_color(*GREEN)
+    pdf.set_line_width(0.4)
+    pdf.line(10, pdf.get_y(), pdf.w - 10, pdf.get_y())
+    pdf.set_line_width(0.2)
+    pdf.ln(2)
+
+
+def _empty(pdf, text: str) -> None:
+    pdf.set_font("Helvetica", "I", 8.5)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(0, 5, _t(text), new_x="LMARGIN", new_y="NEXT")
+
+
+def _table(
+    pdf,
+    headings: Sequence[str],
+    rows: List[Sequence[Any]],
+    widths: Sequence[float],
+    *,
+    links: Optional[List[Dict[int, str]]] = None,
+    limits: Optional[Sequence[int]] = None,
+    font_size: float = 7.8,
+) -> None:
+    """Wrapped, page-breaking table with optional per-cell hyperlinks."""
+    from fpdf.fonts import FontFace
+
+    head_style = FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=INK)
+    pdf.set_font("Helvetica", "", font_size)
+    pdf.set_text_color(*BODY)
+    pdf.set_draw_color(*LINE)
+    with pdf.table(
+        col_widths=tuple(widths),
+        width=sum(widths),
+        align="LEFT",
+        headings_style=head_style,
+        line_height=font_size * 0.55,
+        cell_fill_color=ZEBRA,
+        cell_fill_mode="ROWS",
+        text_align="LEFT",
+        borders_layout="HORIZONTAL_LINES",
+    ) as table:
+        hrow = table.row()
+        for h in headings:
+            hrow.cell(_t(h))
+        for r_idx, row in enumerate(rows):
+            trow = table.row()
+            row_links = (links[r_idx] if links and r_idx < len(links) else {}) or {}
+            for c_idx, val in enumerate(row):
+                lim = limits[c_idx] if limits and c_idx < len(limits) else None
+                link = row_links.get(c_idx)
+                if link:
+                    trow.cell(_t(val, lim), link=link, style=FontFace(color=LINK, emphasis="UNDERLINE"))
+                else:
+                    trow.cell(_t(val, lim))
+    pdf.ln(1)
 
 
 def generate_osint_pdf(doc: Dict[str, Any]) -> bytes:
-    """Generate a high-impact, professional OSINT PDF report from a scan document."""
-    from fpdf import FPDF
+    """Build the recovery dossier PDF for one stored scan document."""
+    report = build_osint_report(doc)
+    h = report["header"]
+    k = report["kpis"]
+    leads = report["leads"]
 
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=18)
+    pdf = _make_pdf(report)
     pdf.add_page()
+    page_w = pdf.w - 20
 
-    # Title & Subheader
-    pdf.ln(8)
-    pdf.set_font("Helvetica", "B", 18)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(0, 10, "OSINT Intelligence Report", ln=True)
+    # ── Title block ───────────────────────────────────────────────────────────
+    pdf.set_font("Helvetica", "B", 17)
+    pdf.set_text_color(*INK)
+    pdf.cell(0, 9, _t(h["subject_name"], 60), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 8.5)
+    pdf.set_text_color(*MUTED)
+    meta = [h["subject_type"]]
+    if h["subject_id"]:
+        meta.append(f"Case/Subject ID {h['subject_id']}")
+    meta.append(f"Scanned {h['created_at'] or 'n/a'}")
+    if h["requested_by"]:
+        meta.append(f"by {h['requested_by']}")
+    pdf.cell(0, 5, _t("  |  ".join(meta)), new_x="LMARGIN", new_y="NEXT")
 
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(100, 116, 139)
-    created = doc.get("created_at")
-    created_str = created[:19] if isinstance(created, str) else (created.strftime("%Y-%m-%d %H:%M UTC") if isinstance(created, datetime) else "Unknown")
-    pdf.cell(0, 5, f"Scan ID: {doc.get('_id') or doc.get('scan_id', 'N/A')}  |  Generated: {created_str}", ln=True)
+    status_color = {"COMPLETED": OK, "FAILED": RED}.get(h["status"], AMBER)
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_text_color(*status_color)
+    pdf.cell(0, 5, _t(f"Scan status: {h['status']}"), new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(2)
+
+    # ── KPI strip ─────────────────────────────────────────────────────────────
+    tiles = [
+        ("Locations", k["locations"]), ("Contact points", k["contacts"]),
+        ("Accounts", k["accounts"]), ("Platforms", k["platforms"]),
+        ("Entities", k["entities"]), ("Risk (advisory)", f"+{k['risk_score']}"),
+    ]
+    tile_w = page_w / len(tiles)
+    y0 = pdf.get_y()
+    for i, (label, val) in enumerate(tiles):
+        x = 10 + i * tile_w
+        pdf.set_fill_color(*GREEN_SOFT)
+        pdf.set_draw_color(*LINE)
+        pdf.rect(x + 0.6, y0, tile_w - 1.2, 15, style="DF")
+        pdf.set_xy(x, y0 + 1.6)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(*GREEN)
+        pdf.cell(tile_w, 6, _t(val), align="C")
+        pdf.set_xy(x, y0 + 8.5)
+        pdf.set_font("Helvetica", "", 7)
+        pdf.set_text_color(*MUTED)
+        pdf.cell(tile_w, 4, _t(label), align="C")
+    pdf.set_y(y0 + 18)
+
+    # ── Search inputs ─────────────────────────────────────────────────────────
+    _section(pdf, "What was searched")
+    _table(pdf, ["Input", "Value"], report["inputs"], [40, page_w - 40], limits=[30, 140])
+    if h["engines"]:
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_text_color(*MUTED)
+        pdf.multi_cell(0, 4, _t("Engines: " + ", ".join(h["engines"])), new_x="LMARGIN", new_y="NEXT")
+    if h["notes"]:
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.multi_cell(0, 4, _t("Notes: " + h["notes"], 400), new_x="LMARGIN", new_y="NEXT")
+
+    if report["ai_summary"]:
+        _section(pdf, "AI summary")
+        pdf.set_font("Helvetica", "", 8.5)
+        pdf.set_text_color(*BODY)
+        pdf.multi_cell(0, 4.6, _t(report["ai_summary"], 1600), new_x="LMARGIN", new_y="NEXT")
+
+    # ── Recovery leads ────────────────────────────────────────────────────────
+    _section(pdf, "Recovery leads: locations", len(leads["locations"]))
+    if leads["locations"]:
+        rows = [[l["value"], l["detail"], l["source"], "Open map"] for l in leads["locations"]]
+        links = [{3: l["map_url"]} for l in leads["locations"]]
+        _table(pdf, ["Location", "Detail", "Source", "Map"], rows,
+               [78, 62, 25, page_w - 165], links=links, limits=[120, 90, 18, 10])
+    else:
+        _empty(pdf, "No locations found. ExifTool (photo GPS), GHunt (Maps reviews) and SpiderFoot can add them.")
+
+    _section(pdf, "Recovery leads: phones & emails", len(leads["contacts"]))
+    if leads["contacts"]:
+        rows = [[c["type"].upper(), c["value"], c["new"], c["source"], c["context"]] for c in leads["contacts"]]
+        _table(pdf, ["Type", "Value", "Status", "Source", "Context"], rows,
+               [16, 62, 20, 25, page_w - 123], limits=[6, 60, 10, 16, 90])
+    else:
+        _empty(pdf, "No phone numbers or emails surfaced beyond what was searched.")
+
+    _section(pdf, "Recovery leads: linked handles", len(leads["handles"]))
+    if leads["handles"]:
+        rows = [[f"@{x['handle']}", x["platform_count"], x["new"], x["platforms"]] for x in leads["handles"][:40]]
+        _table(pdf, ["Handle", "Sites", "Status", "Platforms"], rows,
+               [48, 14, 20, page_w - 82], limits=[40, 4, 10, 120])
+    else:
+        _empty(pdf, "No usernames confirmed.")
+
+    if leads["vehicle"]:
+        _section(pdf, "Vehicle: Flock LE search audit logs (HIBF)", len(leads["vehicle"]))
+        rows = [[v["value"], v["context"]] for v in leads["vehicle"]]
+        _table(pdf, ["Finding", "Detail"], rows, [70, page_w - 70], limits=[80, 140])
+        _empty(pdf, "These are public records of law-enforcement plate searches, not live camera sightings.")
+
+    if leads["breaches"]:
+        _section(pdf, "Breach & dump sources (h8mail)", len(leads["breaches"]))
+        rows = [[b["value"], b["source"], b["context"]] for b in leads["breaches"]]
+        _table(pdf, ["Breach / source", "Engine", "Context"], rows,
+               [80, 22, page_w - 102], limits=[90, 14, 100])
+
+    # ── Next steps ────────────────────────────────────────────────────────────
+    _section(pdf, "Suggested next steps")
+    if report["next_steps"]:
+        pdf.set_font("Helvetica", "", 8.5)
+        pdf.set_text_color(*BODY)
+        for i, step in enumerate(report["next_steps"], 1):
+            pdf.multi_cell(0, 4.6, _t(f"{i}. {step}"), new_x="LMARGIN", new_y="NEXT")
+    else:
+        _empty(pdf, "No follow-up suggested.")
+
+    # ── Accounts by category ──────────────────────────────────────────────────
+    total_acc = sum(len(rows) for _, rows in report["accounts_by_category"])
+    _section(pdf, "Accounts found, by category", total_acc)
+    if not report["accounts_by_category"]:
+        _empty(pdf, "No accounts found.")
+    shown = 0
+    for cat, accs in report["accounts_by_category"]:
+        if shown >= 150:
+            break
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*INK)
+        pdf.cell(0, 6, _t(f"{cat.capitalize()} ({len(accs)})"), new_x="LMARGIN", new_y="NEXT")
+        take = accs[: max(0, 150 - shown)]
+        rows = [[a["platform"], a["username"], a["url"], a["confidence"], a["source"]] for a in take]
+        links = [{2: a["url"]} if a["url"].startswith("http") else {} for a in take]
+        _table(pdf, ["Platform", "Username", "Profile link", "Confidence", "Engine"], rows,
+               [32, 32, page_w - 108, 22, 22], links=links, limits=[24, 24, 80, 10, 12])
+        shown += len(take)
+    if total_acc > shown:
+        _empty(pdf, f"{total_acc - shown} more accounts are in the CSV export.")
+
+    if report["other_entities"]:
+        _section(pdf, "Other findings", len(report["other_entities"]))
+        rows = [[e["type"], e["value"], e["source"], e["context"]] for e in report["other_entities"][:80]]
+        _table(pdf, ["Type", "Value", "Engine", "Context"], rows,
+               [24, 78, 22, page_w - 124], limits=[16, 90, 14, 80])
+
+    # ── Risk + engine log ─────────────────────────────────────────────────────
+    _section(pdf, "Risk signals (advisory only)", len(report["signals"]))
+    if report["signals"]:
+        rows = [[s["severity"], s["type"], s["detail"]] for s in report["signals"]]
+        _table(pdf, ["Severity", "Signal", "Detail"], rows, [20, 50, page_w - 70], limits=[10, 40, 220])
+    else:
+        _empty(pdf, "No risk signals.")
+
+    _section(pdf, "Engine run log")
+    if report["engine_log"]:
+        rows = [[e["engine"], e["status"], e["found"], e["note"] or "-"] for e in report["engine_log"]]
+        _table(pdf, ["Engine", "Status", "Found", "Notes"], rows,
+               [62, 22, 14, page_w - 98], limits=[40, 10, 6, 160])
+    for w in report["warnings"][:12]:
+        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_text_color(*AMBER)
+        pdf.multi_cell(0, 4, _t("Warning: " + w, 300), new_x="LMARGIN", new_y="NEXT")
+    if report["hidden_irrelevant"]:
+        _empty(pdf, f"{report['hidden_irrelevant']} findings marked irrelevant by staff are left out of this report.")
+
     pdf.ln(4)
-
-    # ── Executive Overview Card ────────────────────────────────────────────────
-    pdf.set_fill_color(248, 250, 252)
-    pdf.set_draw_color(226, 232, 240)
-    pdf.rect(10, pdf.get_y(), 190, 36, style="DF")
-
-    start_y = pdf.get_y() + 4
-
-    # Subject details
-    pdf.set_xy(14, start_y)
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(32, 5, "Subject Name:")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(51, 65, 85)
-    pdf.cell(50, 5, (doc.get("full_name") or "Unknown Subject")[:30])
-
-    # Status
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(24, 5, "Status:")
-    status = (doc.get("status") or "unknown").upper()
-    pdf.set_font("Helvetica", "B", 10)
-    if status == "COMPLETED":
-        pdf.set_text_color(16, 185, 129)
-    elif status == "FAILED":
-        pdf.set_text_color(239, 68, 68)
-    else:
-        pdf.set_text_color(245, 158, 11)
-    pdf.cell(40, 5, status, ln=True)
-
-    # Row 2
-    pdf.set_xy(14, start_y + 7)
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(32, 5, "Subject Type:")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.set_text_color(51, 65, 85)
-    pdf.cell(50, 5, (doc.get("subject_type") or "defendant").capitalize())
-
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(24, 5, "Engines:")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(51, 65, 85)
-    engines_str = ", ".join(doc.get("engines_requested") or []) or "None"
-    pdf.cell(60, 5, engines_str[:35], ln=True)
-
-    # Row 3
-    pdf.set_xy(14, start_y + 14)
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(32, 5, "Accounts Found:")
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(0, 100, 60)
-    pdf.cell(50, 5, str(doc.get("total_accounts", 0)))
-
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(24, 5, "Entities:")
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(0, 100, 60)
-    pdf.cell(40, 5, str(doc.get("total_entities", 0)), ln=True)
-
-    # Row 4
-    pdf.set_xy(14, start_y + 21)
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(32, 5, "Risk Score:")
-    risk = int(doc.get("osint_risk_score", 0))
-    pdf.set_font("Helvetica", "B", 10)
-    if risk >= 35:
-        pdf.set_text_color(220, 38, 38)
-    elif risk >= 15:
-        pdf.set_text_color(217, 119, 6)
-    else:
-        pdf.set_text_color(16, 185, 129)
-    pdf.cell(50, 5, f"+{risk} (Advisory)")
-
-    pdf.set_font("Helvetica", "B", 10)
-    pdf.set_text_color(15, 23, 42)
-    pdf.cell(24, 5, "Subject ID:")
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(71, 85, 105)
-    pdf.cell(60, 5, str(doc.get("subject_id", ""))[:30], ln=True)
-
-    pdf.set_y(start_y + 34)
-    pdf.ln(6)
-
-    # ── AI Summary Box ────────────────────────────────────────────────────────
-    ai_summary = doc.get("ai_summary")
-    if ai_summary:
-        pdf.set_fill_color(243, 232, 255)  # Soft purple
-        pdf.set_draw_color(216, 180, 254)
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.set_text_color(126, 34, 206)
-        pdf.cell(0, 7, "  AI Intelligence Summary", ln=True, fill=True)
-
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(51, 65, 85)
-        pdf.set_fill_color(250, 245, 255)
-        clean_ai = str(ai_summary).replace("\n", " ").strip()
-        pdf.multi_cell(0, 5, f"  {clean_ai[:950]}", fill=True, border=1)
-        pdf.ln(6)
-
-    # ── Discovered Accounts Table ─────────────────────────────────────────────
-    accounts = doc.get("accounts") or []
-    if accounts:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.set_text_color(15, 23, 42)
-        pdf.cell(0, 7, f"Discovered Social & Web Accounts ({len(accounts)})", ln=True)
-        pdf.ln(2)
-
-        # Table Header
-        pdf.set_font("Helvetica", "B", 8)
-        pdf.set_fill_color(0, 100, 60)
-        pdf.set_text_color(255, 255, 255)
-        col_w = [35, 35, 80, 22, 18]
-        headers = ["Platform", "Username", "Profile / Link URL", "Source", "Status"]
-        for i, h in enumerate(headers):
-            pdf.cell(col_w[i], 6, h, border=1, fill=True, align="C" if i in [3, 4] else "L")
-        pdf.ln()
-
-        # Rows
-        pdf.set_font("Helvetica", "", 8)
-        for idx, acct in enumerate(accounts[:60]):
-            bg = (248, 250, 252) if idx % 2 == 0 else (255, 255, 255)
-            pdf.set_fill_color(*bg)
-            pdf.set_text_color(51, 65, 85)
-
-            platform = str(acct.get("platform", ""))[:20]
-            username = str(acct.get("username", ""))[:20]
-            url = str(acct.get("url", ""))
-            source = str(acct.get("source", ""))[:12]
-            conf = str(acct.get("confidence", "found"))[:10]
-
-            pdf.cell(col_w[0], 5.5, platform, border=1, fill=True)
-            pdf.cell(col_w[1], 5.5, username, border=1, fill=True)
-
-            # URL column with clickable hyperlink
-            url_display = url[:48] if len(url) > 48 else url
-            pdf.set_text_color(37, 99, 235)  # Blue link
-            pdf.cell(col_w[2], 5.5, url_display, border=1, fill=True, link=url if url.startswith("http") else None)
-            pdf.set_text_color(51, 65, 85)
-
-            pdf.cell(col_w[3], 5.5, source, border=1, fill=True, align="C")
-            pdf.cell(col_w[4], 5.5, conf, border=1, fill=True, align="C")
-            pdf.ln()
-
-        if len(accounts) > 60:
-            pdf.set_font("Helvetica", "I", 8)
-            pdf.set_text_color(100, 116, 139)
-            pdf.cell(0, 5, f"... and {len(accounts) - 60} more accounts (see CSV export for complete list)", ln=True)
-        pdf.ln(6)
-
-    # ── Discovered Entities Table ─────────────────────────────────────────────
-    entities = doc.get("entities") or []
-    if entities:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.set_text_color(15, 23, 42)
-        pdf.cell(0, 7, f"Discovered Entities & Intelligence Assets ({len(entities)})", ln=True)
-        pdf.ln(2)
-
-        pdf.set_font("Helvetica", "B", 8)
-        pdf.set_fill_color(30, 41, 59)  # Dark slate
-        pdf.set_text_color(255, 255, 255)
-        col_we = [28, 85, 28, 30, 19]
-        headers_e = ["Type", "Value / Asset", "Source", "Module", "Confidence"]
-        for i, h in enumerate(headers_e):
-            pdf.cell(col_we[i], 6, h, border=1, fill=True, align="C" if i in [3, 4] else "L")
-        pdf.ln()
-
-        pdf.set_font("Helvetica", "", 8)
-        for idx, ent in enumerate(entities[:40]):
-            bg = (248, 250, 252) if idx % 2 == 0 else (255, 255, 255)
-            pdf.set_fill_color(*bg)
-            pdf.set_text_color(51, 65, 85)
-
-            etype = str(ent.get("type", ""))[:16]
-            val = str(ent.get("value", ""))[:52]
-            source = str(ent.get("source", ""))[:14]
-            module = str(ent.get("module", ""))[:16]
-            conf = str(ent.get("confidence", "medium"))[:10]
-
-            pdf.cell(col_we[0], 5.5, etype, border=1, fill=True)
-            pdf.cell(col_we[1], 5.5, val, border=1, fill=True)
-            pdf.cell(col_we[2], 5.5, source, border=1, fill=True)
-            pdf.cell(col_we[3], 5.5, module, border=1, fill=True, align="C")
-            pdf.cell(col_we[4], 5.5, conf, border=1, fill=True, align="C")
-            pdf.ln()
-
-        if len(entities) > 40:
-            pdf.set_font("Helvetica", "I", 8)
-            pdf.set_text_color(100, 116, 139)
-            pdf.cell(0, 5, f"... and {len(entities) - 40} more entities", ln=True)
-        pdf.ln(6)
-
-    # ── Risk Signals ──────────────────────────────────────────────────────────
-    signals = doc.get("risk_signals") or []
-    if signals:
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.set_text_color(15, 23, 42)
-        pdf.cell(0, 7, "Identified Risk Signals", ln=True)
-        pdf.ln(2)
-
-        pdf.set_font("Helvetica", "", 9)
-        for sig in signals:
-            sev = str(sig.get("severity", "low")).upper()
-            stype = sig.get("signal_type", "")
-            detail = sig.get("detail", "")[:120]
-
-            if sev in ["HIGH", "CRITICAL"]:
-                pdf.set_text_color(220, 38, 38)
-            elif sev == "MEDIUM":
-                pdf.set_text_color(217, 119, 6)
-            else:
-                pdf.set_text_color(16, 185, 129)
-
-            pdf.cell(20, 5, f"[{sev}]", ln=False)
-            pdf.set_text_color(51, 65, 85)
-            pdf.cell(0, 5, f"{stype}: {detail}", ln=True)
-        pdf.ln(4)
-
-    # Footer note
-    pdf.ln(6)
-    pdf.set_font("Helvetica", "I", 8)
-    pdf.set_text_color(148, 163, 184)
-    pdf.cell(0, 4, "Generated by ShamrockLeads OSINT Intelligence Engine | Confidentially issued for internal bail underwriting.", ln=True, align="C")
-
-    return pdf.output()
+    pdf.set_font("Helvetica", "I", 7.5)
+    pdf.set_text_color(*MUTED)
+    pdf.multi_cell(
+        0, 4,
+        _t("These findings come from public sources and automated matching. A matching username is not proof "
+           "of identity. Verify every lead before acting on it. OSINT risk is advisory and is never applied to "
+           f"bond risk automatically. Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} by "
+           "ShamrockLeads."),
+        new_x="LMARGIN", new_y="NEXT",
+    )
+    return bytes(pdf.output())

@@ -46,6 +46,9 @@
     deleteScan,
     clearAllScans,
     saveGhuntLogin,
+    applyPlaybook,
+    pivotToScan,
+    testEngineFromMatrix,
   };
 
   // ── Helpers ────────────────────────────────────────────────────────
@@ -107,6 +110,19 @@
       userInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
       userInput.addEventListener('change', () => _updateAdaptiveFields());
     }
+    const imgInput = $('osintImageUrl');
+    if (imgInput) {
+      imgInput.addEventListener('input', _debounce(() => _updateAdaptiveFields(), 300));
+      imgInput.addEventListener('change', () => _updateAdaptiveFields());
+    }
+    ['osintFullName', 'osintTopSites', 'osintDeepScan', 'osintSecondOpinion', 'osintDeriveUsernames'].forEach(id => {
+      const el = $(id);
+      if (el) {
+        el.addEventListener('input', _debounce(() => _updateCliPreview(), 150));
+        el.addEventListener('change', () => _updateCliPreview());
+      }
+    });
+    _updateCliPreview();
   }
 
   function _debounce(fn, ms) {
@@ -329,6 +345,116 @@
     }
     _updateEngineChips();
     _updateAdaptiveFields();
+    _updateCliPreview();
+  }
+
+  function applyPlaybook(mode) {
+    const phone = ($('osintPhone')?.value || '').trim();
+    const email = ($('osintEmail')?.value || '').trim();
+    const plate = ($('osintPlate')?.value || '').trim();
+    const img = ($('osintImageUrl')?.value || '').trim();
+    const users = ($('osintUsernames')?.value || '').trim();
+    const name = ($('osintFullName')?.value || '').trim();
+
+    if (mode === 'full') {
+      _selectedEngines.clear();
+      if (users || name) ['maigret', 'tookie', 'sherlock', 'blackbird'].forEach(e => _selectedEngines.add(e));
+      if (email && email.includes('@')) {
+        ['holehe', 'h8mail', 'blackbird'].forEach(e => _selectedEngines.add(e));
+        if (_engineAvailable(_toolStatus?.ghunt)) _selectedEngines.add('ghunt');
+      }
+      if (phone && phone.replace(/\D/g, '').length >= 10) ['ignorant', 'spiderfoot'].forEach(e => _selectedEngines.add(e));
+      if (plate) _selectedEngines.add('hibf');
+      if (img) _selectedEngines.add('exiftool');
+      if (!_selectedEngines.size) _selectedEngines.add('maigret');
+      toast('Armed Full Skip-Trace engines for filled identifiers', 'success');
+    } else if (mode === 'alias') {
+      _selectedEngines = new Set(['maigret', 'tookie', 'sherlock', 'blackbird', 'instaloader']);
+      if (_engineAvailable(_toolStatus?.toutatis)) _selectedEngines.add('toutatis');
+      toast('Armed Alias / Handle Hunt engines', 'success');
+    } else if (mode === 'email') {
+      _selectedEngines = new Set(['holehe', 'h8mail', 'blackbird']);
+      if (_engineAvailable(_toolStatus?.ghunt)) _selectedEngines.add('ghunt');
+      toast('Armed Email → Maps & Breaches engines', 'success');
+    } else if (mode === 'phone') {
+      _selectedEngines = new Set(['ignorant', 'spiderfoot']);
+      toast('Armed Phone Pivot engines', 'success');
+    } else if (mode === 'plate') {
+      _selectedEngines = new Set(['hibf']);
+      toast('Armed HIBF Flock Plate Audit', 'success');
+    } else if (mode === 'photo') {
+      _selectedEngines = new Set(['exiftool']);
+      toast('Armed ExifTool GPS & Metadata Extractor', 'success');
+    }
+    _updateEngineChips();
+    _updateCliPreview();
+  }
+
+  function pivotToScan(kind, value) {
+    const val = String(value || '').trim();
+    if (!val) return;
+    switchSubtab('scan');
+    if (kind === 'email' && $('osintEmail')) {
+      $('osintEmail').value = val;
+      ['holehe', 'h8mail', 'blackbird'].forEach(e => _selectedEngines.add(e));
+      if (_engineAvailable(_toolStatus?.ghunt)) _selectedEngines.add('ghunt');
+    } else if (kind === 'phone' && $('osintPhone')) {
+      $('osintPhone').value = val;
+      _selectedEngines.add('ignorant');
+      _selectedEngines.add('spiderfoot');
+    } else if (kind === 'plate' && $('osintPlate')) {
+      $('osintPlate').value = val;
+      _selectedEngines.add('hibf');
+    } else if (kind === 'username' && $('osintUsernames')) {
+      const existing = ($('osintUsernames').value || '').split(',').map(s => s.trim()).filter(Boolean);
+      if (!existing.includes(val)) existing.push(val);
+      $('osintUsernames').value = existing.join(', ');
+      ['maigret', 'tookie', 'instaloader'].forEach(e => _selectedEngines.add(e));
+      if (_engineAvailable(_toolStatus?.toutatis)) _selectedEngines.add('toutatis');
+    }
+    _updateEngineChips();
+    _updateCliPreview();
+    toast(`Pivoted ${kind}: ${val} into scanner`, 'success');
+    $('osintScanBtn')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  function testEngineFromMatrix(engine) {
+    const sel = $('osintTestEngineSelect');
+    if (sel) {
+      sel.value = engine;
+      sel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      $('osintTestTargetInput')?.focus();
+    }
+  }
+
+  function _updateCliPreview() {
+    const el = $('osintCliPreview');
+    if (!el) return;
+    const handle = ($('osintUsernames')?.value || '').split(',').map(s => s.trim()).filter(Boolean)[0] || '<handle>';
+    const email = ($('osintEmail')?.value || '').trim() || '<email>';
+    const phone = ($('osintPhone')?.value || '').trim() || '<phone>';
+    const plate = ($('osintPlate')?.value || '').trim() || '<plate>';
+    const img = ($('osintImageUrl')?.value || '').trim() || '<image_url>';
+    const deep = $('osintDeepScan')?.checked || false;
+    const topSites = $('osintTopSites')?.value || (deep ? '800' : '80');
+    // Mirrors the argv built in osint-worker/runners.py. Engines marked "module"
+    // run in-process through the tool's Python API, not a shell command.
+    const cmds = [];
+    const sfTarget = email !== '<email>' ? email : (phone !== '<phone>' ? phone : handle);
+    if (_selectedEngines.has('maigret')) cmds.push(`maigret ${handle} -J simple --timeout 12 --no-recursion --no-autoupdate --top-sites ${topSites}`);
+    if (_selectedEngines.has('tookie')) cmds.push(`python brib.py -u ${handle} -o json -t <threads>${deep ? ' -W' : ''}`);
+    if (_selectedEngines.has('sherlock')) cmds.push(`sherlock --csv --no-color --timeout <s> ${handle}`);
+    if (_selectedEngines.has('blackbird')) cmds.push(`python blackbird.py --json --no-update --no-nsfw ${email !== '<email>' ? '--email ' + email : '--username ' + handle}`);
+    if (_selectedEngines.has('spiderfoot')) cmds.push(`sf.py -s ${sfTarget} -o json -q${deep ? '' : ' -m sfp_accounts,sfp_social_media,sfp_names,sfp_phone,…'}`);
+    if (_selectedEngines.has('ignorant')) cmds.push(`# module  ignorant.core → phone ${phone} (IG / Snapchat / Amazon)`);
+    if (_selectedEngines.has('holehe')) cmds.push(`# module  holehe.core → ${email} (${deep ? 'all 120+ modules' : 'quick module set'}, 3 concurrent)`);
+    if (_selectedEngines.has('ghunt')) cmds.push(`ghunt email ${email} --json <out.json>`);
+    if (_selectedEngines.has('h8mail')) cmds.push(`h8mail -t ${email} -j <out.json>`);
+    if (_selectedEngines.has('hibf')) cmds.push(`# HTTPS   POST haveibeenflocked.com/api/search/text (plate hashed, never stored)`);
+    if (_selectedEngines.has('toutatis')) cmds.push(`# module  toutatis.core.getInfo(${handle}, $INSTAGRAM_SESSION_ID)`);
+    if (_selectedEngines.has('instaloader')) cmds.push(`# module  instaloader.Profile.from_username(${handle})`);
+    if (_selectedEngines.has('exiftool')) cmds.push(`exiftool -j -n ${img}`);
+    el.textContent = cmds.length ? cmds.join('\n') : '# Select at least one engine';
   }
 
   function _updateEngineChips() {
@@ -372,6 +498,13 @@
       _selectedEngines.add('hibf');
       _updateEngineChips();
     }
+
+    const img = ($('osintImageUrl')?.value || '').trim();
+    if (/^https?:\/\//i.test(img) && !_selectedEngines.has('exiftool')) {
+      _selectedEngines.add('exiftool');
+      _updateEngineChips();
+    }
+    _updateCliPreview();
 
     // Toutatis hammers Instagram — only when staff explicitly enables it.
   }
@@ -445,12 +578,16 @@
     const email = $('osintEmail')?.value?.trim() || null;
     const phone = $('osintPhone')?.value?.trim() || null;
     const licensePlate = $('osintPlate')?.value?.trim() || null;
+    const imageUrl = $('osintImageUrl')?.value?.trim() || null;
     const deepScan = $('osintDeepScan')?.checked || false;
     const secondOpinion = $('osintSecondOpinion')?.checked || false;
+    const topSitesRaw = $('osintTopSites')?.value || '';
+    const topSites = topSitesRaw ? parseInt(topSitesRaw, 10) : null;
+    const deriveUsernames = $('osintDeriveUsernames') ? $('osintDeriveUsernames').checked : true;
     const notes = $('osintNotes')?.value?.trim() || null;
 
-    if (!fullName && !usernames.length && !email && !phone && !licensePlate) {
-      toast('At least one identifier required (name, username, email, phone, or plate)', 'error');
+    if (!fullName && !usernames.length && !email && !phone && !licensePlate && !imageUrl) {
+      toast('At least one identifier required (name, username, email, phone, plate, or image URL)', 'error');
       return;
     }
 
@@ -477,9 +614,12 @@
           email,
           phone,
           license_plate: licensePlate,
+          image_url: imageUrl,
           engines,
           deep_scan: deepScan,
           second_opinion: secondOpinion,
+          top_sites: topSites,
+          derive_usernames: deriveUsernames,
           notes,
         }),
       });
@@ -578,10 +718,10 @@
           </div>
         </div>
         <div class="osint-detail-actions">
-          <button onclick="SLOSINT.exportJSON()">JSON</button>
-          <button onclick="SLOSINT.exportCSV()">CSV</button>
-          <button onclick="SLOSINT.exportPDF()">PDF</button>
-          <button class="primary" onclick="SLOSINT.attachToSubject()">Attach</button>
+          <button class="primary" onclick="SLOSINT.exportPDF()" title="Recovery dossier: leads, next steps, accounts, engine log">📄 PDF Report</button>
+          <button onclick="SLOSINT.exportCSV()" title="Sectioned spreadsheet (opens in Excel / Google Sheets)">📊 CSV</button>
+          <button onclick="SLOSINT.exportJSON()" title="Full raw data">JSON</button>
+          <button onclick="SLOSINT.attachToSubject()">Attach</button>
           <button class="danger" onclick="SLOSINT.deleteScan('${scan._id}')" style="background:rgba(248,81,73,0.15);color:#f85149;border:1px solid rgba(248,81,73,0.3)" title="Delete scan record permanently">🗑️ Delete</button>
           <button onclick="SLOSINT.closeScan()">✕</button>
         </div>
@@ -600,6 +740,10 @@
   }
 
   function switchTab(tab) {
+    const srcSel = $('osintAcctSrcSel');
+    const catSel = $('osintAcctCatSel');
+    if (srcSel) _accountFilter.source = srcSel.value;
+    if (catSel) _accountFilter.category = catSel.value;
     _activeTab = tab;
     _renderDetail();
   }
@@ -630,6 +774,71 @@
       <div class="osint-kpi"><div class="kpi-value">${platforms}</div><div class="kpi-label">Platforms</div></div>
       <div class="osint-kpi"><div class="kpi-value">+${risk}</div><div class="kpi-label">Risk (Advisory)</div></div>
     </div>`;
+
+    // Fugitive Recovery Intelligence Dossier (actionable leads first)
+    const allEntities = scan.entities || [];
+    const allAccounts = scan.accounts || [];
+    const geoPts = scan.geo_points || [];
+    const locEntities = allEntities.filter(e => e.type === 'location' || e.type === 'address');
+    const contactEntities = allEntities.filter(e => e.type === 'phone' || e.type === 'email');
+    const breachEntities = allEntities.filter(e => e.type === 'breach');
+    const uniqueHandles = [...new Set(allAccounts.map(a => a.username).filter(Boolean))].slice(0, 6);
+
+    if (geoPts.length || locEntities.length || contactEntities.length || breachEntities.length || uniqueHandles.length) {
+      html += `<div class="osint-dossier-card">
+        <div class="osint-dossier-title">🎯 Fugitive Recovery Leads &amp; Pivot Targets</div>
+        <div class="osint-dossier-grid">`;
+
+      if (geoPts.length || locEntities.length) {
+        html += `<div class="osint-dossier-col">
+          <div class="dossier-col-head">📍 Locations / GPS / Sightings</div>`;
+        geoPts.slice(0, 5).forEach(pt => {
+          const mapUrl = `https://www.google.com/maps?q=${encodeURIComponent(pt.latitude + ',' + pt.longitude)}`;
+          html += `<div class="dossier-chip-row">
+            <span>${_esc(pt.label || `${pt.latitude}, ${pt.longitude}`)}</span>
+            <a href="${mapUrl}" target="_blank" rel="noopener" class="dossier-act-btn">🗺️ Map</a>
+          </div>`;
+        });
+        locEntities.slice(0, 5).forEach(le => {
+          const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(le.value)}`;
+          html += `<div class="dossier-chip-row">
+            <span>${_esc(le.value)} <small>(${_esc(le.source)})</small></span>
+            <a href="${mapUrl}" target="_blank" rel="noopener" class="dossier-act-btn">🗺️ Map</a>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+
+      if (contactEntities.length || uniqueHandles.length) {
+        html += `<div class="osint-dossier-col">
+          <div class="dossier-col-head">📞 Contacts &amp; Handles (1-Click Pivot)</div>`;
+        contactEntities.slice(0, 6).forEach(ce => {
+          const kind = ce.type === 'phone' ? 'phone' : 'email';
+          html += `<div class="dossier-chip-row">
+            <span>${_esc(ce.value)} <small>(${_esc(ce.source)})</small></span>
+            <button type="button" class="dossier-act-btn" onclick="SLOSINT.pivotToScan('${kind}','${_esc(ce.value)}')">🔄 Pivot</button>
+          </div>`;
+        });
+        uniqueHandles.forEach(h => {
+          html += `<div class="dossier-chip-row">
+            <span>@${_esc(h)}</span>
+            <button type="button" class="dossier-act-btn" onclick="SLOSINT.pivotToScan('username','${_esc(h)}')">🔄 Pivot</button>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+
+      if (breachEntities.length) {
+        html += `<div class="osint-dossier-col">
+          <div class="dossier-col-head">🕳️ Breach &amp; Dump Sources (${breachEntities.length})</div>`;
+        breachEntities.slice(0, 5).forEach(be => {
+          html += `<div class="dossier-chip-row"><span>${_esc(be.value)}</span></div>`;
+        });
+        html += `</div>`;
+      }
+
+      html += `</div></div>`;
+    }
 
     // Engine progress
     const progress = scan.progress || {};
@@ -677,22 +886,22 @@
     const sources = [...new Set(accounts.map(a => a.source))];
     const categories = [...new Set(accounts.map(a => a.category).filter(Boolean))];
 
+    const srcFilter = _accountFilter.source || 'all';
+    const catFilter = _accountFilter.category || 'all';
     let html = `<div class="osint-accounts-toolbar">
-      <select onchange="window._osintFilterSource=this.value;SLOSINT.switchTab('accounts')">
+      <select onchange="SLOSINT.switchTab('accounts')" oninput="/* sync below */" id="osintAcctSrcSel">
         <option value="all">All Sources</option>
-        ${sources.map(s => `<option value="${s}" ${_accountFilter.source === s ? 'selected' : ''}>${s}</option>`).join('')}
+        ${sources.map(s => `<option value="${s}" ${srcFilter === s ? 'selected' : ''}>${s}</option>`).join('')}
       </select>
-      <select onchange="window._osintFilterCat=this.value;SLOSINT.switchTab('accounts')">
+      <select onchange="SLOSINT.switchTab('accounts')" id="osintAcctCatSel">
         <option value="all">All Categories</option>
-        ${categories.map(c => `<option value="${c}" ${_accountFilter.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+        ${categories.map(c => `<option value="${c}" ${catFilter === c ? 'selected' : ''}>${c}</option>`).join('')}
       </select>
       <span style="font-size:0.65rem;color:var(--osint-muted);margin-left:auto">${accounts.length} total</span>
     </div>`;
 
     // Filter
     let filtered = accounts;
-    const srcFilter = window._osintFilterSource || 'all';
-    const catFilter = window._osintFilterCat || 'all';
     if (srcFilter !== 'all') filtered = filtered.filter(a => a.source === srcFilter);
     if (catFilter !== 'all') filtered = filtered.filter(a => a.category === catFilter);
 
@@ -707,6 +916,7 @@
         </div>
         <span class="acct-source">${acct.source}</span>
         <div class="acct-actions">
+          ${acct.username ? `<button onclick="SLOSINT.pivotToScan('username','${_esc(acct.username)}')" title="Pivot handle into scanner">🔄</button>` : ''}
           ${acct.url ? `<button onclick="window.open('${_esc(acct.url)}','_blank')" title="Open">↗</button>` : ''}
           <button onclick="navigator.clipboard.writeText('${_esc(acct.url || '')}');window.SL?.toast?.('Copied','success')" title="Copy">📋</button>
         </div>
@@ -729,10 +939,19 @@
 
     let html = `<div class="osint-entity-list">`;
     entities.forEach(ent => {
+      const t = String(ent.type || '').toLowerCase();
+      let actionBtn = '';
+      if (t === 'email' || t === 'phone') {
+        actionBtn = `<button type="button" class="dossier-act-btn" onclick="SLOSINT.pivotToScan('${t}','${_esc(ent.value)}')">🔄 Pivot</button>`;
+      } else if (t === 'location' || t === 'address') {
+        const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(ent.value || '')}`;
+        actionBtn = `<a href="${mapUrl}" target="_blank" rel="noopener" class="dossier-act-btn">🗺️ Map</a>`;
+      }
       html += `<div class="osint-entity-row">
         <span class="entity-type">${_esc(ent.type)}</span>
         <span class="entity-value">${_esc(ent.value)}</span>
         <span class="entity-source">${_esc(ent.module || ent.source)}</span>
+        ${actionBtn}
       </div>`;
     });
     html += `</div>`;
@@ -1040,7 +1259,8 @@
         full_name: 'Test Subject',
         usernames: (!isPhone && !isUrl && !isEmail && !isPlate) ? [target] : null,
         phone: (isPhone || engine === 'ignorant') ? target : null,
-        email: (isEmail || isUrl || engine === 'holehe' || engine === 'ghunt' || engine === 'h8mail' || engine === 'exiftool') ? target : null,
+        email: (isEmail || engine === 'holehe' || engine === 'ghunt' || engine === 'h8mail') ? target : null,
+        image_url: (isUrl || engine === 'exiftool') ? target : null,
         license_plate: (isPlate || engine === 'hibf') ? target : null,
         engines: [engine],
         deep_scan: false,

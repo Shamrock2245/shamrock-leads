@@ -109,6 +109,10 @@ class OSINTScanRequest(BaseModel):
         None,
         description="Vehicle plate for Have I Been Flocked (public Flock LE search audit logs)",
     )
+    image_url: Optional[str] = Field(
+        None,
+        description="Evidence photo URL for ExifTool GPS & camera metadata extraction",
+    )
     dob: Optional[str] = Field(None, description="Date of birth (YYYY-MM-DD)")
 
     # Engine selection — list of engines to run
@@ -120,7 +124,7 @@ class OSINTScanRequest(BaseModel):
         ),
     )
 
-    # Scan options
+    # Scan options / CLI flags
     deep_scan: bool = Field(
         False,
         description="Expand coverage (more sites for Maigret/Sherlock, more modules for SpiderFoot)",
@@ -128,6 +132,16 @@ class OSINTScanRequest(BaseModel):
     second_opinion: bool = Field(
         False,
         description="Force all username-based engines for cross-validation",
+    )
+    top_sites: Optional[int] = Field(
+        None,
+        ge=20,
+        le=1500,
+        description="Override Maigret --top-sites limit (e.g. 80, 250, 500, 800)",
+    )
+    derive_usernames: bool = Field(
+        True,
+        description="Auto-derive candidate handles from Full Legal Name when usernames are omitted",
     )
     notes: Optional[str] = Field(None, description="Admin notes for this scan request")
 

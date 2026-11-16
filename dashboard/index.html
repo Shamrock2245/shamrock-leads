@@ -5850,7 +5850,7 @@
     <div class="osint-header">
       <div class="osint-header-left">
         <h2>🕵️ OSINT Intelligence Workstation</h2>
-        <p>Multi-Engine Background Research · Defendant &amp; Indemnitor Risk Profiling · Admin Only</p>
+        <p>Fugitive Recovery &amp; Skip-Trace Command Center · 13 Engines + Trape Lure · Admin Only</p>
       </div>
       <div class="osint-header-right">
         <span class="osint-admin-badge">🔒 Admin</span>
@@ -5876,19 +5876,32 @@
       <div class="osint-left-panel">
         <!-- New Scan Card -->
         <div class="osint-card">
-          <div class="osint-card-title"><span class="icon">🔍</span> New Intelligence Scan</div>
+          <div class="osint-card-title"><span class="icon">🔍</span> New Fugitive / Skip-Trace Scan</div>
+
+          <!-- 1-Click Recovery Playbooks -->
+          <div class="osint-playbook-section">
+            <label class="osint-micro-label">1-Click Recovery Playbooks</label>
+            <div class="osint-playbook-bar">
+              <button type="button" class="osint-playbook-btn" onclick="SLOSINT.applyPlaybook('full')" title="Auto-select every engine matching the identifiers you entered">🎯 Full Skip-Trace</button>
+              <button type="button" class="osint-playbook-btn" onclick="SLOSINT.applyPlaybook('alias')" title="Maigret + Tookie + Sherlock + Blackbird + Toutatis + Instaloader">👤 Alias Hunt</button>
+              <button type="button" class="osint-playbook-btn" onclick="SLOSINT.applyPlaybook('email')" title="GHunt (Maps/GAIA) + Holehe (120+ sites) + h8mail (Breaches) + Blackbird">✉️ Email → Maps/Breaches</button>
+              <button type="button" class="osint-playbook-btn" onclick="SLOSINT.applyPlaybook('phone')" title="Ignorant (IG/Snap/Amazon) + SpiderFoot">📱 Phone Pivot</button>
+              <button type="button" class="osint-playbook-btn" onclick="SLOSINT.applyPlaybook('plate')" title="HIBF Flock LE search audit logs">🚗 Plate Audit</button>
+              <button type="button" class="osint-playbook-btn" onclick="SLOSINT.applyPlaybook('photo')" title="ExifTool GPS &amp; camera metadata extraction">📸 Photo EXIF</button>
+            </div>
+          </div>
 
           <div class="osint-form-row">
             <div class="osint-field">
               <label>Subject Type</label>
               <select id="osintSubjectType">
-                <option value="defendant">Defendant</option>
-                <option value="indemnitor">Indemnitor</option>
+                <option value="defendant">Defendant / Fugitive</option>
+                <option value="indemnitor">Indemnitor / Co-Signer</option>
               </select>
             </div>
             <div class="osint-field">
-              <label>Subject ID (optional)</label>
-              <input type="text" id="osintSubjectId" placeholder="Optional — auto-generated if blank" />
+              <label>Case / Subject ID (optional)</label>
+              <input type="text" id="osintSubjectId" placeholder="Auto-generated if blank" />
             </div>
           </div>
 
@@ -5901,7 +5914,7 @@
 
           <div class="osint-form-row full">
             <div class="osint-field">
-              <label>Known Usernames (comma-separated)</label>
+              <label>Known Usernames / Handles (comma-separated)</label>
               <input type="text" id="osintUsernames" placeholder="jsmith, john.smith239" />
             </div>
           </div>
@@ -5909,28 +5922,36 @@
           <div class="osint-form-row">
             <div class="osint-field" id="osintEmailField">
               <label>Email Address</label>
-              <input type="email" id="osintEmail" placeholder="subject@email.com" title="Holehe auto-selects: checks which sites this email is registered on" />
+              <input type="email" id="osintEmail" placeholder="subject@email.com" title="Auto-selects Holehe, h8mail, and GHunt (if logged in)" />
             </div>
             <div class="osint-field" id="osintPhoneField">
               <label>Phone Number</label>
-              <input type="tel" id="osintPhone" placeholder="+1 239-555-0100" />
+              <input type="tel" id="osintPhone" placeholder="+1 239-555-0100" title="Auto-selects Ignorant passive phone check" />
             </div>
+          </div>
+
+          <div class="osint-form-row">
             <div class="osint-field" id="osintPlateField">
-              <label>License Plate</label>
-              <input type="text" id="osintPlate" maxlength="10" placeholder="ABC1234" title="Have I Been Flocked: public Flock LE search audit logs (not a live camera hit)" autocomplete="off" />
+              <label>License Plate (HIBF)</label>
+              <input type="text" id="osintPlate" maxlength="10" placeholder="ABC1234" title="Have I Been Flocked: public Flock LE search audit logs" autocomplete="off" />
+            </div>
+            <div class="osint-field" id="osintImageUrlField">
+              <label>Evidence Image URL (ExifTool)</label>
+              <input type="url" id="osintImageUrl" placeholder="https://.../photo.jpg" title="Extracts GPS coordinates, camera model, and timestamps via ExifTool" />
             </div>
           </div>
 
           <!-- Engine Selection Chips -->
-          <div style="margin-bottom:8px">
-            <label style="font-size:0.63rem;font-weight:500;color:var(--osint-muted);text-transform:uppercase;letter-spacing:0.3px">Engines</label>
+          <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+            <label class="osint-micro-label" style="margin:0">Engines</label>
+            <span style="font-size:0.65rem;color:var(--osint-muted)">Auto-arms on matching input</span>
           </div>
           <div class="osint-engine-chips">
             <div class="osint-engine-chip active" data-engine="maigret" title="First-pass username search (top 80 sites). Enable Tookie/Sherlock only when you need a second pass."><span class="chip-dot"></span>Maigret</div>
             <div class="osint-engine-chip" data-engine="tookie" title="Tookie-OSINT V4 — second-pass username sweep. Leave off on the first search to avoid rate limits."><span class="chip-dot"></span>🚀 Tookie-OSINT</div>
             <div class="osint-engine-chip" data-engine="sherlock" title="Sherlock — second-pass username sweep. Leave off on the first search to avoid overlapping Maigret."><span class="chip-dot"></span>Sherlock</div>
-            <div class="osint-engine-chip" data-engine="blackbird"><span class="chip-dot"></span>Blackbird</div>
-            <div class="osint-engine-chip" data-engine="spiderfoot"><span class="chip-dot"></span>SpiderFoot</div>
+            <div class="osint-engine-chip" data-engine="blackbird" title="WhatsMyName fast username & email footprinting"><span class="chip-dot"></span>Blackbird</div>
+            <div class="osint-engine-chip" data-engine="spiderfoot" title="Multi-source entity correlation (email, phone, name, username)"><span class="chip-dot"></span>SpiderFoot</div>
             <div class="osint-engine-chip" data-engine="ignorant" title="Phone → Instagram / Snapchat / Amazon registration (does not message target)"><span class="chip-dot"></span>Ignorant</div>
             <div class="osint-engine-chip" data-engine="holehe" title="Email → registered accounts on 120+ sites including Instagram (does not notify target)"><span class="chip-dot"></span>Holehe</div>
             <div class="osint-engine-chip" data-engine="ghunt" title="Google email → GAIA, Maps reviews, linked services. Requires ghunt login on the worker. Not a phone ping."><span class="chip-dot"></span>GHunt</div>
@@ -5945,6 +5966,32 @@
             <label class="osint-toggle"><input type="checkbox" id="osintDeepScan" /> Deep scan</label>
             <label class="osint-toggle"><input type="checkbox" id="osintSecondOpinion" /> Second opinion</label>
           </div>
+
+          <!-- CLI Parameters & Command Preview Drawer -->
+          <details class="osint-cli-drawer">
+            <summary>⚙️ CLI Flags &amp; Command Preview</summary>
+            <div class="osint-cli-drawer-body">
+              <div class="osint-form-row">
+                <div class="osint-field">
+                  <label>Maigret <code>--top-sites</code></label>
+                  <select id="osintTopSites">
+                    <option value="">Auto (80 Quick / 800 Deep)</option>
+                    <option value="80">80 sites (Fast / Low noise)</option>
+                    <option value="250">250 sites (Standard)</option>
+                    <option value="500">500 sites (Extended)</option>
+                    <option value="800">800 sites (Full Sweep)</option>
+                  </select>
+                </div>
+                <div class="osint-field" style="justify-content:flex-end">
+                  <label class="osint-toggle" style="padding:8px 0">
+                    <input type="checkbox" id="osintDeriveUsernames" checked /> Auto-derive handles from Name
+                  </label>
+                </div>
+              </div>
+              <label class="osint-micro-label" style="margin-top:6px">Equivalent Worker CLI Execution</label>
+              <pre id="osintCliPreview" class="osint-cli-preview">maigret &lt;handle&gt; --top-sites 80 --no-recursion</pre>
+            </div>
+          </details>
 
           <div class="osint-form-row full">
             <div class="osint-field">
@@ -5998,7 +6045,7 @@
     <div class="osint-subtab-view" id="osintSubtabViewEngines" style="display:none">
       <div class="osint-card" style="margin-bottom:16px">
         <div class="osint-card-title">🧰 Engine Health &amp; Diagnostic Matrix</div>
-        <p style="font-size:0.75rem;color:var(--osint-muted);margin:0 0 16px">Real-time operational status of all 10 registered OSINT engines on Hetzner VPS (`osint-worker`).</p>
+        <p style="font-size:0.75rem;color:var(--osint-muted);margin:0 0 16px">Real-time operational status of all 13 OSINT worker engines + Trape Skip-Trace lure on Hetzner VPS (<code>osint-worker</code>).</p>
         <div class="osint-engine-matrix" id="osintEngineMatrix">
           <div class="osint-empty"><div class="empty-icon">⚙️</div><div class="empty-text">Loading engine diagnostics...</div></div>
         </div>
@@ -6011,17 +6058,19 @@
           <div class="osint-field">
             <label>Engine</label>
             <select id="osintTestEngineSelect">
-              <option value="tookie">🚀 Tookie-OSINT V4 (Rank #1)</option>
-              <option value="sherlock">🔎 Sherlock</option>
-              <option value="maigret">🕵️ Maigret</option>
-              <option value="blackbird">🐦 Blackbird</option>
-              <option value="spiderfoot">🕷️ SpiderFoot</option>
+              <option value="tookie">🚀 Tookie-OSINT V4 (Username Sweep)</option>
+              <option value="sherlock">🔎 Sherlock (Username Cross-Check)</option>
+              <option value="maigret">🕵️ Maigret (Deep Username + Bio)</option>
+              <option value="blackbird">🐦 Blackbird (Username / Email)</option>
+              <option value="spiderfoot">🕷️ SpiderFoot (Entity Correlation)</option>
               <option value="ignorant">📱 Ignorant (Phone Check)</option>
               <option value="holehe">✉️ Holehe (Email Check)</option>
-              <option value="hibf">🚘 HIBF (Flock plate audit)</option>
-              <option value="toutatis">📸 Toutatis (IG PII)</option>
-              <option value="instaloader">🖼️ Instaloader</option>
-              <option value="exiftool">🔍 ExifTool</option>
+              <option value="ghunt">🔎 GHunt (Google Maps / GAIA)</option>
+              <option value="h8mail">🕳️ h8mail (Breach / Dump Hunt)</option>
+              <option value="hibf">🚘 HIBF (Flock Plate Audit)</option>
+              <option value="toutatis">📸 Toutatis (IG Email / Phone)</option>
+              <option value="instaloader">🖼️ Instaloader (IG Bio / Avatar)</option>
+              <option value="exiftool">🔍 ExifTool (Image EXIF / GPS)</option>
             </select>
           </div>
           <div class="osint-field">
