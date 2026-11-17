@@ -70,14 +70,30 @@ def clip_body(html: str) -> str:
     return text
 
 
+def _redaction_marker(secret: str) -> str:
+    """A stand-in that does not contain ``secret``.
+
+    ``[redacted]`` is the usual marker. If the token is a substring of that
+    word (``redacted``, ``act``, ``[``), appending characters never removes the
+    match, so the marker is eight copies of a character the token does not
+    contain. The scans are bounded.
+    """
+    plain = "[redacted]"
+    if secret not in plain:
+        return plain
+    for start, stop in ((48, 58), (65, 91), (97, 123), (32, 127)):
+        for code in range(start, stop):
+            ch = chr(code)
+            if ch not in secret:
+                return ch * 8
+    return "\ufffd" * 8
+
+
 def _redact_secret(text: str, secret: str) -> str:
     """Replace ``secret`` so a stderr line cannot echo the relay token."""
-    if not secret:
+    if not secret or secret not in text:
         return text
-    marker = "[redacted]"
-    while secret in marker:
-        marker += "-"
-    return text.replace(secret, marker)
+    return text.replace(secret, _redaction_marker(secret))
 
 
 def _clipped_detail(exc: BaseException, secret: str) -> str:

@@ -514,6 +514,27 @@ def test_mac_relay_fetch_failed_logs_county_and_redacts_the_token():
     assert "[mac-relay] request" in err.splitlines()
 
 
+def test_redaction_marker_does_not_loop_when_the_token_is_inside_redacted():
+    relay = _load_relay()
+    for token in ("redacted", "act", "["):
+        marker = relay._redaction_marker(token)
+        assert token not in marker
+        cleaned = relay._redact_secret(f"before {token} after {token}", token)
+        assert token not in cleaned
+
+    token = "redacted"
+
+    def fetch(_url):
+        raise RuntimeError(f"display {token} closed")
+
+    status, payload, err = _drive_fetch(relay, "county=Sarasota&state=FL", token, fetch)
+    assert status == 502
+    assert payload == {"error": "fetch_failed", "error_type": "RuntimeError"}
+    assert "county=Sarasota" in err
+    assert "error_type=RuntimeError" in err
+    assert token not in err
+
+
 def test_mac_relay_success_logs_only_the_request_line():
     relay = _load_relay()
     token = "relay-token-success-9f3c"
