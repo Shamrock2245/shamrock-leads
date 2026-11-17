@@ -38,6 +38,7 @@ from scrapers.access_strategy import RELAY_TOKEN_ENV, relay_target  # noqa: E402
 MAX_BODY = 2_000_000
 CF_WAIT_S = 25.0
 CF_POLL_S = 0.4
+_DETAIL_MAX = 200
 _CHALLENGE_TITLES = ("just a moment", "attention required")
 Fetch = Callable[[str], Tuple[int, str]]
 
@@ -67,6 +68,68 @@ def clip_body(html: str) -> str:
     if len(text) > MAX_BODY:
         return text[:MAX_BODY]
     return text
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    """Replace ``secret`` so a stderr line cannot echo the relay token."""
+    if not secret:
+        return text
+    marker = "[redacted]"
+    while secret in marker:
+        marker += "-"
+    return text.replace(secret, marker)
+
+
+def _clipped_detail(exc: BaseException, secret: str) -> str:
+    """Exception text for stderr: token removed, newlines stripped, 200 chars."""
+    text = _redact_secret(str(exc), secret)
+    text = " ".join(text.splitlines())
+    return text[:_DETAIL_MAX]
+
+
+def _allowlisted_county(county: str, state: str) -> str:
+    """Canonical allowlisted county, or ``unknown`` so the raw query is not logged."""
+    name = " ".join(str(county or "").split())
+    state_code = " ".join(str(state or "").split()).upper()
+    if relay_target(name, state_code):
+        return name
+    return "unknown"
+
+
+def _write_stderr(line: str) -> None:
+    sys.stderr.write(line if line.endswith("\n") else line + "\n")
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def log_fetch_failed(county: str, state: str, exc: BaseException, token: str) -> None:
+    """One stderr line when ``read_allowlisted`` raises.
+
+    The line carries the allowlisted county, the exception class, and a clipped
+    detail. It does not include the token, request headers, the request line,
+    or the page body. The HTTP payload stays ``fetch_failed`` plus ``error_type``.
+    """
+    label = _redact_secret(_allowlisted_county(county, state), token)
+    error_type = _redact_secret(type(exc).__name__, token)
+    detail = _clipped_detail(exc, token)
+    _write_stderr(
+        f"[mac-relay] fetch_failed county={label} error_type={error_type} detail={detail}"
+    )
+
+
+def log_browser_worker(started: bool, exc: BaseException | None = None) -> None:
+    """One stderr line after the browser worker thread starts, or fails to."""
+    if started:
+        _write_stderr("[mac-relay] browser_worker started")
+        return
+    token = os.getenv(RELAY_TOKEN_ENV, "")
+    error_type = _redact_secret(type(exc).__name__ if exc is not None else "Exception", token)
+    detail = _clipped_detail(exc, token) if exc is not None else ""
+    _write_stderr(
+        f"[mac-relay] browser_worker failed error_type={error_type} detail={detail}"
+    )
 
 
 def read_cleared_page(page, url: str, *, timeout_s: float, sleep: Callable[[float], None]) -> Tuple[int, str]:
@@ -122,7 +185,12 @@ class HeadedBrowser:
         self._page = None
         self._jobs: queue.Queue = queue.Queue()
         self._worker = threading.Thread(target=self._run, name="mac-relay-browser", daemon=True)
-        self._worker.start()
+        try:
+            self._worker.start()
+        except Exception as exc:
+            log_browser_worker(False, exc)
+            raise
+        log_browser_worker(True)
 
     def fetch(self, url: str) -> Tuple[int, str]:
         done = threading.Event()
@@ -225,6 +293,7 @@ def make_handler(expected_token: str, fetch: Fetch):
             try:
                 status, body = read_allowlisted(county, state, fetch)
             except Exception as exc:
+                log_fetch_failed(county, state, exc, expected_token)
                 self._send(502, {"error": "fetch_failed", "error_type": type(exc).__name__})
                 return
             if status == 404 and not body:

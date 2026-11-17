@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-17 (Mac relay fetch_failed stderr)
+
+### Fixed
+- **`scripts/mac_roster_relay.py` logs why `/fetch` returned 502.** When `read_allowlisted` raises, stderr gets one line: `[mac-relay] fetch_failed county=<allowlisted county> error_type=<ExcClass> detail=<clipped>`. `detail` is `str(exc)` with the relay token removed, newlines stripped, and the rest clipped to 200 characters. The line does not include the token, request headers, the request line, or the page body. The HTTP body is still `{"error":"fetch_failed","error_type":...}`. A successful fetch still logs only `[mac-relay] request`.
+- **The browser worker is visible at startup.** After the worker thread starts, stderr gets `[mac-relay] browser_worker started`. If that thread fails to start, the line is `[mac-relay] browser_worker failed` with the exception class and the same clipped, redacted detail. Manatee and Sarasota stay `fail_closed`.
+
+### Tests
+- `tests/test_jail_access_strategy.py` (already on the CI list): the failure line has county and error_type; the token is absent from stderr when the exception text contains it; the success path logs only the bare request line.
+
 ## [Unreleased] — 2026-11-12 (Tenant scope for the iMessage SMS fallback log)
 
 ### Fixed
