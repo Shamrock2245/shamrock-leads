@@ -943,11 +943,32 @@
       try {
         const q = new URLSearchParams(location.search || '');
         const tab = (q.get('tab') || '').trim();
+        const packetId = (q.get('packet_id') || '').trim();
+        const intakeId = (q.get('intake_id') || '').trim();
         if (tab && typeof switchTab === 'function') {
           const id = tab.indexOf('tab') === 0
             ? tab
             : 'tab' + tab.charAt(0).toUpperCase() + tab.slice(1);
           switchTab(id);
+        }
+        if (packetId || intakeId) {
+          const openPacket = () => {
+            if (window.SLPaperwork && typeof window.SLPaperwork.startFromBond === 'function') {
+              window.SLPaperwork.startFromBond({
+                ...(packetId ? { packet_id: packetId } : {}),
+                ...(intakeId ? { intake_id: intakeId } : {}),
+              });
+              return true;
+            }
+            return false;
+          };
+          if (!openPacket()) {
+            let tries = 0;
+            const timer = setInterval(() => {
+              tries += 1;
+              if (openPacket() || tries >= 25) clearInterval(timer);
+            }, 120);
+          }
         }
       } catch (e) { /* ignore */ }
     },
