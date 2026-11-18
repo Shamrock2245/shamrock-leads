@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
+
+### Fixed
+- **Pytest no longer inherits live send credentials.** `tests/conftest.py` unsets Slack webhooks (`SLACK_WEBHOOK_*`, including `SLACK_WEBHOOK_LEADS` and `SLACK_WEBHOOK_URL`, plus `SLACK_BOT_TOKEN`), BlueBubbles (`BLUEBUBBLES_*` and the `BB_PASSWORD` alias), SwipeSimple live and credential variables (`SWIPESIMPLE_SESSION`, `SWIPESIMPLE_LIVE`, `SWIPESIMPLE_DISPATCH_LIVE`, `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING`, and the other SwipeSimple secrets and pay-link aliases the app reads), DocuSeal API key and URL variables, Gmail OAuth send credentials, and Twilio send credentials for every test. A test that sets one of those with `monkeypatch.setenv` still sees its own value.
+- **Pytest refuses real outbound HTTP.** `httpx.Client.send`, `httpx.AsyncClient.send`, and `requests.Session.send` raise for a non-localhost host on a real transport. `TestClient`, ASGI, and other in-process transports still run. respx or a monkeypatch of the client still replaces the guard. Production send behavior is unchanged.
+
+### Tests
+- `test_poller_marks_gmail_read_only_after_commit` clears `SLACK_WEBHOOK_LEADS` and mocks `httpx`, matching `test_clean_poller_charge_posts_leads_note_once_after_commit`.
+- `test_poller_clean_charge_makes_no_real_http_when_leads_webhook_is_set` proves a clean Gmail-poll charge does not make a real HTTP call when `SLACK_WEBHOOK_LEADS` is set in the environment.
+
 ## [Unreleased] — 2026-11-12 (Tenant scope for the iMessage SMS fallback log)
 
 ### Fixed
