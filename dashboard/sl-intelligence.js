@@ -811,150 +811,908 @@
     console.log(`[Intelligence] ${type}: ${msg}`);
   }
 
-  // ── Regional Court Intelligence Panel ───────────────────────────────────
+  // ── CourtListener v4 State & Helpers ────────────────────────────────────
+  let _courtCoverage = null;
+  let _courtAnalytics = null;
+  let _courtApiHealth = null;
+  let _courtActiveTab = 'analytics';
+  let _courtSelectedState = '';
+  let _courtScorecardMode = 'courts';
+  let _liveSearchResponse = null;
+  let _liveSearchResults = [];
+  let _liveSearchForm = {
+    q: '', preset: '', type: 'o', state: '', court: '', judge: '', filed_after: '', filed_before: '',
+  };
+  let _docketLookupResults = null;
+  let _lastDossier = null;
+
+  function escHtml(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function _dispColor(disp, cat) {
+    if (cat === 'bail_critical') return '#ef4444';
+    if (cat === 'favorable') return '#10b981';
+    if (cat === 'adverse') return '#6366f1';
+    const fallback = { bond_reduced: '#10b981', fta: '#ef4444', bond_forfeiture: '#dc2626' };
+    return fallback[disp] || '#64748b';
+  }
+
+  function _impactBadge(score) {
+    const sc = Number(score || 0);
+    const col = sc >= 80 ? '#ef4444' : sc >= 60 ? '#f59e0b' : sc >= 40 ? '#3b82f6' : '#64748b';
+    return `<span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:12px;
+      font-size:11px;font-weight:700;background:${col}22;color:${col};border:1px solid ${col}44">${sc}/100</span>`;
+  }
+
+  function _dispBadge(disp, cat) {
+    const label = (disp || 'unknown').replace(/_/g, ' ');
+    const col = _dispColor(disp, cat);
+    return `<span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:6px;
+      font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;
+      background:${col}22;color:${col};border:1px solid ${col}44">${escHtml(label)}</span>`;
+  }
+
+  // ── Regional Court Intelligence Panel (CourtListener v4) ────────────────
   async function loadCourtIntel() {
     const panel = $('intCourtIntelPanel');
     if (!panel) return;
 
+    const stateParam = _courtSelectedState ? `?state=${encodeURIComponent(_courtSelectedState)}` : '';
     try {
-      const [coverageRes, statsRes] = await Promise.all([
-        fetch('/api/court-intel/coverage').then(r => r.json()).catch(() => null),
-        fetch('/api/court-intel/stats').then(r => r.json()).catch(() => null),
+      const [coverageRes, analyticsRes, healthRes] = await Promise.all([
+        _courtCoverage ? Promise.resolve(_courtCoverage) : api('/api/court-intel/coverage'),
+        api('/api/court-intel/analytics' + stateParam),
+        api('/api/court-intel/api-health'),
       ]);
 
-      renderCourtIntel(panel, coverageRes, statsRes);
+      if (coverageRes && coverageRes.total_states) _courtCoverage = coverageRes;
+      if (analyticsRes && analyticsRes.success) _courtAnalytics = analyticsRes;
+      if (healthRes && healthRes.success) _courtApiHealth = healthRes;
+
+      renderCourtIntel(panel);
     } catch (e) {
-      panel.innerHTML = `<div style="padding:16px;color:var(--muted);text-align:center">Court intelligence unavailable</div>`;
+      panel.innerHTML = `<div style="padding:16px;color:var(--muted);text-align:center">Court intelligence unavailable: ${escHtml(e.message)}</div>`;
     }
   }
 
-  function renderCourtIntel(panel, coverage, stats) {
+  function renderCourtIntel(panel) {
+    panel = panel || $('intCourtIntelPanel');
+    if (!panel) return;
     const c = C();
-    let html = '';
 
-    // ── Coverage Map (state chips) ──────────────────────────────────────
-    if (coverage && coverage.total_states) {
-      html += `<div style="margin-bottom:16px">
-        <div style="font-size:12px;color:${c.muted};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;font-weight:600">
-          Coverage · ${coverage.total_courts} Courts · ${coverage.total_states} States
+    const tabs = [
+      { id: 'analytics', label: '📊 Analytics & Scorecards' },
+      { id: 'explorer',  label: '🔎 Live CourtListener v4 Explorer' },
+      { id: 'lookup',    label: '🗂️ Docket # & Case URL Resolver' },
+    ];
+
+    const h = _courtApiHealth || {};
+    const healthPill = h.in_maintenance
+      ? `<span style="font-size:11px;padding:3px 9px;border-radius:12px;background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b44">🛠️ FLP Maintenance</span>`
+      : h.token_configured
+        ? `<span style="font-size:11px;padding:3px 9px;border-radius:12px;background:#10b98122;color:#10b981;border:1px solid #10b98144">🟢 API Token Active</span>`
+        : `<span style="font-size:11px;padding:3px 9px;border-radius:12px;background:#3b82f622;color:#3b82f6;border:1px solid #3b82f644">🟡 Public Rate Limit</span>`;
+
+    let html = `
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;
+        margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid ${c.border}">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${tabs.map(t => `
+            <button onclick="SLIntelligence.switchCourtTab('${t.id}')"
+              class="int-range-btn ${_courtActiveTab === t.id ? 'active' : ''}"
+              style="font-size:12px;padding:6px 12px">${t.label}</button>
+          `).join('')}
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">`;
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${healthPill}
+          <button onclick="SLIntelligence.triggerIngestion()" class="int-range-btn" style="font-size:11px;padding:5px 10px"
+            title="Ingest bail-relevant opinions across all 15 covered states">🔄 Ingest 15 States</button>
+          <button onclick="SLIntelligence.triggerIngestion(['FL'])" class="int-range-btn" style="font-size:11px;padding:5px 10px"
+            title="Ingest recent Florida state &amp; federal opinions">🌴 Ingest FL</button>
+        </div>
+      </div>
+    `;
 
-      const stateColors = {
-        FL: '#10b981', GA: '#6366f1', AL: '#f59e0b', MS: '#ec4899',
-        LA: '#8b5cf6', TN: '#3b82f6', KY: '#14b8a6', NC: '#f97316',
-        SC: '#06b6d4', VA: '#a855f7', WV: '#64748b', AR: '#ef4444',
-      };
-
-      (coverage.by_state || []).forEach(s => {
-        const color = stateColors[s.state] || c.accent;
-        const total = s.state_count + s.federal_count;
-        html += `<div style="background:${color}18;border:1px solid ${color}44;border-radius:6px;
-          padding:6px 12px;font-size:12px;font-weight:600;color:${color};cursor:default"
-          title="${s.state}: ${s.state_count} state + ${s.federal_count} federal courts">
-          ${s.state} <span style="opacity:0.7;font-weight:400">${total}</span>
-        </div>`;
-      });
-      html += '</div></div>';
-    }
-
-    // ── Stats Grid ──────────────────────────────────────────────────────
-    if (stats && stats.success) {
-      html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">`;
-
-      const kpis = [
-        { label: 'Total Outcomes', value: (stats.total_outcomes || 0).toLocaleString(), icon: '📊', color: c.accent2 },
-        { label: 'Matched Defendants', value: (stats.matched_defendants || 0).toLocaleString(), icon: '🔗', color: c.accent },
-        { label: 'States Active', value: (stats.by_state || []).length, icon: '🗺️', color: '#f59e0b' },
-        { label: 'Last Ingestion', value: stats.last_ingestion ? new Date(stats.last_ingestion).toLocaleDateString() : 'Never', icon: '🕐', color: c.muted },
-      ];
-
-      kpis.forEach(k => {
-        html += `<div style="background:${c.panel};border:1px solid ${c.border};border-radius:8px;padding:12px;text-align:center">
-          <div style="font-size:18px;margin-bottom:4px">${k.icon}</div>
-          <div style="font-size:18px;font-weight:700;color:${k.color}">${k.value}</div>
-          <div style="font-size:11px;color:${c.muted};margin-top:2px">${k.label}</div>
-        </div>`;
-      });
-      html += '</div>';
-
-      // ── Disposition Breakdown ──────────────────────────────────────────
-      if (stats.by_disposition && stats.by_disposition.length > 0) {
-        html += `<div style="margin-bottom:12px">
-          <div style="font-size:12px;color:${c.muted};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;font-weight:600">Disposition Breakdown</div>`;
-
-        const dispColors = {
-          affirmed: '#10b981', conviction: '#ef4444', dismissed: '#3b82f6',
-          plea: '#f59e0b', reversed: '#8b5cf6', remanded: '#ec4899',
-          acquittal: '#14b8a6', vacated: '#64748b', denied: '#f97316', unknown: '#475569',
-        };
-        const totalDisp = stats.by_disposition.reduce((a, d) => a + d.count, 0);
-
-        stats.by_disposition.slice(0, 8).forEach(d => {
-          const pct = totalDisp > 0 ? ((d.count / totalDisp) * 100) : 0;
-          const color = dispColors[d.disposition] || c.muted;
-          html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-            <div style="width:90px;font-size:12px;color:${c.text};font-weight:500;text-transform:capitalize">${d.disposition}</div>
-            <div style="flex:1;background:${c.border}44;border-radius:4px;height:18px;overflow:hidden">
-              <div style="width:${pct}%;height:100%;background:${color};border-radius:4px;transition:width 0.6s ease"></div>
-            </div>
-            <div style="width:50px;text-align:right;font-size:11px;color:${c.muted}">${pct.toFixed(1)}%</div>
-          </div>`;
-        });
-        html += '</div>';
-      }
-
-      // ── Ingest Button ─────────────────────────────────────────────────
-      html += `<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:12px">
-        <button onclick="SLIntelligence.triggerIngestion()" class="btn-secondary" style="font-size:12px;padding:6px 14px">
-          🔄 Run Ingestion
-        </button>
-        <button onclick="SLIntelligence.triggerIngestion(['FL'])" class="btn-primary" style="font-size:12px;padding:6px 14px">
-          🌴 Florida Only
-        </button>
-      </div>`;
-    } else if (!stats || stats.total_outcomes === 0) {
-      html += `<div style="padding:20px;text-align:center;color:${c.muted}">
-        <div style="font-size:2rem;margin-bottom:8px">📡</div>
-        <div style="font-weight:600;margin-bottom:4px">No court data ingested yet</div>
-        <div style="font-size:12px;margin-bottom:12px">Click below to pull recent opinions from CourtListener</div>
-        <button onclick="SLIntelligence.triggerIngestion()" class="btn-primary" style="font-size:13px;padding:8px 20px">
-          🚀 Run First Ingestion
-        </button>
-      </div>`;
+    if (_courtActiveTab === 'analytics') {
+      html += _renderCourtAnalyticsTab(c);
+    } else if (_courtActiveTab === 'explorer') {
+      html += _renderCourtExplorerTab(c);
+    } else {
+      html += _renderCourtLookupTab(c);
     }
 
     panel.innerHTML = html;
   }
 
+  function _renderCourtAnalyticsTab(c) {
+    const a = _courtAnalytics;
+    const cov = _courtCoverage;
+    let html = '';
+
+    // State Filter Chips
+    if (cov && cov.by_state) {
+      const stateCounts = {};
+      ((a && a.by_state) || []).forEach(s => { stateCounts[s.state] = s.count; });
+      html += `<div style="margin-bottom:14px">
+        <div style="font-size:11px;color:${c.muted};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;font-weight:600">
+          Jurisdiction Filter · ${cov.total_courts} Courts · ${cov.total_states} States
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <button onclick="SLIntelligence.filterCourtState('')"
+            class="int-range-btn ${!_courtSelectedState ? 'active' : ''}" style="font-size:11px;padding:4px 10px">
+            All States
+          </button>
+          ${cov.by_state.map(s => {
+            const totalCourts = (s.state_count || 0) + (s.federal_count || 0);
+            const active = _courtSelectedState === s.state;
+            const cnt = stateCounts[s.state];
+            return `<button onclick="SLIntelligence.filterCourtState('${escHtml(s.state)}')"
+              class="int-range-btn ${active ? 'active' : ''}" style="font-size:11px;padding:4px 10px"
+              title="${escHtml(s.state)}: ${s.state_count} state + ${s.federal_count} federal courts">
+              ${escHtml(s.state)} <span style="opacity:0.7">(${totalCourts}${cnt ? ' · ' + cnt : ''})</span>
+            </button>`;
+          }).join('')}
+        </div>
+      </div>`;
+    }
+
+    if (!a || !a.success || !a.kpi || a.kpi.total_outcomes === 0) {
+      html += `<div style="padding:28px 20px;text-align:center;color:${c.muted};background:rgba(255,255,255,0.02);
+        border:1px dashed ${c.border};border-radius:12px">
+        <div style="font-size:2rem;margin-bottom:8px">📡</div>
+        <div style="font-weight:700;font-size:15px;color:${c.text};margin-bottom:6px">
+          ${_courtSelectedState ? `No court outcomes ingested yet for ${_courtSelectedState}` : 'No court outcomes ingested into local corpus yet'}
+        </div>
+        <div style="font-size:12px;margin-bottom:14px">
+          Ingest bail-relevant opinions across ${_courtSelectedState || '15 states'} or search CourtListener live right now.
+        </div>
+        <div style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap">
+          <button onclick="SLIntelligence.triggerIngestion(${_courtSelectedState ? `['${escHtml(_courtSelectedState)}']` : ''})"
+            class="btn-primary" style="font-size:12px;padding:8px 18px">🚀 Run Ingestion</button>
+          <button onclick="SLIntelligence.switchCourtTab('explorer')"
+            class="btn-secondary" style="font-size:12px;padding:8px 18px">🔎 Open Live v4 Explorer</button>
+        </div>
+      </div>`;
+      return html;
+    }
+
+    const k = a.kpi;
+    const kpiCards = [
+      { label: 'Total Outcomes', value: (k.total_outcomes || 0).toLocaleString(), sub: k.last_ingestion ? 'Updated ' + new Date(k.last_ingestion).toLocaleDateString() : 'Corpus ready', icon: '📊', color: c.accent2 },
+      { label: 'Bail-Critical', value: (k.bail_critical_count || 0).toLocaleString(), sub: `${k.bail_critical_pct || 0}% of outcomes`, icon: '🚨', color: c.danger },
+      { label: 'Avg Bail Impact', value: `${k.avg_bail_impact || 0}/100`, sub: 'Forfeiture / FTA weight', icon: '⚖️', color: c.warning },
+      { label: 'Matched Defendants', value: (k.matched_defendants || 0).toLocaleString(), sub: 'Linked to arrest leads', icon: '🔗', color: c.accent },
+      { label: 'Active Coverage', value: `${k.active_states || 0} / ${k.unique_courts || 0}`, sub: 'States / Unique Courts', icon: '🗺️', color: c.info },
+      { label: 'Judges Indexed', value: (k.unique_judges || 0).toLocaleString(), sub: 'Scorecards tracked', icon: '👨‍⚖️', color: c.purple },
+    ];
+
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:18px">
+      ${kpiCards.map(card => `
+        <div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:12px">
+          <div style="font-size:11px;color:${c.muted};font-weight:600;text-transform:uppercase;letter-spacing:0.04em">${card.icon} ${card.label}</div>
+          <div style="font-size:20px;font-weight:800;color:${card.color};margin:4px 0 2px">${card.value}</div>
+          <div style="font-size:11px;color:${c.muted}">${escHtml(card.sub)}</div>
+        </div>
+      `).join('')}
+    </div>`;
+
+    // Two-column visual analytics
+    html += `<div class="int-grid-2" style="margin-bottom:18px">`;
+
+    // Col 1: Disposition Breakdown
+    html += `<div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-size:12px;font-weight:700;text-transform:uppercase;color:${c.muted}">Disposition &amp; Bail Risk Distribution</span>
+        <span style="font-size:10px;color:${c.muted}">Click bar to search</span>
+      </div>`;
+    if (a.by_disposition && a.by_disposition.length > 0) {
+      a.by_disposition.slice(0, 10).forEach(d => {
+        const col = _dispColor(d.disposition, d.category);
+        const label = (d.disposition || 'unknown').replace(/_/g, ' ');
+        html += `<div onclick="SLIntelligence.exploreDisposition('${escHtml(d.disposition)}')"
+          style="display:flex;align-items:center;gap:8px;margin-bottom:7px;cursor:pointer" title="Explore ${escHtml(label)} in CourtListener">
+          <div style="width:118px;font-size:11px;color:${c.text};font-weight:600;text-transform:capitalize;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(label)}</div>
+          <div style="flex:1;background:${c.border}44;border-radius:4px;height:16px;overflow:hidden">
+            <div style="width:${Math.max(d.pct, 2)}%;height:100%;background:${col};border-radius:4px;transition:width 0.5s ease"></div>
+          </div>
+          <div style="width:62px;text-align:right;font-size:11px;color:${c.muted}">${d.count} (${d.pct}%)</div>
+        </div>`;
+      });
+    } else {
+      html += `<div style="color:${c.muted};font-size:12px;padding:12px 0">No classified dispositions yet.</div>`;
+    }
+    html += `</div>`;
+
+    // Col 2: Court / Judge Bail Scorecard
+    html += `<div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
+        <span style="font-size:12px;font-weight:700;text-transform:uppercase;color:${c.muted}">Court &amp; Judge Bail Scorecard</span>
+        <div style="display:flex;gap:4px">
+          <button onclick="SLIntelligence.setCourtScorecardMode('courts')" class="int-range-btn ${_courtScorecardMode === 'courts' ? 'active' : ''}" style="font-size:10px;padding:3px 8px">Courts</button>
+          <button onclick="SLIntelligence.setCourtScorecardMode('judges')" class="int-range-btn ${_courtScorecardMode === 'judges' ? 'active' : ''}" style="font-size:10px;padding:3px 8px">Judges</button>
+        </div>
+      </div>`;
+    if (_courtScorecardMode === 'judges') {
+      const judges = a.by_judge || [];
+      if (judges.length === 0) {
+        html += `<div style="color:${c.muted};font-size:12px;padding:12px 0">No judge metadata populated in current filter.</div>`;
+      } else {
+        html += `<div style="max-height:245px;overflow-y:auto;display:flex;flex-direction:column;gap:6px">
+          ${judges.map(j => `
+            <div onclick="SLIntelligence.exploreJudge('${escHtml(j.judge)}')"
+              style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-radius:7px;
+              background:rgba(255,255,255,0.02);border:1px solid ${c.border};cursor:pointer;font-size:12px"
+              title="Search CourtListener cases for Judge ${escHtml(j.judge)}">
+              <div style="min-width:0">
+                <div style="font-weight:600;color:${c.text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(j.judge)}</div>
+                <div style="font-size:10px;color:${c.muted}">${j.count} cases · ${j.favorable} fav / ${j.adverse} adv</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                ${j.bail_critical > 0 ? `<span style="font-size:10px;color:#ef4444;font-weight:700">${j.bail_critical} crit</span>` : ''}
+                ${_impactBadge(j.avg_impact)}
+              </div>
+            </div>
+          `).join('')}
+        </div>`;
+      }
+    } else {
+      const courts = a.by_court || [];
+      if (courts.length === 0) {
+        html += `<div style="color:${c.muted};font-size:12px;padding:12px 0">No courts in current filter.</div>`;
+      } else {
+        html += `<div style="max-height:245px;overflow-y:auto;display:flex;flex-direction:column;gap:6px">
+          ${courts.map(ct => `
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;border-radius:7px;
+              background:rgba(255,255,255,0.02);border:1px solid ${c.border};font-size:12px">
+              <div style="min-width:0">
+                <div style="font-weight:600;color:${c.text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  <span style="color:${c.accent};margin-right:4px">${escHtml(ct.state || '')}</span>${escHtml(ct.court_name)}
+                </div>
+                <div style="font-size:10px;color:${c.muted}">${ct.count} opinions · ${ct.forfeiture_fta_count || 0} forfeiture/FTA</div>
+              </div>
+              <span style="font-size:11px;font-weight:700;color:${ct.bail_critical > 0 ? '#ef4444' : c.muted};flex-shrink:0">
+                ${ct.bail_critical} bail-crit
+              </span>
+            </div>
+          `).join('')}
+        </div>`;
+      }
+    }
+    html += `</div></div>`;
+
+    // Monthly Trend Strip
+    if (a.monthly_trend && a.monthly_trend.length > 0) {
+      const maxM = Math.max(...a.monthly_trend.map(m => m.total), 1);
+      html += `<div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:14px;margin-bottom:18px">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;color:${c.muted};margin-bottom:10px">
+          📅 Filing Timeline (Last ${a.monthly_trend.length} Months)
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:8px;height:78px;padding-top:8px">
+          ${a.monthly_trend.map(m => {
+            const hPct = Math.max(Math.round((m.total / maxM) * 100), 10);
+            const critPct = m.total > 0 ? Math.round((m.bail_critical / m.total) * 100) : 0;
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:26px"
+              title="${escHtml(m.month)}: ${m.total} total, ${m.bail_critical} bail-critical">
+              <div style="font-size:10px;color:${c.text};font-weight:700">${m.total}</div>
+              <div style="width:100%;max-width:28px;height:42px;display:flex;align-items:flex-end;background:${c.border}33;border-radius:4px;overflow:hidden">
+                <div style="width:100%;height:${hPct}%;background:linear-gradient(180deg,${critPct > 30 ? '#ef4444' : '#6366f1'},#3b82f6);border-radius:4px 4px 0 0"></div>
+              </div>
+              <div style="font-size:9px;color:${c.muted}">${escHtml(m.month.slice(2))}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    }
+
+    // Top Bail Precedents Table
+    const precedents = a.top_precedents || [];
+    html += `<div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <span style="font-size:12px;font-weight:700;text-transform:uppercase;color:${c.muted}">⭐ Highest-Impact Bail Precedents</span>
+        <span style="font-size:11px;color:${c.muted}">Top ${precedents.length} scored cases</span>
+      </div>`;
+    if (precedents.length === 0) {
+      html += `<div style="color:${c.muted};font-size:12px">No scored precedents yet.</div>`;
+    } else {
+      html += `<div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="border-bottom:1px solid ${c.border};color:${c.muted};font-size:10px;text-transform:uppercase;text-align:left">
+              <th style="padding:8px 6px">Case Name</th>
+              <th style="padding:8px 6px">Court</th>
+              <th style="padding:8px 6px">Docket #</th>
+              <th style="padding:8px 6px">Filed</th>
+              <th style="padding:8px 6px">Disposition</th>
+              <th style="padding:8px 6px">Impact</th>
+              <th style="padding:8px 6px;text-align:right">Inspect</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${precedents.map((p, idx) => `
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.04)">
+                <td style="padding:8px 6px;font-weight:600;color:${c.text};max-width:260px">
+                  <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(p.case_name)}">${escHtml(p.case_name)}</div>
+                  ${p.matched_defendant_name ? `<div style="font-size:10px;color:${c.accent}">🔗 Match: ${escHtml(p.matched_defendant_name)}</div>` : ''}
+                </td>
+                <td style="padding:8px 6px;color:${c.muted}">${escHtml(p.court_name || p.court_id || '—')}</td>
+                <td style="padding:8px 6px;font-family:monospace;color:${c.text}">${escHtml(p.docket_number || '—')}</td>
+                <td style="padding:8px 6px;color:${c.muted};white-space:nowrap">${escHtml(p.date_filed || '—')}</td>
+                <td style="padding:8px 6px">${_dispBadge(p.disposition, p.disposition_category)}</td>
+                <td style="padding:8px 6px">${_impactBadge((p.bail_impact || {}).score)}</td>
+                <td style="padding:8px 6px;text-align:right">
+                  <button onclick="SLIntelligence.openCaseDossier('${escHtml(String(p.cluster_id || p.source_id || ''))}')"
+                    class="int-range-btn" style="font-size:11px;padding:3px 9px">📖 Dossier</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    }
+    html += `</div>`;
+    return html;
+  }
+
+  function _renderCourtExplorerTab(c) {
+    const presets = (_courtCoverage && _courtCoverage.presets) || (_courtAnalytics && _courtAnalytics.presets) || [];
+    const states = (_courtCoverage && _courtCoverage.states) || [];
+    const selectedState = _liveSearchForm.state || '';
+    let courtsForDropdown = [];
+    if (_courtCoverage && _courtCoverage.by_state) {
+      _courtCoverage.by_state.forEach(s => {
+        if (!selectedState || s.state === selectedState || s.state === 'MULTI') {
+          (s.courts || []).forEach(ct => courtsForDropdown.push(ct));
+        }
+      });
+    }
+
+    let html = '';
+
+    // 1-Click Bail Law Presets
+    if (presets.length > 0) {
+      html += `<div style="margin-bottom:14px">
+        <div style="font-size:11px;color:${c.muted};text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;font-weight:600">
+          ⚡ 1-Click Bail Law Presets
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${presets.map(p => `
+            <button onclick="SLIntelligence.applyCourtPreset('${escHtml(p.key)}')"
+              class="int-range-btn ${_liveSearchForm.preset === p.key ? 'active' : ''}"
+              style="font-size:11px;padding:5px 10px">${escHtml(p.label)}</button>
+          `).join('')}
+        </div>
+      </div>`;
+    }
+
+    // Live Search Form
+    const inputStyle = `padding:7px 10px;border-radius:7px;border:1px solid ${c.border};background:rgba(15,23,42,0.65);color:${c.text};font-size:12px;width:100%;box-sizing:border-box`;
+    html += `<div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:14px;margin-bottom:16px">
+      <div style="display:grid;grid-template-columns:2fr 1.2fr 1fr 1.3fr;gap:10px;margin-bottom:10px">
+        <div>
+          <label style="display:block;font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">Search Query / Boolean Terms</label>
+          <input id="clLiveQuery" type="text" value="${escHtml(_liveSearchForm.q)}"
+            placeholder='e.g. "bond forfeiture" OR "failure to appear"' style="${inputStyle}"
+            onkeydown="if(event.key==='Enter')SLIntelligence.runCourtLiveSearch()">
+        </div>
+        <div>
+          <label style="display:block;font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">API Endpoint Type</label>
+          <select id="clLiveType" style="${inputStyle}">
+            <option value="o" ${_liveSearchForm.type === 'o' ? 'selected' : ''}>Case Law Opinions (type=o)</option>
+            <option value="r" ${_liveSearchForm.type === 'r' ? 'selected' : ''}>RECAP Federal Dockets (type=r)</option>
+            <option value="d" ${_liveSearchForm.type === 'd' ? 'selected' : ''}>PACER Dockets (type=d)</option>
+            <option value="p" ${_liveSearchForm.type === 'p' ? 'selected' : ''}>Judges &amp; People (type=p)</option>
+            <option value="oa" ${_liveSearchForm.type === 'oa' ? 'selected' : ''}>Oral Arguments (type=oa)</option>
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">State</label>
+          <select id="clLiveState" style="${inputStyle}" onchange="SLIntelligence.onExplorerStateChange(this.value)">
+            <option value="">All Covered States</option>
+            ${states.map(st => `<option value="${escHtml(st)}" ${selectedState === st ? 'selected' : ''}>${escHtml(st)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="display:block;font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">Court</label>
+          <select id="clLiveCourt" style="${inputStyle}">
+            <option value="">All Courts in Selection</option>
+            ${courtsForDropdown.map(ct => `<option value="${escHtml(ct.id)}" ${_liveSearchForm.court === ct.id ? 'selected' : ''}>${escHtml(ct.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:end">
+        <div>
+          <label style="display:block;font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">Judge Filter</label>
+          <input id="clLiveJudge" type="text" value="${escHtml(_liveSearchForm.judge)}" placeholder="Judge last name (optional)" style="${inputStyle}"
+            onkeydown="if(event.key==='Enter')SLIntelligence.runCourtLiveSearch()">
+        </div>
+        <div>
+          <label style="display:block;font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">Filed After</label>
+          <input id="clLiveAfter" type="date" value="${escHtml(_liveSearchForm.filed_after)}" style="${inputStyle}">
+        </div>
+        <div>
+          <label style="display:block;font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">Filed Before</label>
+          <input id="clLiveBefore" type="date" value="${escHtml(_liveSearchForm.filed_before)}" style="${inputStyle}">
+        </div>
+        <button id="clLiveSearchBtn" onclick="SLIntelligence.runCourtLiveSearch()" class="btn-primary" style="font-size:12px;padding:8px 16px;white-space:nowrap">
+          🔍 Run Live v4 Search
+        </button>
+      </div>
+    </div>`;
+
+    // Live Search Results + On-the-Fly Analytics Banner
+    if (_liveSearchResponse) {
+      if (!_liveSearchResponse.success) {
+        html += `<div style="padding:14px;border-radius:8px;border:1px solid #ef444444;background:#ef444415;color:#ef4444;font-size:12px">
+          ⚠️ Live Search Error: ${escHtml(_liveSearchResponse.error || 'Unknown error')}
+        </div>`;
+      } else {
+        const an = _liveSearchResponse.analytics || {};
+        html += `<div style="background:linear-gradient(135deg,rgba(99,102,241,0.08),rgba(16,185,129,0.05));
+          border:1px solid ${c.border};border-radius:10px;padding:12px 14px;margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+            <div style="font-size:12px;font-weight:700;color:${c.text}">
+              📈 Live Result Analytics · ${(_liveSearchResponse.count || 0).toLocaleString()} total matches (analyzing top ${_liveSearchResults.length})
+            </div>
+            <div style="display:flex;gap:12px;font-size:11px;color:${c.muted}">
+              <span>Bail-Critical: <strong style="color:#ef4444">${an.bail_critical_pct || 0}%</strong></span>
+              <span>Avg Impact: <strong style="color:${c.warning}">${an.avg_bail_impact || 0}/100</strong></span>
+              <span>Total Citations: <strong style="color:${c.accent}">${(an.total_citations || 0).toLocaleString()}</strong></span>
+            </div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${(an.by_disposition || []).slice(0, 6).map(d => `
+              <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(255,255,255,0.04);
+                border:1px solid ${c.border};color:${c.text}">
+                ${escHtml(d.disposition.replace(/_/g, ' '))}: <strong>${d.count}</strong>
+              </span>
+            `).join('')}
+            ${(an.by_court || []).slice(0, 3).map(ct => `
+              <span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(99,102,241,0.12);
+                border:1px solid #6366f144;color:#a5b4fc">
+                🏛️ ${escHtml(ct.court)}: <strong>${ct.count}</strong>
+              </span>
+            `).join('')}
+          </div>
+        </div>`;
+
+        if (_liveSearchResults.length === 0) {
+          html += `<div style="padding:24px;text-align:center;color:${c.muted};font-size:12px">No matching records returned by CourtListener. Try broader keywords or remove date bounds.</div>`;
+        } else {
+          html += `<div style="display:flex;flex-direction:column;gap:10px">
+            ${_liveSearchResults.map((r, idx) => `
+              <div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:12px 14px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+                  <div style="min-width:0;flex:1">
+                    <div style="font-size:14px;font-weight:700;color:${c.text}">${escHtml(r.case_name)}</div>
+                    <div style="font-size:11px;color:${c.muted};margin-top:2px;display:flex;flex-wrap:wrap;gap:8px">
+                      <span>🏛️ ${escHtml(r.court_name || r.court_id || 'Court')}</span>
+                      ${r.docket_number ? `<span style="font-family:monospace">📁 ${escHtml(r.docket_number)}</span>` : ''}
+                      ${r.date_filed ? `<span>📅 ${escHtml(r.date_filed)}</span>` : ''}
+                      ${r.judges ? `<span>👨‍⚖️ ${escHtml(r.judges)}</span>` : ''}
+                      ${r.citation_count ? `<span>📚 ${r.citation_count} cites</span>` : ''}
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                    ${_dispBadge(r.disposition, r.disposition_category)}
+                    ${_impactBadge((r.bail_impact || {}).score)}
+                  </div>
+                </div>
+                ${r.snippet ? `<div style="font-size:12px;color:${c.muted};line-height:1.45;margin-bottom:10px">${escHtml(r.snippet)}</div>` : ''}
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  ${r.search_type !== 'p' ? `
+                    <button onclick="SLIntelligence.openCaseDossier('${escHtml(String(r.cluster_id || r.source_id || ''))}', ${idx})"
+                      class="int-range-btn" style="font-size:11px;padding:4px 10px">📖 Full Dossier</button>
+                    <button id="clSaveBtn-${idx}" onclick="SLIntelligence.saveCourtCase(${idx})"
+                      class="int-range-btn" style="font-size:11px;padding:4px 10px">📥 Save to Corpus</button>
+                  ` : ''}
+                  ${r.absolute_url ? `
+                    <a href="https://www.courtlistener.com${escHtml(r.absolute_url)}" target="_blank" rel="noopener noreferrer"
+                      style="font-size:11px;color:${c.info};text-decoration:none;margin-left:auto">↗ Open on CourtListener</a>
+                  ` : ''}
+                </div>
+              </div>
+            `).join('')}
+          </div>`;
+        }
+      }
+    } else {
+      html += `<div style="padding:20px;text-align:center;color:${c.muted};font-size:12px;border:1px dashed ${c.border};border-radius:10px">
+        Select a bail preset above or enter a custom query / court / judge filter to run live analytics directly against CourtListener REST API v4.
+      </div>`;
+    }
+
+    return html;
+  }
+
+  function _renderCourtLookupTab(c) {
+    const states = (_courtCoverage && _courtCoverage.states) || [];
+    const inputStyle = `padding:7px 10px;border-radius:7px;border:1px solid ${c.border};background:rgba(15,23,42,0.65);color:${c.text};font-size:12px;width:100%;box-sizing:border-box`;
+
+    let lookupHtml = '';
+    if (_docketLookupResults) {
+      if (!_docketLookupResults.success) {
+        lookupHtml = `<div style="margin-top:12px;color:#ef4444;font-size:12px">⚠️ ${escHtml(_docketLookupResults.error)}</div>`;
+      } else {
+        const dockets = _docketLookupResults.dockets || [];
+        const clusters = _docketLookupResults.clusters || [];
+        const hits = _docketLookupResults.search_hits || [];
+        lookupHtml = `<div style="margin-top:14px;display:flex;flex-direction:column;gap:10px">
+          <div style="font-size:11px;color:${c.muted};font-weight:700">
+            Found ${dockets.length} Dockets · ${clusters.length} Clusters · ${hits.length} Search Hits
+          </div>
+          ${clusters.map(cl => `
+            <div style="padding:10px;border-radius:8px;border:1px solid ${c.border};background:rgba(255,255,255,0.02);display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <div>
+                <div style="font-size:12px;font-weight:700;color:${c.text}">${escHtml(cl.case_name || 'Cluster #' + cl.cluster_id)}</div>
+                <div style="font-size:11px;color:${c.muted}">Filed ${escHtml(cl.date_filed || '—')} · ${cl.citation_count || 0} cites</div>
+              </div>
+              <button onclick="SLIntelligence.openCaseDossier('${escHtml(String(cl.cluster_id))}')" class="int-range-btn" style="font-size:11px;padding:4px 10px">📖 Full Dossier</button>
+            </div>
+          `).join('')}
+          ${dockets.map(d => `
+            <div style="padding:10px;border-radius:8px;border:1px solid ${c.border};background:rgba(255,255,255,0.02);font-size:12px">
+              <div style="font-weight:700;color:${c.text}">${escHtml(d.case_name || d.docket_number)}</div>
+              <div style="font-size:11px;color:${c.muted}">🏛️ ${escHtml(d.court_name)} · 📁 ${escHtml(d.docket_number)} · Judge: ${escHtml(d.assigned_to_str || '—')}</div>
+              ${d.cause || d.nature_of_suit ? `<div style="font-size:11px;color:${c.muted};margin-top:2px">${escHtml(d.cause)} ${escHtml(d.nature_of_suit)}</div>` : ''}
+            </div>
+          `).join('')}
+          ${hits.slice(0, 5).map(h => `
+            <div style="padding:10px;border-radius:8px;border:1px solid ${c.border};background:rgba(255,255,255,0.02);display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <div>
+                <div style="font-size:12px;font-weight:600;color:${c.text}">${escHtml(h.case_name)}</div>
+                <div style="font-size:11px;color:${c.muted}">${escHtml(h.court_name)} · ${escHtml(h.docket_number || '')} · ${escHtml(h.date_filed || '')}</div>
+              </div>
+              <button onclick="SLIntelligence.openCaseDossier('${escHtml(String(h.cluster_id || h.source_id || ''))}')" class="int-range-btn" style="font-size:11px;padding:4px 10px">📖 Dossier</button>
+            </div>
+          `).join('')}
+        </div>`;
+      }
+    }
+
+    return `<div class="int-grid-2">
+      <div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:16px">
+        <div style="font-size:13px;font-weight:700;color:${c.text};margin-bottom:6px">📁 Lookup by Docket Number</div>
+        <div style="font-size:11px;color:${c.muted};margin-bottom:12px">
+          Queries <code>/dockets/?docket_number=</code>, <code>/clusters/?docket__docket_number=</code>, and fuzzy docket search simultaneously.
+        </div>
+        <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:8px;margin-bottom:10px">
+          <input id="clDocketNumInput" type="text" placeholder="e.g. 23A994 or 2D23-1234" style="${inputStyle}"
+            onkeydown="if(event.key==='Enter')SLIntelligence.runDocketLookup()">
+          <select id="clDocketState" style="${inputStyle}">
+            <option value="">Any State</option>
+            ${states.map(st => `<option value="${escHtml(st)}">${escHtml(st)}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="clDocketCourt" type="text" placeholder="Optional court ID (e.g. flsd, fladistctapp_2)" style="${inputStyle}">
+          <button onclick="SLIntelligence.runDocketLookup()" class="btn-primary" style="font-size:12px;padding:7px 14px;white-space:nowrap">🔍 Lookup</button>
+        </div>
+        <div id="clDocketLookupResults">${lookupHtml}</div>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.02);border:1px solid ${c.border};border-radius:10px;padding:16px">
+        <div style="font-size:13px;font-weight:700;color:${c.text};margin-bottom:6px">🔗 Inspect Case by URL or Cluster ID</div>
+        <div style="font-size:11px;color:${c.muted};margin-bottom:12px">
+          Follows the v4 hierarchy (<strong>Cluster → Docket → Opinion</strong> with <code>html_with_citations</code> &amp; citation graph) for any CourtListener link or ID.
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px">
+          <input id="clUrlInput" type="text" placeholder="https://www.courtlistener.com/opinion/2812209/... or 2812209" style="${inputStyle}"
+            onkeydown="if(event.key==='Enter')SLIntelligence.openCaseDossierFromInput()">
+          <button onclick="SLIntelligence.openCaseDossierFromInput()" class="btn-primary" style="font-size:12px;padding:7px 14px;white-space:nowrap">📖 Load Dossier</button>
+        </div>
+        <div style="font-size:11px;color:${c.muted};line-height:1.5;background:rgba(255,255,255,0.02);padding:10px;border-radius:8px;border:1px solid ${c.border}">
+          <strong>Pro Tip:</strong> Paste any CourtListener case link from an attorney brief or Slack alert. ShamrockLeads resolves the Cluster ID, extracts the Docket filing/termination dates and judge assignment, pulls the opinion text, and auto-scores forfeiture / FTA signals.
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function switchCourtTab(tabId) {
+    _courtActiveTab = tabId || 'analytics';
+    renderCourtIntel();
+  }
+
+  async function filterCourtState(st) {
+    _courtSelectedState = st || '';
+    await loadCourtIntel();
+  }
+
+  function setCourtScorecardMode(mode) {
+    _courtScorecardMode = mode === 'judges' ? 'judges' : 'courts';
+    renderCourtIntel();
+  }
+
+  function onExplorerStateChange(st) {
+    _liveSearchForm.state = st || '';
+    _liveSearchForm.court = '';
+    renderCourtIntel();
+  }
+
+  function exploreDisposition(disp) {
+    const queryMap = {
+      bond_forfeiture: '"bond forfeiture" OR estreat',
+      fta: '"failure to appear" OR "bench warrant"',
+      bond_revoked: '"revoke bond" OR "bond revocation"',
+      bond_reduced: '"bond reduced" OR "reduce bond"',
+      bond_increased: '"bond increased" OR "increase bond"',
+      probation_violation: '"violation of probation"',
+      pretrial_order: '"pretrial detention" OR "pretrial release"',
+    };
+    _courtActiveTab = 'explorer';
+    _liveSearchForm.q = queryMap[disp] || disp.replace(/_/g, ' ');
+    _liveSearchForm.preset = '';
+    _liveSearchForm.type = 'o';
+    renderCourtIntel();
+    runCourtLiveSearch();
+  }
+
+  function exploreJudge(judgeName) {
+    _courtActiveTab = 'explorer';
+    _liveSearchForm.judge = judgeName || '';
+    _liveSearchForm.q = '';
+    _liveSearchForm.type = 'o';
+    renderCourtIntel();
+    runCourtLiveSearch();
+  }
+
+  function applyCourtPreset(presetKey) {
+    const presets = (_courtCoverage && _courtCoverage.presets) || (_courtAnalytics && _courtAnalytics.presets) || [];
+    const found = presets.find(p => p.key === presetKey);
+    if (!found) return;
+    _liveSearchForm.preset = presetKey;
+    _liveSearchForm.q = found.query || '';
+    _liveSearchForm.type = found.type || 'o';
+    renderCourtIntel();
+    runCourtLiveSearch();
+  }
+
+  async function runCourtLiveSearch() {
+    const qEl = $('clLiveQuery');
+    const tEl = $('clLiveType');
+    const sEl = $('clLiveState');
+    const cEl = $('clLiveCourt');
+    const jEl = $('clLiveJudge');
+    const aEl = $('clLiveAfter');
+    const bEl = $('clLiveBefore');
+
+    if (qEl) _liveSearchForm.q = qEl.value;
+    if (tEl) _liveSearchForm.type = tEl.value;
+    if (sEl) _liveSearchForm.state = sEl.value;
+    if (cEl) _liveSearchForm.court = cEl.value;
+    if (jEl) _liveSearchForm.judge = jEl.value;
+    if (aEl) _liveSearchForm.filed_after = aEl.value;
+    if (bEl) _liveSearchForm.filed_before = bEl.value;
+
+    const btn = $('clLiveSearchBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Searching...'; }
+
+    const qs = new URLSearchParams();
+    if (_liveSearchForm.q) qs.set('q', _liveSearchForm.q);
+    if (_liveSearchForm.preset && !_liveSearchForm.q) qs.set('preset', _liveSearchForm.preset);
+    if (_liveSearchForm.type) qs.set('type', _liveSearchForm.type);
+    if (_liveSearchForm.state) qs.set('state', _liveSearchForm.state);
+    if (_liveSearchForm.court) qs.set('court', _liveSearchForm.court);
+    if (_liveSearchForm.judge) qs.set('judge', _liveSearchForm.judge);
+    if (_liveSearchForm.filed_after) qs.set('filed_after', _liveSearchForm.filed_after);
+    if (_liveSearchForm.filed_before) qs.set('filed_before', _liveSearchForm.filed_before);
+
+    const res = await api('/api/court-intel/live-search?' + qs.toString());
+    _liveSearchResponse = res;
+    _liveSearchResults = (res && res.success && res.results) ? res.results : [];
+    renderCourtIntel();
+  }
+
+  async function runDocketLookup() {
+    const dEl = $('clDocketNumInput');
+    const sEl = $('clDocketState');
+    const cEl = $('clDocketCourt');
+    const docketNumber = dEl ? dEl.value.trim() : '';
+    if (!docketNumber) {
+      showToast('Enter a docket number to search', 'error');
+      return;
+    }
+    const qs = new URLSearchParams({ docket_number: docketNumber });
+    if (sEl && sEl.value) qs.set('state', sEl.value);
+    if (cEl && cEl.value.trim()) qs.set('court', cEl.value.trim());
+
+    const container = $('clDocketLookupResults');
+    if (container) container.innerHTML = `<div style="padding:12px;color:var(--muted)"><span class="spinner-sm"></span> Resolving Docket &amp; Clusters...</div>`;
+
+    _docketLookupResults = await api('/api/court-intel/docket-lookup?' + qs.toString());
+    renderCourtIntel();
+  }
+
+  function openCaseDossierFromInput() {
+    const inp = $('clUrlInput');
+    const val = inp ? inp.value.trim() : '';
+    if (!val) {
+      showToast('Paste a CourtListener opinion URL or Cluster ID', 'error');
+      return;
+    }
+    openCaseDossier(val);
+  }
+
+  async function openCaseDossier(target, liveIdx) {
+    const modal = $('intCaseDossierModal');
+    const titleEl = $('intDossierTitle');
+    const bodyEl = $('intDossierBody');
+    const footerEl = $('intDossierFooter');
+    if (!modal || !bodyEl) return;
+
+    modal.classList.add('show');
+    if (titleEl) titleEl.textContent = '📖 Loading Case Law Dossier...';
+    bodyEl.innerHTML = `<div style="padding:36px;text-align:center;color:var(--muted)"><span class="spinner-sm"></span> Resolving Court → Docket → Cluster → Opinion...</div>`;
+
+    const val = String(target || '').trim();
+    const paramKey = val.includes('/') ? 'url' : 'cluster_id';
+    const res = await api(`/api/court-intel/case-dossier?${paramKey}=${encodeURIComponent(val)}`);
+
+    if (!res || !res.success || !res.dossier) {
+      if (titleEl) titleEl.textContent = '⚠️ Dossier Unavailable';
+      bodyEl.innerHTML = `<div style="padding:20px;color:#ef4444">${escHtml((res && res.error) || 'Could not load case dossier')}</div>`;
+      return;
+    }
+
+    const d = res.dossier;
+    _lastDossier = d;
+    const c = C();
+    if (titleEl) titleEl.textContent = `📖 ${d.case_name}`;
+
+    const dck = d.docket || {};
+    const cl = d.cluster || {};
+    const op = d.opinion || {};
+    const ct = d.court || {};
+
+    let bodyHtml = '';
+    if (res.offline_fallback) {
+      bodyHtml += `<div style="margin-bottom:12px;padding:8px 12px;border-radius:8px;background:#f59e0b22;border:1px solid #f59e0b44;color:#f59e0b;font-size:12px">
+        Showing cached local corpus summary (live CourtListener detail unavailable: ${escHtml(res.warning || '')})
+      </div>`;
+    }
+
+    bodyHtml += `
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          ${_dispBadge(d.disposition, d.disposition_category)}
+          ${_impactBadge((d.bail_impact || {}).score)}
+          <span style="font-size:12px;color:${c.muted}">🏛️ ${escHtml(ct.name || ct.id || 'Court')} (${escHtml(ct.state || '—')})</span>
+        </div>
+        ${d.absolute_url ? `<a href="https://www.courtlistener.com${escHtml(d.absolute_url)}" target="_blank" rel="noopener noreferrer"
+          style="font-size:12px;color:${c.info}">↗ View on CourtListener</a>` : ''}
+      </div>
+
+      ${(d.bail_impact && d.bail_impact.factors && d.bail_impact.factors.length) ? `
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">
+          ${d.bail_impact.factors.map(f => `<span style="font-size:11px;padding:2px 8px;border-radius:6px;background:rgba(99,102,241,0.12);color:#a5b4fc">${escHtml(f)}</span>`).join('')}
+        </div>` : ''}
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:14px">
+        <div style="padding:10px;border-radius:8px;border:1px solid ${c.border};background:rgba(255,255,255,0.02);font-size:12px">
+          <div style="font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">Docket Metadata</div>
+          <div><strong>Docket #:</strong> ${escHtml(dck.docket_number || '—')}</div>
+          <div><strong>Filed:</strong> ${escHtml(dck.date_filed || '—')}</div>
+          <div><strong>Terminated:</strong> ${escHtml(dck.date_terminated || 'Open/Unset')}</div>
+          <div><strong>Assigned Judge:</strong> ${escHtml(dck.assigned_to_str || cl.judges || '—')}</div>
+        </div>
+        <div style="padding:10px;border-radius:8px;border:1px solid ${c.border};background:rgba(255,255,255,0.02);font-size:12px">
+          <div style="font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">Cluster &amp; Citations</div>
+          <div><strong>Status:</strong> ${escHtml(cl.precedential_status || '—')}</div>
+          <div><strong>Cited By:</strong> ${cl.citation_count || 0} decisions</div>
+          <div><strong>Citations:</strong> ${escHtml((cl.citations || []).join(', ') || '—')}</div>
+          <div><strong>Cause / Suit:</strong> ${escHtml(dck.cause || dck.nature_of_suit || '—')}</div>
+        </div>
+        <div style="padding:10px;border-radius:8px;border:1px solid ${c.border};background:rgba(255,255,255,0.02);font-size:12px">
+          <div style="font-size:10px;color:${c.muted};text-transform:uppercase;margin-bottom:4px">Opinion &amp; Authorities</div>
+          <div><strong>Author:</strong> ${escHtml(op.author_str || (op.per_curiam ? 'Per Curiam' : '—'))}</div>
+          <div><strong>Type:</strong> ${escHtml(op.type || 'Combined')}</div>
+          <div><strong>Authorities Cited:</strong> ${op.opinions_cited_count || 0} opinions</div>
+          <div><strong>Corpus Status:</strong> ${d.saved_in_corpus ? '✅ Saved locally' : '☁️ Live API only'}</div>
+        </div>
+      </div>
+
+      ${(d.ai_analysis || d.matched_defendant_name) ? `
+        <div style="padding:12px;border-radius:8px;border:1px solid #10b98144;background:#10b98112;margin-bottom:14px;font-size:12px">
+          <div style="font-weight:700;color:#10b981;margin-bottom:4px">🤖 Stored AI &amp; Defendant Match Intelligence</div>
+          ${d.matched_defendant_name ? `<div><strong>Matched Defendant:</strong> ${escHtml(d.matched_defendant_name)} (${Math.round((d.match_confidence || 0) * 100)}% confidence)</div>` : ''}
+          ${(d.ai_analysis && d.ai_analysis.bail_implications) ? `<div style="margin-top:4px">${escHtml(d.ai_analysis.bail_implications)}</div>` : ''}
+        </div>` : ''}
+
+      <div style="font-size:11px;color:${c.muted};text-transform:uppercase;margin-bottom:6px;font-weight:700">Opinion / Syllabus Text</div>
+      <div style="padding:12px;border-radius:8px;border:1px solid ${c.border};background:rgba(0,0,0,0.25);
+        font-size:12px;line-height:1.55;color:${c.text};white-space:pre-wrap;max-height:320px;overflow-y:auto">${escHtml(op.text || cl.syllabus || 'No full opinion text available on this record.')}</div>
+    `;
+
+    bodyEl.innerHTML = bodyHtml;
+    if (footerEl) {
+      footerEl.innerHTML = `
+        <button onclick="SLIntelligence.saveCurrentDossier()" class="btn-primary" style="font-size:12px;padding:7px 14px">📥 Save to Corpus</button>
+        <button class="btn-cancel" onclick="document.getElementById('intCaseDossierModal').classList.remove('show')">Close</button>
+      `;
+    }
+  }
+
+  async function saveCourtCase(liveIdx) {
+    const record = _liveSearchResults[liveIdx];
+    if (!record) return;
+    const btn = $('clSaveBtn-' + liveIdx);
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Saving...'; }
+    const res = await apiPost('/api/court-intel/save-case', record);
+    if (res && res.success) {
+      showToast('Case saved to local court intelligence corpus', 'success');
+      if (btn) btn.textContent = '✅ Saved';
+    } else {
+      showToast('Save failed: ' + ((res && res.error) || 'Unknown error'), 'error');
+      if (btn) { btn.disabled = false; btn.textContent = '📥 Save to Corpus'; }
+    }
+  }
+
+  async function saveCurrentDossier() {
+    if (!_lastDossier) return;
+    const d = _lastDossier;
+    const payload = {
+      source_id: d.source_id || String(d.cluster_id || ''),
+      cluster_id: d.cluster_id,
+      docket_id: (d.docket || {}).id || '',
+      court_id: (d.court || {}).id || '',
+      court_name: (d.court || {}).name || '',
+      state: (d.court || {}).state || '',
+      case_name: d.case_name,
+      docket_number: (d.docket || {}).docket_number || '',
+      date_filed: (d.docket || {}).date_filed || (d.cluster || {}).date_filed || '',
+      disposition: d.disposition,
+      snippet: ((d.opinion || {}).text || '').slice(0, 500),
+      judges: (d.cluster || {}).judges || (d.docket || {}).assigned_to_str || '',
+      assigned_to_str: (d.docket || {}).assigned_to_str || '',
+      citation: (d.cluster || {}).citations || [],
+      citation_count: (d.cluster || {}).citation_count || 0,
+      absolute_url: d.absolute_url || '',
+    };
+    const res = await apiPost('/api/court-intel/save-case', payload);
+    if (res && res.success) {
+      showToast('Dossier saved to local corpus', 'success');
+      _lastDossier.saved_in_corpus = true;
+    } else {
+      showToast('Save failed: ' + ((res && res.error) || 'Unknown error'), 'error');
+    }
+  }
+
   async function triggerIngestion(states) {
     const panel = $('intCourtIntelPanel');
-    const stateLabel = states ? states.join(', ') : 'all SE US states';
-    if (panel) panel.innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted)">
-      <span class="spinner-sm"></span> Ingesting court opinions from ${stateLabel}...<br>
+    const stateLabel = states ? states.join(', ') : 'all 15 covered states';
+    if (panel) panel.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted)">
+      <span class="spinner-sm"></span> Ingesting bail-relevant court opinions from ${escHtml(stateLabel)}...<br>
       <small style="opacity:0.6;margin-top:8px;display:block">This may take 15-30 seconds</small>
     </div>`;
     try {
       const body = { days_back: 180 };
       if (states) body.states = states;
-      const res = await fetch('/api/court-intel/ingest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (data.success) {
+      const data = await apiPost('/api/court-intel/ingest', body);
+      if (data && data.success) {
         showToast(`Ingested ${data.ingested} opinions (${data.duplicates} dupes) from ${data.total_fetched || 0} fetched`, 'success');
       } else {
-        showToast('Ingestion failed: ' + (data.error || 'Unknown'), 'error');
+        showToast('Ingestion failed: ' + ((data && data.error) || 'Unknown'), 'error');
       }
-      // Reload panel
       await loadCourtIntel();
     } catch (e) {
       showToast('Ingestion error: ' + e.message, 'error');
+      await loadCourtIntel();
     }
   }
 
   // ── Public API ──────────────────────────────────────────────────────────
-  window.SLIntelligence = { load, trainModel, bootstrapFTA, showFeatures, showROC, setHorizon, loadCourtIntel, triggerIngestion };
+  window.SLIntelligence = {
+    load, trainModel, bootstrapFTA, showFeatures, showROC, setHorizon,
+    loadCourtIntel, triggerIngestion, switchCourtTab, filterCourtState,
+    setCourtScorecardMode, onExplorerStateChange, exploreDisposition,
+    exploreJudge, applyCourtPreset, runCourtLiveSearch, runDocketLookup,
+    openCaseDossier, openCaseDossierFromInput, saveCourtCase, saveCurrentDossier,
+  };
 })();
