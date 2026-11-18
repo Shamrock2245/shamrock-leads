@@ -44,6 +44,10 @@ The 2026-09-22 pass left Manatee unlabeled. That is no longer the registry. Mana
 
 See `FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`. Sarasota stays fail closed: the official current-inmate listing has only per-person link ids, with no booking number or booking timestamp. The 2026-10-07 Manatee hardening note (header-mapped keys, `MANATEE_EGRESS_MODE=direct`) is historical. Manatee jail has been `fail_closed` since 2026-10-09 on the 403 Cloudflare challenge, and that proxy/APE path is retired. Manatee Clerk stays `unverified`, write smoke `requested`.
 
+## 2026-11-18 Sarasota detail recon
+
+See `FL_SARASOTA_DETAIL_RECON_2026-11-18.md`. The desktop detail table publishes a 12-digit Booking Number and an Intake Date/Time. The parser keys on that booking number. The person PIN is not the key. Sarasota stays fail closed. The listing still has no booking number.
+
 ## 2026-10-07 Charlotte hardening
 
 See `FL_CHARLOTTE_REVIZE_2026-10-07.md`. This paragraph is the 2026-10-07 Charlotte note. Manatee jail is no longer on that path (`fail_closed` since 2026-10-09). Charlotte then used the same shared Revize contract (`scrapers/revize_roster.py`): header-mapped columns, source Booking # cross-checked against its link, every charge kept, required Released, bond unknown=`""` (was `"0"`), fail-closed paging, and `EgressBlocked` on CF / unverified exits. Live check from the box: `/`, `/bookings`, `?page=2` → 403 CF challenge. Stays `unverified` until a Leads Ops residential read + prod write smoke (`CHARLOTTE_EGRESS_MODE=direct`).

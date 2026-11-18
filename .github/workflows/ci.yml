@@ -164,6 +164,7 @@ jobs:
             tests/test_collier_glades_published_bond.py \
             tests/test_glades_no_impersonation_path.py \
             tests/test_sarasota_safety.py \
+            tests/test_sarasota_detail_contract.py \
             tests/test_packet_builder_service.py \
             tests/test_cf_browser.py \
             tests/test_residential_proxy.py \

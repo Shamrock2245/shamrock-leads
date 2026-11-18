@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-18 (Sarasota detail-page booking number)
+
+### Added
+- **Sarasota detail pages can be keyed on the source Booking Number.** The 2026-11-18 recon found a 12-digit Booking Number and an Intake Date/Time on the desktop charge table (`table#data-table`). `scrapers/counties/sarasota_contract.py` groups one record per Booking Number, keeps the court case numbers in their own field, and keeps bond per charge. A row with no booking number is skipped. The person PIN stays a person field. `No Bond Available` stays text. A published `$0.00` stays 0. Blank release plus a Current Inmate Population listing is the only in-custody mark, and `status_source` says so.
+- **Detail fetches are capped and paced** the same way as Hernando: 200 pages a run, 0.4 seconds before each page. The current-inmate list is about 1,065 people, so one run does not request every detail page. `scrape()` still returns nothing. `SOURCE_CONTRACT_VALIDATED` stays false and Health stays `fail_closed`. The Mac relay, then stealth plus solver, then fail closed order is unchanged.
+
+### Tests
+- `tests/test_sarasota_detail_contract.py` on the CI list. Synthetic fixtures only.
+
 ## [Unreleased] — 2026-11-12 (Tenant scope for the iMessage SMS fallback log)
 
 ### Fixed

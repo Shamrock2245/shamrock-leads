@@ -1,0 +1,210 @@
+"""Synthetic Sarasota detail-page fixtures. No network and no real personal data."""
+from scrapers.counties.sarasota import SarasotaCountyScraper
+from scrapers.counties.sarasota_contract import (
+    MAX_DETAILS_PER_RUN,
+    REQUEST_PAUSE_S,
+    assess_detail,
+    listing_entries,
+    parse_detail_page,
+    split_listing_label,
+)
+
+COLUMNS = (
+    "Booking Number",
+    "Offense Description",
+    "Counts",
+    "Arraign Date",
+    "Bond Amount",
+    "Bond Type",
+    "Intake Date/Time",
+    "Court Case Number",
+    "Release Date/Time",
+    "Hold",
+)
+PIN = "1000000001"
+LABEL = "TESTER, ALEX QUINN - 02/02/2000"
+INTAKE = "2024-12-31 23:59:00.100"
+
+
+def _row(
+    booking,
+    offense,
+    *,
+    counts="1",
+    arraign="01/15/2025",
+    bond="$15000.00",
+    bond_type="",
+    intake=INTAKE,
+    case="2024 CF 000111 NC",
+    release="",
+    hold="N",
+):
+    return [booking, offense, counts, arraign, bond, bond_type, intake, case, release, hold]
+
+
+def _page(rows, *, pin=PIN, stacked=None):
+    def table(body_rows, table_id=""):
+        attr = f' id="{table_id}"' if table_id else ' class="stacked"'
+        head = "".join(f"<th>{name}</th>" for name in COLUMNS)
+        body = "".join(
+            "<tr>" + "".join(f"<td>{cell}</td>" for cell in row) + "</tr>" for row in body_rows
+        )
+        return f"<table{attr}><tr>{head}</tr>{body}</table>"
+
+    stacked_html = table(stacked) if stacked else ""
+    return (
+        "<table id='personal'>"
+        f"<tr><th>PIN</th><td>{pin}</td></tr>"
+        "<tr><th>Date of Birth</th><td>02/02/2000</td></tr>"
+        "<tr><th>Race</th><td>W</td></tr>"
+        "<tr><th>Sex</th><td>M</td></tr>"
+        "<tr><th>Location</th><td>POD 1</td></tr>"
+        "</table>"
+        + table(rows, "data-table")
+        + stacked_html
+    )
+
+
+def _by_booking(records):
+    return {record.Booking_Number: record for record in records}
+
+
+def test_listing_href_spaces_are_stripped_and_the_label_date_is_dropped():
+    html = '<a href="viewInmate.php?id=1000000001     ">TESTER, ALEX QUINN - 02/02/2000</a>'
+    pin, label = listing_entries(html)[0]
+    assert pin == "1000000001"
+    name = split_listing_label(label)
+    assert name["last"] == "TESTER"
+    assert name["first"] == "ALEX"
+    assert name["middle"] == "QUINN"
+    assert "02/02/2000" not in name["full_name"]
+
+
+def test_detail_groups_bookings_and_ignores_the_stacked_table():
+    page = _page(
+        [
+            _row("202500001111", "BATTERY", bond="$15000.00", case="2024 CF 000111 NC", hold="N"),
+            _row("202500001111", "RESIST", bond="$0.00", case="2024 MM 000222 NC", hold="Y"),
+            _row("202400002222", "THEFT", bond="No Bond Available", case="2024 CF 000111 NC", hold=""),
+            _row("", "SHOULD NOT KEY", case="2024 CF 999999 NC", bond="$1.00"),
+            _row(PIN, "PIN IS NOT A BOOKING", case="2024 MM 000333 NC"),
+            _row("202300003333", "NO INTAKE", intake=""),
+        ],
+        stacked=[_row("202399999999", "STACKED ONLY")],
+    )
+    records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
+    by_booking = _by_booking(records)
+    assert set(by_booking) == {"202500001111", "202400002222"}
+    assert "202399999999" not in by_booking
+    assert "2024 CF 999999 NC" not in " ".join(record.Case_Number for record in records)
+    assert stats["skipped_rows"] == 3
+
+    first = by_booking["202500001111"]
+    assert first.Person_ID == PIN
+    assert first.Booking_Number != PIN
+    assert first.extra_data["person_pin"] == PIN
+    assert first.Booking_Date == "2024-12-31"
+    assert first.Booking_Time == "23:59:00.100"
+    assert first.Booking_Number.startswith("2025")
+    assert first.Charges == "BATTERY | RESIST"
+    assert first.Case_Number == "2024 CF 000111 NC | 2024 MM 000222 NC"
+    assert first.Bond_Amount == "15000"
+    assert [row["bond_amount"] for row in first.extra_data["charge_details"]] == [15000.0, 0.0]
+    assert [row["bond_raw"] for row in first.extra_data["charge_details"]] == ["$15000.00", "$0.00"]
+    assert [row["hold"] for row in first.extra_data["charge_details"]] == ["N", "Y"]
+    assert first.Bond_Type == ""
+    assert first.Status == "In Custody"
+    assert first.extra_data["status_source"] == (
+        "current_inmate_population_and_blank_release_date_time"
+    )
+    assert first.Last_Name == "TESTER" and first.First_Name == "ALEX"
+    assert first.DOB == ""
+    assert "02/02/2000" not in first.Full_Name
+    assert first.Race == "W" and first.Sex == "M"
+    assert first.extra_data["location"] == "POD 1"
+
+    second = by_booking["202400002222"]
+    assert second.Booking_Date == first.Booking_Date
+    assert second.Booking_Time == first.Booking_Time
+    assert second.Case_Number == "2024 CF 000111 NC"
+    assert second.Bond_Amount == ""
+    detail = second.extra_data["charge_details"][0]
+    assert detail["bond_amount"] is None
+    assert detail["bond_text"] == "No Bond Available"
+    assert detail["hold"] == ""
+    assert detail["bond_type"] == ""
+
+
+def test_release_time_filled_is_not_in_custody():
+    page = _page([
+        _row("202500001111", "BATTERY", release="2025-01-02 01:02:03.004"),
+    ])
+    records, _stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
+    assert records[0].Status == ""
+    assert records[0].Release_Date == "2025-01-02 01:02:03.004"
+    assert records[0].extra_data["status_source"] == "release_date_time_filled"
+    assert records[0].Status != "In Custody"
+
+
+def test_blank_release_off_the_roster_is_not_in_custody():
+    page = _page([_row("202500001111", "BATTERY")])
+    records, _stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=False)
+    assert records[0].Status == ""
+    assert "status_source" not in records[0].extra_data
+
+
+def test_detail_gate_opens_on_a_booking_number_and_stays_shut_on_a_pin_only_page():
+    good = _page([_row("202500001111", "BATTERY")])
+    verdict = assess_detail(good, pin=PIN, on_roster=True)
+    assert verdict.reopen_ok is True
+    assert verdict.bookings == 1
+
+    pin_only = _page([_row("", "NO BOOKING", case="2024 MM 000222 NC")])
+    closed = assess_detail(pin_only, pin=PIN)
+    assert closed.reopen_ok is False
+    assert "12-digit Booking Number" in " ".join(closed.reasons)
+
+
+def test_disagreeing_intake_timestamps_drop_that_booking():
+    page = _page([
+        _row("202500001111", "BATTERY", intake="2024-12-31 23:59:00.100"),
+        _row("202500001111", "RESIST", intake="2025-01-01 00:00:00.000"),
+    ])
+    records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
+    assert records == []
+    assert stats["intake_conflicts"] == 1
+
+
+def test_detail_walk_caps_and_pauses_like_hernando():
+    assert MAX_DETAILS_PER_RUN == 200
+    assert REQUEST_PAUSE_S == 0.4
+    links = "".join(
+        f'<a href="viewInmate.php?id=100000000{i}">TESTER, CASE {i} - 02/02/2000</a>'
+        for i in (1, 2, 3)
+    )
+    fetched = []
+    pauses = []
+
+    def fetch(pin):
+        fetched.append(pin)
+        if pin == "1000000002":
+            raise RuntimeError("detail unavailable")
+        return _page([_row(f"20240000000{pin[-1]}", "BATTERY")], pin=pin)
+
+    def sleep(seconds):
+        pauses.append(seconds)
+
+    scraper = SarasotaCountyScraper()
+    records, summary = scraper.build_records(links, fetch, sleep=sleep, limit=2, pause_s=0.4)
+    assert fetched == ["1000000001", "1000000002"]
+    assert pauses == [0.4, 0.4]
+    assert summary["listed"] == 3
+    assert summary["fetched"] == 2
+    assert summary["skipped_over_cap"] == 1
+    assert summary["fetch_failures"] == 1
+    assert [record.Booking_Number for record in records] == ["202400000001"]
+    assert scraper.DETAIL_CAP == 200
+    assert scraper.DETAIL_PAUSE_S == 0.4
+    assert scraper.SOURCE_CONTRACT_VALIDATED is False
+    assert scraper.scrape() == []
+    assert scraper.ACCESS_PLAN.county == "Sarasota"
