@@ -115,32 +115,43 @@ def _write_stderr(line: str) -> None:
         pass
 
 
+def _emit(line: str, token: str) -> None:
+    """Write one stderr line after removing the relay token from the whole line.
+
+    The static words (``mac``, ``relay``, ``fetch``, ``error_type``) can be the
+    token. Redacting only the county, class, and ``omitted`` would leave that
+    credential in the prefix.
+    """
+    _write_stderr(_redact_secret(line, token))
+
+
 def log_fetch_failed(county: str, state: str, exc: BaseException, token: str) -> None:
     """One stderr line when ``read_allowlisted`` raises.
 
     The line carries the allowlisted county and the exception class. ``detail``
-    is the fixed code ``omitted``: ``str(exc)`` is not written. The line does
-    not include the token, request headers, the request line, or the page body.
+    is the fixed code ``omitted``: ``str(exc)`` is not written. The whole line,
+    including the static words, is redacted before it is written. It does not
+    include the token, request headers, the request line, or the page body.
     The HTTP payload stays ``fetch_failed`` plus ``error_type``.
     """
-    label = _redact_secret(_allowlisted_county(county, state), token)
-    error_type = _redact_secret(type(exc).__name__, token)
-    detail = _redact_secret(_DETAIL_CODE, token)
-    _write_stderr(
-        f"[mac-relay] fetch_failed county={label} error_type={error_type} detail={detail}"
+    _emit(
+        "[mac-relay] fetch_failed "
+        f"county={_allowlisted_county(county, state)} "
+        f"error_type={type(exc).__name__} detail={_DETAIL_CODE}",
+        token,
     )
 
 
 def log_browser_worker(started: bool, exc: BaseException | None = None) -> None:
     """One stderr line after the browser worker thread starts, or fails to."""
-    if started:
-        _write_stderr("[mac-relay] browser_worker started")
-        return
     token = os.getenv(RELAY_TOKEN_ENV, "")
-    error_type = _redact_secret(type(exc).__name__ if exc is not None else "Exception", token)
-    detail = _redact_secret(_DETAIL_CODE, token)
-    _write_stderr(
-        f"[mac-relay] browser_worker failed error_type={error_type} detail={detail}"
+    if started:
+        _emit("[mac-relay] browser_worker started", token)
+        return
+    error_type = type(exc).__name__ if exc is not None else "Exception"
+    _emit(
+        f"[mac-relay] browser_worker failed error_type={error_type} detail={_DETAIL_CODE}",
+        token,
     )
 
 
@@ -316,8 +327,9 @@ def make_handler(expected_token: str, fetch: Fetch):
 
         def log_message(self, fmt, *args):
             # Do not log the request line: it can carry the county page, and
-            # the token is a header we never want in an access log.
-            sys.stderr.write("[mac-relay] request\n")
+            # the token is a header we never want in an access log. The static
+            # words are redacted too, in case the token is one of them.
+            _emit("[mac-relay] request", expected_token)
 
         def _send(self, code: int, payload: dict) -> None:
             raw = json.dumps(payload).encode("utf-8")
