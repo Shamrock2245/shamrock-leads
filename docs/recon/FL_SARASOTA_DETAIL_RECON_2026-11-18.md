@@ -54,6 +54,6 @@ Relationships in the sample:
 - Unknown stays `""`. A published `$0.00` stays 0. `No Bond Available` stays text, not 0.
 - There is no custody label. Mark in custody only when the person is on the Current Inmate Population list and Release Date/Time is blank, and record `status_source` with that reason. A filled Release Date/Time is not in custody.
 - Keep the PIN as a person field, never as the key.
-- About 1,065 detail pages exist, so a run caps detail fetches at 200 and pauses 0.4 seconds before each one, the same shape as Hernando.
+- About 1,065 detail pages exist, so a run caps detail fetches at 200 and pauses 0.4 seconds before each one. The start index moves one window per UTC day. A page with no desktop charge table, or without the booking columns, fails the walk.
 
 `scrape()` still returns nothing.

@@ -8,6 +8,7 @@ way Hernando does.
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Callable, Dict, List, Tuple
 
 from core.models import ArrestRecord
@@ -66,6 +67,8 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
         sleep: Callable[[float], None],
         limit: int | None = None,
         pause_s: float | None = None,
+        offset: int | None = None,
+        today: date | None = None,
     ) -> Tuple[List[ArrestRecord], Dict[str, int]]:
         """Detail walk a promotion would run. ``scrape()`` does not call this."""
         return walk_detail_pages(
@@ -74,4 +77,6 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
             sleep=sleep,
             limit=self.DETAIL_CAP if limit is None else limit,
             pause_s=self.DETAIL_PAUSE_S if pause_s is None else pause_s,
+            offset=offset,
+            today=today,
         )

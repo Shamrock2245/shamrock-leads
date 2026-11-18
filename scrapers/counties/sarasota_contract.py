@@ -15,6 +15,7 @@ import html as _html
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from bs4 import BeautifulSoup
@@ -82,7 +83,8 @@ def assess_listing(page_html: str) -> SarasotaListingVerdict:
 
 
 # About 1,065 Current Inmate Population entries, each one detail page.
-# One run fetches a Hernando-sized cap and leaves the rest for a later run.
+# One run fetches this many pages. The start index moves one window per UTC
+# day, so a stable listing is not stuck on the same first pages.
 MAX_DETAILS_PER_RUN = 200
 REQUEST_PAUSE_S = 0.4
 STATUS_ON_ROSTER = "current_inmate_population_and_blank_release_date_time"
@@ -352,6 +354,32 @@ def assess_detail(page_html: str, *, pin: str = "", on_roster: bool = True) -> S
     )
 
 
+class SarasotaContractError(RuntimeError):
+    """The detail walk cannot be treated as a successful roster."""
+
+
+def detail_offset(population: int, limit: int, *, today: date | None = None) -> int:
+    """Start index for this UTC day.
+
+    A stable listing is split into windows of ``limit``. Consecutive days use
+    the next window, then wrap, so repeated runs are not stuck on the first pins.
+    """
+    if population <= 0 or limit <= 0 or population <= limit:
+        return 0
+    windows = (population + limit - 1) // limit
+    day = (today or datetime.now(timezone.utc).date()).toordinal()
+    return (day % windows) * limit
+
+
+def select_detail_pins(order: Sequence[str], *, limit: int, offset: int) -> List[str]:
+    """The next ``limit`` pins from ``offset``. An offset past the end starts over."""
+    if not order or limit <= 0:
+        return []
+    if offset < 0 or offset >= len(order):
+        offset = 0
+    return list(order[offset:offset + limit])
+
+
 def walk_detail_pages(
     listing_html: str,
     fetch_detail: Callable[[str], str],
@@ -359,11 +387,15 @@ def walk_detail_pages(
     sleep: Callable[[float], None],
     limit: int = MAX_DETAILS_PER_RUN,
     pause_s: float = REQUEST_PAUSE_S,
+    offset: int | None = None,
+    today: date | None = None,
 ) -> Tuple[List[ArrestRecord], Dict[str, int]]:
     """Fetch at most ``limit`` detail pages, pausing before each one.
 
     ``fetch_detail`` receives the person PIN. The listing label's date is not
-    stored. Pins past the cap are not requested.
+    stored. The window moves by one cap each UTC day unless ``offset`` is set.
+    A page with no desktop charge table, or without the booking columns, fails
+    the walk instead of being dropped.
     """
     seen: Dict[str, str] = {}
     order: List[str] = []
@@ -372,9 +404,14 @@ def walk_detail_pages(
             continue
         seen[pin] = label
         order.append(pin)
-    chosen = order[:limit]
+    if offset is None:
+        offset = detail_offset(len(order), limit, today=today)
+    chosen = select_detail_pins(order, limit=limit, offset=offset)
     records: List[ArrestRecord] = []
     failures = 0
+    structural = 0
+    table_missing = 0
+    columns_missing = 0
     for pin in chosen:
         sleep(pause_s)
         try:
@@ -383,20 +420,40 @@ def walk_detail_pages(
             failures += 1
             logger.warning("Sarasota detail fetch failed (%s)", type(exc).__name__)
             continue
-        page_records, _stats = parse_detail_page(
+        page_records, stats = parse_detail_page(
             page_html, pin=pin, label=seen[pin], on_roster=True,
         )
+        if stats["table_missing"] or stats["columns_missing"]:
+            structural += 1
+            table_missing += stats["table_missing"]
+            columns_missing += stats["columns_missing"]
+            logger.warning(
+                "Sarasota detail page is missing the charge table or its booking columns "
+                "(table_missing=%s, columns_missing=%s)",
+                stats["table_missing"],
+                stats["columns_missing"],
+            )
+            continue
         records.extend(page_records)
+    if structural:
+        raise SarasotaContractError(
+            "Sarasota: "
+            f"{structural} detail page(s) had no usable charge table "
+            f"({table_missing} missing table, {columns_missing} missing columns); "
+            "refusing a partial roster"
+        )
     summary = {
         "listed": len(order),
         "fetched": len(chosen),
+        "offset": offset if offset < len(order) else 0,
         "skipped_over_cap": len(order) - len(chosen),
         "fetch_failures": failures,
+        "structural_failures": structural,
         "records": len(records),
     }
     logger.info(
-        "Sarasota detail walk: listed %d, fetched %d, skipped_over_cap %d, failures %d, records %d",
-        summary["listed"], summary["fetched"], summary["skipped_over_cap"],
+        "Sarasota detail walk: listed %d, fetched %d, offset %d, skipped_over_cap %d, failures %d, records %d",
+        summary["listed"], summary["fetched"], summary["offset"], summary["skipped_over_cap"],
         summary["fetch_failures"], summary["records"],
     )
     return records, summary

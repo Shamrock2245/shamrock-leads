@@ -1,8 +1,11 @@
 """Synthetic Sarasota detail-page fixtures. No network and no real personal data."""
+from datetime import date
+
 from scrapers.counties.sarasota import SarasotaCountyScraper
 from scrapers.counties.sarasota_contract import (
     MAX_DETAILS_PER_RUN,
     REQUEST_PAUSE_S,
+    SarasotaContractError,
     assess_detail,
     listing_entries,
     parse_detail_page,
@@ -195,7 +198,9 @@ def test_detail_walk_caps_and_pauses_like_hernando():
         pauses.append(seconds)
 
     scraper = SarasotaCountyScraper()
-    records, summary = scraper.build_records(links, fetch, sleep=sleep, limit=2, pause_s=0.4)
+    records, summary = scraper.build_records(
+        links, fetch, sleep=sleep, limit=2, pause_s=0.4, offset=0,
+    )
     assert fetched == ["1000000001", "1000000002"]
     assert pauses == [0.4, 0.4]
     assert summary["listed"] == 3
@@ -208,3 +213,54 @@ def test_detail_walk_caps_and_pauses_like_hernando():
     assert scraper.SOURCE_CONTRACT_VALIDATED is False
     assert scraper.scrape() == []
     assert scraper.ACCESS_PLAN.county == "Sarasota"
+
+
+def _pins(n):
+    return "".join(
+        f'<a href="viewInmate.php?id=100000000{i}">TESTER, CASE {i} - 02/02/2000</a>'
+        for i in range(1, n + 1)
+    )
+
+
+def test_detail_window_rotates_by_utc_day():
+    links = _pins(5)
+    seen = []
+
+    def fetch(pin):
+        seen.append(pin)
+        return _page([_row(f"20240000000{pin[-1]}", "BATTERY")], pin=pin)
+
+    def run(day):
+        seen.clear()
+        walk_records, summary = SarasotaCountyScraper().build_records(
+            links, fetch, sleep=lambda _s: None, limit=2, today=day,
+        )
+        assert walk_records
+        return list(seen), summary["offset"]
+
+    first, offset_a = run(date(2026, 1, 1))
+    second, offset_b = run(date(2026, 1, 2))
+    third, _offset_c = run(date(2026, 1, 3))
+    assert offset_a != offset_b
+    assert set(first + second + third) == {f"100000000{i}" for i in range(1, 6)}
+
+
+def test_missing_charge_table_refuses_a_partial_roster():
+    links = _pins(2)
+
+    def fetch(pin):
+        if pin.endswith("1"):
+            return _page([_row("202400000001", "BATTERY")], pin=pin)
+        return "<html><title>Just a moment</title></html>"
+
+    try:
+        SarasotaCountyScraper().build_records(
+            links, fetch, sleep=lambda _s: None, limit=2, offset=0,
+        )
+        raised = False
+    except SarasotaContractError as exc:
+        raised = True
+        message = str(exc)
+    assert raised
+    assert "refusing a partial roster" in message
+    assert "missing table" in message
