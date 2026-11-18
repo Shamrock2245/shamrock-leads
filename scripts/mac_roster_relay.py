@@ -120,9 +120,11 @@ def _emit(line: str, token: str) -> None:
 
     The static words (``mac``, ``relay``, ``fetch``, ``error_type``) can be the
     token. Redacting only the county, class, and ``omitted`` would leave that
-    credential in the prefix.
+    credential in the prefix. ``main`` strips the env token before it is used
+    for auth, so the logger strips too. Otherwise ``" relay "`` would leave
+    ``relay`` in ``[mac-relay]``.
     """
-    _write_stderr(_redact_secret(line, token))
+    _write_stderr(_redact_secret(line, str(token or "").strip()))
 
 
 def log_fetch_failed(county: str, state: str, exc: BaseException, token: str) -> None:

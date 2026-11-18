@@ -587,6 +587,35 @@ def test_browser_worker_redacts_a_token_that_is_a_static_word(monkeypatch):
     assert "closed" not in text
 
 
+def test_padded_env_token_is_stripped_before_the_worker_log(monkeypatch):
+    import io
+    from unittest.mock import patch
+
+    relay = _load_relay()
+    monkeypatch.setenv("SHAMROCK_MAC_RELAY_TOKEN", " relay ")
+    started = io.StringIO()
+    with patch.object(relay.sys, "stderr", started):
+        relay.HeadedBrowser(page_factory=lambda: object(), timeout_s=0, sleep=lambda _s: None)
+    text = started.getvalue()
+    assert "browser_worker" in text
+    assert "relay" not in text
+
+    def boom(self):
+        raise RuntimeError("closed relay")
+
+    monkeypatch.setattr(relay.threading.Thread, "start", boom)
+    failed = io.StringIO()
+    with patch.object(relay.sys, "stderr", failed):
+        try:
+            relay.HeadedBrowser(page_factory=lambda: object(), timeout_s=0, sleep=lambda _s: None)
+            raised = False
+        except RuntimeError:
+            raised = True
+    assert raised
+    assert "relay" not in failed.getvalue()
+    assert "closed" not in failed.getvalue()
+
+
 def test_mac_relay_success_logs_only_the_request_line():
     relay = _load_relay()
     token = "relay-token-success-9f3c"
