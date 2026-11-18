@@ -38,8 +38,10 @@ from scrapers.access_strategy import RELAY_TOKEN_ENV, relay_target  # noqa: E402
 MAX_BODY = 2_000_000
 CF_WAIT_S = 25.0
 CF_POLL_S = 0.4
-_DETAIL_MAX = 200
 _CHALLENGE_TITLES = ("just a moment", "attention required")
+# Exception text is not logged. Playwright and Chromium messages can carry a
+# page snippet, a local path, or other personal data. The class name is enough.
+_DETAIL_CODE = "omitted"
 Fetch = Callable[[str], Tuple[int, str]]
 
 
@@ -96,13 +98,6 @@ def _redact_secret(text: str, secret: str) -> str:
     return text.replace(secret, _redaction_marker(secret))
 
 
-def _clipped_detail(exc: BaseException, secret: str) -> str:
-    """Exception text for stderr: token removed, newlines stripped, 200 chars."""
-    text = _redact_secret(str(exc), secret)
-    text = " ".join(text.splitlines())
-    return text[:_DETAIL_MAX]
-
-
 def _allowlisted_county(county: str, state: str) -> str:
     """Canonical allowlisted county, or ``unknown`` so the raw query is not logged."""
     name = " ".join(str(county or "").split())
@@ -123,13 +118,14 @@ def _write_stderr(line: str) -> None:
 def log_fetch_failed(county: str, state: str, exc: BaseException, token: str) -> None:
     """One stderr line when ``read_allowlisted`` raises.
 
-    The line carries the allowlisted county, the exception class, and a clipped
-    detail. It does not include the token, request headers, the request line,
-    or the page body. The HTTP payload stays ``fetch_failed`` plus ``error_type``.
+    The line carries the allowlisted county and the exception class. ``detail``
+    is the fixed code ``omitted``: ``str(exc)`` is not written. The line does
+    not include the token, request headers, the request line, or the page body.
+    The HTTP payload stays ``fetch_failed`` plus ``error_type``.
     """
     label = _redact_secret(_allowlisted_county(county, state), token)
     error_type = _redact_secret(type(exc).__name__, token)
-    detail = _clipped_detail(exc, token)
+    detail = _redact_secret(_DETAIL_CODE, token)
     _write_stderr(
         f"[mac-relay] fetch_failed county={label} error_type={error_type} detail={detail}"
     )
@@ -142,7 +138,7 @@ def log_browser_worker(started: bool, exc: BaseException | None = None) -> None:
         return
     token = os.getenv(RELAY_TOKEN_ENV, "")
     error_type = _redact_secret(type(exc).__name__ if exc is not None else "Exception", token)
-    detail = _clipped_detail(exc, token) if exc is not None else ""
+    detail = _redact_secret(_DETAIL_CODE, token)
     _write_stderr(
         f"[mac-relay] browser_worker failed error_type={error_type} detail={detail}"
     )

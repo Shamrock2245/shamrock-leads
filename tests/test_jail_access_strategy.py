@@ -490,8 +490,10 @@ def test_mac_relay_fetch_failed_logs_county_and_redacts_the_token():
     token = "relay-token-9f3c2a7b"
     page_body = "<html>page-body-not-logged</html>"
 
+    secret_text = "nav failed\n555-010-0199 /Users/shared/roster.html " + token
+
     def fetch(_url):
-        raise RuntimeError("nav failed\n" + ("x" * 40) + token + "\r\ny" * 80)
+        raise RuntimeError(secret_text + "\r\ny" * 80)
 
     status, payload, err = _drive_fetch(relay, "county=Manatee&state=FL", token, fetch)
     assert status == 502
@@ -501,12 +503,13 @@ def test_mac_relay_fetch_failed_logs_county_and_redacts_the_token():
         line for line in err.splitlines() if "fetch_failed" in line
     ]
     assert len(failed) == 1
-    prefix = "[mac-relay] fetch_failed county=Manatee error_type=RuntimeError detail="
-    assert failed[0].startswith(prefix)
-    detail = failed[0][len(prefix):]
-    assert len(detail) <= 200
+    assert failed[0] == (
+        "[mac-relay] fetch_failed county=Manatee error_type=RuntimeError detail=omitted"
+    )
     assert token not in err
-    assert "[redacted]" in detail
+    assert "nav failed" not in err
+    assert "555-010-0199" not in err
+    assert "roster.html" not in err
     assert page_body not in err
     assert "GET /fetch" not in err
     assert "X-Shamrock-Relay-Token" not in err
@@ -532,6 +535,8 @@ def test_redaction_marker_does_not_loop_when_the_token_is_inside_redacted():
     assert payload == {"error": "fetch_failed", "error_type": "RuntimeError"}
     assert "county=Sarasota" in err
     assert "error_type=RuntimeError" in err
+    assert "detail=omitted" in err
+    assert "display" not in err
     assert token not in err
 
 
@@ -580,8 +585,7 @@ def test_browser_worker_startup_line_redacts_the_token(monkeypatch):
             raised = True
     assert raised
     text = failed.getvalue()
-    assert text.startswith("[mac-relay] browser_worker failed error_type=RuntimeError detail=")
-    assert text.count("\n") == 1
+    assert text == "[mac-relay] browser_worker failed error_type=RuntimeError detail=omitted\n"
     assert token not in text
-    assert "[redacted]" in text
-    assert "second line" in text
+    assert "display missing" not in text
+    assert "second line" not in text
