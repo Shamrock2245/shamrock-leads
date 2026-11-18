@@ -442,3 +442,226 @@ def test_closed_browser_is_recreated_on_the_next_request():
     assert status == 200
     assert html == "<html>booking</html>"
     assert len(made) == 2
+
+
+class _RelayConn:
+    """Enough of a socket for BaseHTTPRequestHandler. No network."""
+
+    def __init__(self, data: bytes):
+        import io
+        self.inbound = io.BytesIO(data)
+        self.outbound = bytearray()
+
+    def makefile(self, mode="rb", *args, **kwargs):
+        if "r" in mode:
+            return self.inbound
+        import io
+        return io.BytesIO()
+
+    def sendall(self, data):
+        if isinstance(data, str):
+            data = data.encode()
+        self.outbound.extend(data)
+
+
+def _drive_fetch(relay, query: str, token: str, fetch):
+    import io
+    import json
+    from unittest.mock import patch
+
+    raw = (
+        f"GET /fetch?{query} HTTP/1.1\r\n"
+        f"Host: 127.0.0.1\r\n"
+        f"X-Shamrock-Relay-Token: {token}\r\n"
+        "X-Trace: header-sentinel\r\n"
+        "\r\n"
+    ).encode()
+    conn = _RelayConn(raw)
+    stderr = io.StringIO()
+    with patch.object(relay.sys, "stderr", stderr):
+        relay.make_handler(token, fetch)(conn, ("127.0.0.1", 0), None)
+    head, _, body = bytes(conn.outbound).partition(b"\r\n\r\n")
+    status = int(head.split()[1])
+    return status, json.loads(body.decode()), stderr.getvalue()
+
+
+def test_mac_relay_fetch_failed_logs_county_and_redacts_the_token():
+    relay = _load_relay()
+    token = "relay-token-9f3c2a7b"
+    page_body = "<html>page-body-not-logged</html>"
+
+    secret_text = "nav failed\n555-010-0199 /Users/shared/roster.html " + token
+
+    def fetch(_url):
+        raise RuntimeError(secret_text + "\r\ny" * 80)
+
+    status, payload, err = _drive_fetch(relay, "county=Manatee&state=FL", token, fetch)
+    assert status == 502
+    assert payload == {"error": "fetch_failed", "error_type": "RuntimeError"}
+    failed = [line for line in err.splitlines() if line.startswith("[mac-relay] fetch_failed ")]
+    assert failed == [
+        line for line in err.splitlines() if "fetch_failed" in line
+    ]
+    assert len(failed) == 1
+    assert failed[0] == (
+        "[mac-relay] fetch_failed county=Manatee error_type=RuntimeError detail=omitted"
+    )
+    assert token not in err
+    assert "nav failed" not in err
+    assert "555-010-0199" not in err
+    assert "roster.html" not in err
+    assert page_body not in err
+    assert "GET /fetch" not in err
+    assert "X-Shamrock-Relay-Token" not in err
+    assert "header-sentinel" not in err
+    assert "[mac-relay] request" in err.splitlines()
+
+
+def test_redaction_marker_does_not_loop_when_the_token_is_inside_redacted():
+    relay = _load_relay()
+    for token in ("redacted", "act", "["):
+        marker = relay._redaction_marker(token)
+        assert token not in marker
+        cleaned = relay._redact_secret(f"before {token} after {token}", token)
+        assert token not in cleaned
+
+    token = "redacted"
+
+    def fetch(_url):
+        raise RuntimeError(f"display {token} closed")
+
+    status, payload, err = _drive_fetch(relay, "county=Sarasota&state=FL", token, fetch)
+    assert status == 502
+    assert payload == {"error": "fetch_failed", "error_type": "RuntimeError"}
+    assert "county=Sarasota" in err
+    assert "error_type=RuntimeError" in err
+    assert "detail=omitted" in err
+    assert "display" not in err
+    assert token not in err
+
+
+def test_token_inside_the_static_log_words_is_not_written():
+    relay = _load_relay()
+    for token in ("relay", "mac", "fetch", "error_type"):
+
+        def fetch(_url, token=token):
+            raise RuntimeError(f"boom {token}")
+
+        status, payload, err = _drive_fetch(relay, "county=Manatee&state=FL", token, fetch)
+        assert status == 502
+        assert payload == {"error": "fetch_failed", "error_type": "RuntimeError"}
+        assert token not in err
+        assert "Manatee" in err
+        assert "boom" not in err
+
+
+def test_browser_worker_redacts_a_token_that_is_a_static_word(monkeypatch):
+    import io
+    from unittest.mock import patch
+
+    relay = _load_relay()
+    token = "relay"
+    monkeypatch.setenv("SHAMROCK_MAC_RELAY_TOKEN", token)
+    started = io.StringIO()
+    with patch.object(relay.sys, "stderr", started):
+        relay.HeadedBrowser(page_factory=lambda: object(), timeout_s=0, sleep=lambda _s: None)
+    assert "browser_worker" in started.getvalue()
+    assert token not in started.getvalue()
+
+    def boom(self):
+        raise RuntimeError(f"closed {token}")
+
+    monkeypatch.setattr(relay.threading.Thread, "start", boom)
+    failed = io.StringIO()
+    with patch.object(relay.sys, "stderr", failed):
+        try:
+            relay.HeadedBrowser(page_factory=lambda: object(), timeout_s=0, sleep=lambda _s: None)
+            raised = False
+        except RuntimeError:
+            raised = True
+    assert raised
+    text = failed.getvalue()
+    assert "browser_worker" in text
+    assert "detail=omitted" in text
+    assert token not in text
+    assert "closed" not in text
+
+
+def test_padded_env_token_is_stripped_before_the_worker_log(monkeypatch):
+    import io
+    from unittest.mock import patch
+
+    relay = _load_relay()
+    monkeypatch.setenv("SHAMROCK_MAC_RELAY_TOKEN", " relay ")
+    started = io.StringIO()
+    with patch.object(relay.sys, "stderr", started):
+        relay.HeadedBrowser(page_factory=lambda: object(), timeout_s=0, sleep=lambda _s: None)
+    text = started.getvalue()
+    assert "browser_worker" in text
+    assert "relay" not in text
+
+    def boom(self):
+        raise RuntimeError("closed relay")
+
+    monkeypatch.setattr(relay.threading.Thread, "start", boom)
+    failed = io.StringIO()
+    with patch.object(relay.sys, "stderr", failed):
+        try:
+            relay.HeadedBrowser(page_factory=lambda: object(), timeout_s=0, sleep=lambda _s: None)
+            raised = False
+        except RuntimeError:
+            raised = True
+    assert raised
+    assert "relay" not in failed.getvalue()
+    assert "closed" not in failed.getvalue()
+
+
+def test_mac_relay_success_logs_only_the_request_line():
+    relay = _load_relay()
+    token = "relay-token-success-9f3c"
+    page_body = "<html>roster-body-marker</html>"
+
+    def fetch(url):
+        assert url == "https://cms.revize.com/revize/apps/sarasota/"
+        return 200, page_body
+
+    status, payload, err = _drive_fetch(relay, "county=Sarasota&state=FL", token, fetch)
+    assert status == 200
+    assert payload == {"status": 200, "body": page_body}
+    assert err == "[mac-relay] request\n"
+    assert token not in err
+    assert page_body not in err
+    assert "fetch_failed" not in err
+    assert "GET /fetch" not in err
+
+
+def test_browser_worker_startup_line_redacts_the_token(monkeypatch):
+    import io
+    from unittest.mock import patch
+
+    relay = _load_relay()
+    token = "relay-token-worker-44aa"
+    monkeypatch.setenv("SHAMROCK_MAC_RELAY_TOKEN", token)
+    started = io.StringIO()
+    with patch.object(relay.sys, "stderr", started):
+        relay.HeadedBrowser(page_factory=lambda: object(), timeout_s=0, sleep=lambda _s: None)
+    assert started.getvalue() == "[mac-relay] browser_worker started\n"
+    assert token not in started.getvalue()
+
+    def boom(self):
+        raise RuntimeError(f"display missing {token}\nsecond line")
+
+    monkeypatch.setattr(relay.threading.Thread, "start", boom)
+    failed = io.StringIO()
+    with patch.object(relay.sys, "stderr", failed):
+        try:
+            relay.HeadedBrowser(page_factory=lambda: object(), timeout_s=0, sleep=lambda _s: None)
+            raised = False
+        except RuntimeError:
+            raised = True
+    assert raised
+    text = failed.getvalue()
+    assert text == "[mac-relay] browser_worker failed error_type=RuntimeError detail=omitted\n"
+    assert token not in text
+    assert "display missing" not in text
+    assert "second line" not in text
