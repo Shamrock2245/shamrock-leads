@@ -12,22 +12,38 @@ fixture text to the real Slack ``#leads`` channel (``SLACK_WEBHOOK_LEADS``).
 ``config/settings.py`` calls ``load_dotenv`` at import, so those variables are
 in ``os.environ`` before any test body runs.
 
-``block_live_sends`` is an autouse fixture. It runs before the test body and
-before per-test ``monkeypatch.setenv`` calls, and it:
+Collection imports application modules before any fixture runs.
+``config/settings.py`` calls ``load_dotenv`` and copies Slack and Twilio
+values onto ``Settings`` at class-body time. ``writers/rearrest_checker.py``
+then posts with ``urllib.request.urlopen``, and ``dashboard/routers/poa.py``
+posts with ``aiohttp``. Clearing ``os.environ`` only inside a fixture is too
+late for those snapshots, and the httpx/requests patches do not see those
+clients.
 
-1. ``monkeypatch.delenv(..., raising=False)`` on every real-send variable
-   listed in ``_REAL_SEND_ENV`` plus any ``SLACK_WEBHOOK_*`` / ``BLUEBUBBLES_*``
-   key present in the process environment (dynamic BlueBubbles suffixes such
-   as ``BLUEBUBBLES_URL_0178``). A test that then ``monkeypatch.setenv`` sees
-   its own value. This fixture does not assign empty strings; it unsets.
-2. Refuses real outbound HTTP. ``httpx.Client.send``, ``httpx.AsyncClient.send``,
-   and ``requests.Session.send`` raise ``OutboundHTTPBlocked`` for a
-   non-localhost host on a real transport. In-process transports stay open:
-   Starlette ``TestClient``, ``httpx.ASGITransport`` / ``WSGITransport`` /
-   ``MockTransport``, and any other non-network transport (including a respx
-   or monkeypatch replacement of the transport ``handle_*`` method). Local
-   hosts (``localhost``, ``127.*``, ``::1``, ``testserver``) on a real
-   transport are allowed.
+Before test modules are imported, this file occupies every real-send variable
+with an empty string (including matching keys named in the repo ``.env``,
+without reading the values into the suite) and wraps ``load_dotenv`` so a
+later call cannot put the host secrets back. ``Settings`` and the other
+import-time copies therefore freeze empty. The autouse fixture still
+``monkeypatch.delenv(..., raising=False)`` so a test body sees them unset,
+then blanks those class and module attributes again.
+
+``block_live_sends`` runs before the test body and before per-test
+``monkeypatch.setenv`` calls, and it:
+
+1. Unsets every name in ``_REAL_SEND_ENV`` plus any ``SLACK_WEBHOOK_*`` /
+   ``BLUEBUBBLES_*`` key present in the process environment (dynamic
+   BlueBubbles suffixes such as ``BLUEBUBBLES_URL_0178``). A test that then
+   ``monkeypatch.setenv`` sees its own value.
+2. Refuses real outbound HTTP from ``httpx.Client.send``,
+   ``httpx.AsyncClient.send``, ``requests.Session.send``,
+   ``urllib.request.urlopen``, and ``aiohttp.ClientSession._request``.
+   Non-localhost hosts on a real transport raise ``OutboundHTTPBlocked``.
+   In-process transports stay open: Starlette ``TestClient``,
+   ``httpx.ASGITransport`` / ``WSGITransport`` / ``MockTransport``, a non-TCP
+   aiohttp connector, and a respx or monkeypatch replacement of the transport
+   ``handle_*`` method. Local hosts (``localhost``, ``127.*``, ``::1``,
+   ``testserver``) and ``file:`` / ``data:`` URLs are allowed.
 
 The names below were collected from ``os.getenv`` / ``os.environ`` reads in
 application code (tests excluded). Template ids, channel names, and
@@ -37,6 +53,8 @@ non-credential SwipeSimple paths are not in this list.
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -156,7 +174,48 @@ _REAL_SEND_ENV = (
     + _TWILIO_ENV
 )
 
+# Pay-link aliases have an in-code default when the variable is unset
+# (dashboard/config.py). Occupying them with "" before import would hide that
+# default. The fixture still deletes a host value, and the Config snapshot is
+# put back to this default when it captured something else.
+_PAYMENT_LINK_ENV = frozenset({
+    "SWIPESIMPLE_LINK_DEFAULT",
+    "SWIPESIMPLE_PAYMENT_LINK",
+    "SWIPESIMPLE_BOND_PAYMENT_LINK",
+    "SWIPESIMPLE_LINK_TELEGRAM",
+    "PAYMENT_LINK",
+})
+_CONFIG_PAYMENT_LINK_DEFAULT = (
+    "https://swipesimple.com/links/lnk_b6bf996f4c57bb340a150e297e769abd"
+)
+
 _ENV_PREFIXES = ("SLACK_WEBHOOK_", "BLUEBUBBLES_")
+
+_SETTINGS_SNAPSHOT_ATTRS = (
+    "SLACK_WEBHOOK_ARRESTS",
+    "SLACK_WEBHOOK_LEADS",
+    "SLACK_WEBHOOK_ERRORS",
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_FROM_NUMBER",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "GOOGLE_GMAIL_REFRESH_TOKEN",
+    "GOOGLE_DRIVE_REFRESH_TOKEN",
+    "BLUEBUBBLES_URL_0178",
+    "BLUEBUBBLES_URL_0314",
+)
+_CONFIG_SNAPSHOT_ATTRS = (
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_FROM_NUMBER",
+    "TWILIO_MESSAGING_SERVICE_SID",
+)
+_MODULE_SNAPSHOTS = (
+    ("dashboard.routers.rearrest_detector", "SLACK_REARREST_WEBHOOK"),
+    ("dashboard.routers.bb_health_monitor", "_SLACK_WEBHOOK"),
+    ("dashboard.routers.data_retention", "_SLACK_WEBHOOK"),
+)
 
 _LOCAL_HOSTS = frozenset({
     "localhost",
@@ -178,6 +237,107 @@ def _env_names_to_clear() -> list[str]:
         if key.startswith(_ENV_PREFIXES):
             names.add(key)
     return sorted(names)
+
+
+def _dotenv_send_keys(path: Path) -> list[str]:
+    """Key names in a dotenv file that can send. Values are never kept."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return []
+    found = []
+    explicit = set(_REAL_SEND_ENV)
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key.startswith(_ENV_PREFIXES) or key in explicit:
+            found.append(key)
+    return found
+
+
+def _pin_real_send_env() -> None:
+    """Occupy send keys so ``load_dotenv`` cannot copy the host ``.env`` in.
+
+    python-dotenv does not replace a variable that is already set. Deleting
+    the keys here would let ``config/settings.py`` refill them during
+    collection and store the live webhook on ``Settings``.
+    """
+    names = set(_REAL_SEND_ENV) - _PAYMENT_LINK_ENV
+    names.update(key for key in os.environ if key.startswith(_ENV_PREFIXES))
+    root = Path(__file__).resolve().parents[1]
+    for key in _dotenv_send_keys(root / ".env"):
+        if key not in _PAYMENT_LINK_ENV:
+            names.add(key)
+    for name in names:
+        os.environ[name] = ""
+
+
+def _install_dotenv_guard() -> None:
+    """Drop real-send keys that a ``load_dotenv`` call just introduced."""
+    try:
+        import dotenv
+        import dotenv.main
+    except ImportError:
+        return
+    current = dotenv.load_dotenv
+    if getattr(current, "_shamrock_test_guard", False):
+        return
+
+    def guarded(*args, **kwargs):
+        watched = _env_names_to_clear()
+        before = {name: os.environ.get(name) for name in watched}
+        try:
+            return current(*args, **kwargs)
+        finally:
+            for name, prev in before.items():
+                if prev is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = prev
+
+    guarded._shamrock_test_guard = True  # type: ignore[attr-defined]
+    dotenv.load_dotenv = guarded
+    dotenv.main.load_dotenv = guarded
+    for mod_name in ("config.settings", "dashboard.main", "social.main"):
+        mod = sys.modules.get(mod_name)
+        if mod is not None and getattr(mod, "load_dotenv", None) is current:
+            mod.load_dotenv = guarded
+
+
+def _blank_imported_send_snapshots() -> None:
+    """Empty credentials copied onto classes at import, if those modules exist."""
+    settings_mod = sys.modules.get("config.settings")
+    settings_cls = getattr(settings_mod, "Settings", None) if settings_mod else None
+    if settings_cls is not None:
+        for attr in _SETTINGS_SNAPSHOT_ATTRS:
+            if hasattr(settings_cls, attr):
+                setattr(settings_cls, attr, "")
+    config_mod = sys.modules.get("dashboard.config")
+    config_cls = getattr(config_mod, "Config", None) if config_mod else None
+    if config_cls is not None:
+        for attr in _CONFIG_SNAPSHOT_ATTRS:
+            if hasattr(config_cls, attr):
+                setattr(config_cls, attr, "")
+        current = getattr(config_cls, "SWIPESIMPLE_PAYMENT_LINK", None)
+        if current not in (None, "", _CONFIG_PAYMENT_LINK_DEFAULT):
+            config_cls.SWIPESIMPLE_PAYMENT_LINK = _CONFIG_PAYMENT_LINK_DEFAULT
+    for mod_name, attr in _MODULE_SNAPSHOTS:
+        mod = sys.modules.get(mod_name)
+        if mod is not None and hasattr(mod, attr):
+            setattr(mod, attr, "")
+
+
+# Run before pytest imports test modules. A fixture is too late: collection
+# already executes ``load_dotenv`` and the ``Settings`` class body.
+_pin_real_send_env()
+_install_dotenv_guard()
+_blank_imported_send_snapshots()
 
 
 def _hostname(url) -> str:
@@ -304,13 +464,44 @@ def _guard_requests(session, request) -> None:
     _refuse(host)
 
 
+def _network_host(url):
+    """Host of an http(s) URL, or None when the URL is not a network call."""
+    if hasattr(url, "full_url"):
+        url = url.full_url
+    text = str(url or "")
+    parsed = urlparse(text)
+    scheme = (parsed.scheme or "").lower()
+    if scheme in {"", "file", "data"}:
+        return None
+    return _hostname(text)
+
+
+def _refuse_unless_local(url) -> None:
+    host = _network_host(url)
+    if host is None or _is_local_host(host):
+        return
+    _refuse(host)
+
+
+def _aiohttp_uses_real_connector(session) -> bool:
+    connector = getattr(session, "connector", None)
+    if connector is None:
+        return True
+    return (
+        type(connector).__name__ == "TCPConnector"
+        and (type(connector).__module__ or "").startswith("aiohttp")
+    )
+
+
 def _install_http_guard(monkeypatch) -> None:
     import httpx
     import requests
+    import urllib.request
 
     orig_sync = httpx.Client.send
     orig_async = httpx.AsyncClient.send
     orig_requests = requests.Session.send
+    orig_urlopen = urllib.request.urlopen
 
     def guarded_sync(self, request, *args, **kwargs):
         _guard_httpx(self, request)
@@ -324,9 +515,27 @@ def _install_http_guard(monkeypatch) -> None:
         _guard_requests(self, request)
         return orig_requests(self, request, **kwargs)
 
+    def guarded_urlopen(url, *args, **kwargs):
+        _refuse_unless_local(url)
+        return orig_urlopen(url, *args, **kwargs)
+
     monkeypatch.setattr(httpx.Client, "send", guarded_sync)
     monkeypatch.setattr(httpx.AsyncClient, "send", guarded_async)
     monkeypatch.setattr(requests.Session, "send", guarded_requests)
+    monkeypatch.setattr(urllib.request, "urlopen", guarded_urlopen)
+
+    try:
+        import aiohttp
+    except ImportError:
+        return
+    orig_aiohttp = aiohttp.ClientSession._request
+
+    async def guarded_aiohttp(self, method, url, **kwargs):
+        if _aiohttp_uses_real_connector(self):
+            _refuse_unless_local(url)
+        return await orig_aiohttp(self, method, url, **kwargs)
+
+    monkeypatch.setattr(aiohttp.ClientSession, "_request", guarded_aiohttp)
 
 
 @pytest.fixture(autouse=True)
@@ -334,11 +543,14 @@ def block_live_sends(monkeypatch):
     """Unset real-send env vars and refuse non-localhost HTTP for this test.
 
     Per-test ``monkeypatch.setenv`` and per-test replacements of
-    ``httpx.Client.send`` / ``httpx.AsyncClient.send`` / ``requests.Session.send``
-    run after this fixture and override it for that test only.
+    ``httpx.Client.send`` / ``httpx.AsyncClient.send`` /
+    ``requests.Session.send`` / ``urllib.request.urlopen`` /
+    ``aiohttp.ClientSession._request`` run after this fixture and override
+    it for that test only.
     """
     for name in _env_names_to_clear():
         monkeypatch.delenv(name, raising=False)
+    _blank_imported_send_snapshots()
     _blocked_outbound_hosts.clear()
     _install_http_guard(monkeypatch)
     yield
