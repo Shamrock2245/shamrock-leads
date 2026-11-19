@@ -138,6 +138,48 @@ def test_detail_groups_bookings_and_ignores_the_stacked_table():
     assert detail["bond_type"] == ""
 
 
+def test_two_charge_rows_on_one_booking_are_one_record_with_two_charges():
+    """One source Booking Number, two charge rows: one booking, two charges."""
+    page = _page([
+        _row("202500001111", "BATTERY", case="2024 CF 000111 NC", bond="$15000.00"),
+        _row("202500001111", "RESIST", case="2024 MM 000222 NC", bond="$500.00"),
+    ])
+    records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
+    assert stats["skipped_rows"] == 0
+    assert len(records) == 1
+    record = records[0]
+    assert record.Booking_Number == "202500001111"
+    assert record.Booking_Number != PIN
+    assert record.Person_ID == PIN
+    charges = record.extra_data["charge_details"]
+    assert len(charges) == 2
+    assert [row["description"] for row in charges] == ["BATTERY", "RESIST"]
+    assert charges[0]["description"] != charges[1]["description"]
+    assert "BATTERY" not in charges[1]["description"]
+    assert "RESIST" not in charges[0]["description"]
+    assert record.Charges == "BATTERY | RESIST"
+    assert record.Case_Number == "2024 CF 000111 NC | 2024 MM 000222 NC"
+    assert record.Case_Number != record.Booking_Number
+
+
+def test_blank_booking_number_yields_zero_records_and_no_key():
+    """No source Booking Number means no record and no invented key."""
+    page = _page([
+        _row("", "BATTERY", case="2024 CF 000111 NC", bond="$15000.00"),
+        _row("   ", "RESIST", case="2024 MM 000222 NC", bond="$500.00"),
+        _row(PIN, "PIN IS NOT A BOOKING", case="2024 CF 000111 NC"),
+    ])
+    records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
+    assert records == []
+    assert stats["skipped_rows"] == 3
+    keys = [record.Booking_Number for record in records]
+    assert keys == []
+    assert PIN not in keys
+    assert "2024 CF 000111 NC" not in keys
+    assert "2024 MM 000222 NC" not in keys
+    assert "" not in keys
+
+
 def test_release_time_filled_is_not_in_custody():
     page = _page([
         _row("202500001111", "BATTERY", release="2025-01-02 01:02:03.004"),

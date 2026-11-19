@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Detail fetches are capped and paced** the same way as Hernando: 200 pages a run, 0.4 seconds before each page. The window moves one cap ahead each UTC day, so a stable list of about 1,065 people is not fetched from the same first page forever. A detail page with no desktop charge table, or without the booking columns, fails the walk instead of being skipped. `scrape()` still returns nothing. `SOURCE_CONTRACT_VALIDATED` stays false and Health stays `fail_closed`. The Mac relay, then stealth plus solver, then fail closed order is unchanged.
 
 ### Tests
-- `tests/test_sarasota_detail_contract.py` on the CI list. Synthetic fixtures only.
+- `tests/test_sarasota_detail_contract.py` on the CI list. Synthetic fixtures only. `test_two_charge_rows_on_one_booking_are_one_record_with_two_charges` keeps two charge rows on one 12-digit Booking Number as one booking with two charges. `test_blank_booking_number_yields_zero_records_and_no_key` writes nothing when the Booking Number is blank, whitespace, or only the person PIN, and does not use the case number as a key.
 
 ## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
 
