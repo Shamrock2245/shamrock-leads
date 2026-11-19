@@ -13,11 +13,16 @@ Safety & Compliance:
     1-click Super CRM URL (`/?tab=paperwork&packet_id=PKT-...`) so staff can
     assign the POA, edit any fields, and hit Send inside Super CRM.
   - Protected by machine auth (`X-API-Key` / `Authorization: Bearer`) or staff session.
-  - Rejects private/loopback/metadata URLs to prevent SSRF.
+  - Rejects private/loopback/metadata URLs to prevent SSRF: the host is resolved
+    and every address must be public, and every fetch hop (redirects included)
+    is re-checked (``public_url_guard``).
+  - Never writes the ``arrests`` collection. Arrest records come only from
+    source scrapers; agent-supplied booking facts stay on the intake/packet.
 """
 from __future__ import annotations
 
 import base64
+import binascii
 import ipaddress
 import logging
 import os
@@ -34,11 +39,15 @@ from pydantic import BaseModel, Field
 from dashboard.auth.pin_middleware import get_session_from_request, is_machine_auth_valid
 from dashboard.extensions import get_collection
 from dashboard.services.id_scanner_service import IDScannerService
+from dashboard.services.public_url_guard import check_public_url
 from dashboard.services.url_ingest_service import ingest_url
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agent", tags=["agent-packet"])
+
+# Largest accepted base64 ID photo (characters). ~12 MB of image bytes.
+MAX_ID_IMAGE_B64_CHARS = 16_000_000
 
 
 class AgentIndemnitorInput(BaseModel):
@@ -116,7 +125,7 @@ def _is_authorized(request: Request) -> bool:
     return False
 
 
-def _validate_public_booking_url(raw_url: str) -> Optional[str]:
+async def _validate_public_booking_url(raw_url: str) -> Optional[str]:
     """Return an error string if URL is unsafe (SSRF / non-HTTP), else None."""
     try:
         parsed = urlsplit(raw_url.strip())
@@ -135,11 +144,18 @@ def _validate_public_booking_url(raw_url: str) -> Optional[str]:
             return "booking_url IP address is not allowed"
     except ValueError:
         pass  # Domain name, not a raw IP literal
+    # Resolve the host: decimal/hex/short IPv4, wildcard DNS (127.0.0.1.nip.io)
+    # and other non-global ranges only show up after resolution.
+    resolved_err = await check_public_url(raw_url)
+    if resolved_err:
+        return "booking_url host is not allowed"
     return None
 
 
 def _decode_base64_image(raw: str) -> bytes:
     text = (raw or "").strip()
+    if len(text) > MAX_ID_IMAGE_B64_CHARS:
+        raise ValueError("ID image is too large")
     if "," in text and text.lower().startswith("data:"):
         text = text.split(",", 1)[1].strip()
     return base64.b64decode(text, validate=True)
@@ -184,10 +200,12 @@ async def parse_booking_url(request: Request, body: AgentParseBookingRequest):
     """Parse a county jail booking URL and return verbatim defendant/charge/bond data."""
     if not _is_authorized(request):
         return JSONResponse({"success": False, "error": "Unauthorized"}, status_code=401)
-    url_err = _validate_public_booking_url(body.booking_url)
+    url_err = await _validate_public_booking_url(body.booking_url)
     if url_err:
         return JSONResponse({"success": False, "error": url_err}, status_code=400)
-    result = await ingest_url(body.booking_url.strip(), county=body.county, state=body.state)
+    result = await ingest_url(
+        body.booking_url.strip(), county=body.county, state=body.state, public_only=True
+    )
     if not result.get("success"):
         return JSONResponse({"success": False, "error": result.get("error", "Failed to parse booking URL")}, status_code=422)
     return result
@@ -210,7 +228,7 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
     # 1. Parse defendant booking URL if provided
     booking_url = (body.booking_url or "").strip()
     if booking_url:
-        url_err = _validate_public_booking_url(booking_url)
+        url_err = await _validate_public_booking_url(booking_url)
         if url_err:
             return JSONResponse({"success": False, "error": url_err}, status_code=400)
         try:
@@ -218,6 +236,7 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
                 booking_url,
                 county=body.defendant.county,
                 state=body.defendant.state,
+                public_only=True,
             )
             if ingest_res.get("success") and isinstance(ingest_res.get("data"), dict):
                 parsed_booking = ingest_res["data"]
@@ -228,8 +247,8 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
                     "staged with supplied defendant fields."
                 )
         except Exception as exc:
-            logger.warning("[agent-packet] ingest_url failed for %s: %s", booking_url, exc)
-            warnings.append(f"Booking URL fetch error: {exc}")
+            logger.warning("[agent-packet] ingest_url failed (%s)", type(exc).__name__)
+            warnings.append("Booking URL could not be fetched; staged with supplied defendant fields.")
 
     # 2. Scan indemnitor ID image if provided
     id_ocr: dict[str, Any] = {}
@@ -241,9 +260,12 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
                 id_ocr = scan_res.get("data") or {}
             else:
                 warnings.append(f"ID OCR did not extract fields: {(scan_res or {}).get('error', 'unknown')}")
+        except (binascii.Error, ValueError) as exc:
+            logger.warning("[agent-packet] ID image rejected (%s)", type(exc).__name__)
+            warnings.append("ID image could not be decoded (invalid or too large); not scanned.")
         except Exception as exc:
-            logger.warning("[agent-packet] ID scan failed: %s", exc)
-            warnings.append(f"ID image decode/scan error: {exc}")
+            logger.warning("[agent-packet] ID scan failed (%s)", type(exc).__name__)
+            warnings.append("ID image could not be scanned; enter indemnitor ID fields in Super CRM.")
 
     # 3. Merge defendant fields (verbatim charges & booking facts preserved from source)
     def_in = body.defendant
@@ -308,40 +330,10 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
     packet_id = f"PKT-{uuid.uuid4().hex[:10].upper()}"
     surety = (body.surety or "osi").strip().lower() or "osi"
 
-    # 5. Upsert arrest record if booking_number is known and not already stored
-    if def_booking:
-        try:
-            arrests_col = get_collection("arrests")
-            existing_arrest = await arrests_col.find_one(
-                {"$or": [{"booking_number": def_booking}, {"Booking_Number": def_booking}]},
-                {"_id": 1},
-            )
-            if not existing_arrest:
-                await arrests_col.insert_one({
-                    "booking_number": def_booking,
-                    "Booking_Number": def_booking,
-                    "full_name": def_full,
-                    "Full_Name": def_full,
-                    "first_name": def_first,
-                    "last_name": def_last,
-                    "county": def_county,
-                    "County": def_county,
-                    "state": def_state,
-                    "dob": def_dob,
-                    "DOB": def_dob,
-                    "address": def_address,
-                    "charges": raw_charges,
-                    "Charges": raw_charges,
-                    "bond_amount": bond_amount,
-                    "Bond_Amount": bond_amount,
-                    "case_number": def_case_no,
-                    "source_url": booking_url,
-                    "ingestion_method": parse_method or "chat_agent",
-                    "created_at": now,
-                    "updated_at": now,
-                })
-        except Exception as exc:
-            logger.warning("[agent-packet] arrests upsert skipped: %s", exc)
+    # 5. No arrests write. ``arrests`` is the scraper source of truth (dedup
+    # key state + county + booking_number) and packet context treats an arrests
+    # row as scraper-recorded bond/charges. Agent-supplied booking facts stay on
+    # the intake and packet below; staff verify them in Super CRM.
 
     # 6. Insert intake_queue record
     intake_doc = {

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-19 (Chat-agent packet staging hardening)
+
+### Fixed
+- **`/api/agent/stage-packet` no longer writes the `arrests` collection.** The endpoint inserted an arrests row (including `Booking_Number`, bond, and charges) from chat-agent input, deduped on booking number alone. Packet context treats an arrests row as scraper-recorded bond and charges, so agent-supplied facts could hydrate as source data. Arrest records now come only from source scrapers; the staged intake and packet still carry the defendant fields for staff to verify in Super CRM. Packet context already resolves from the packet and intake.
+- **Booking-URL fetches from the agent endpoints refuse non-public hosts after DNS resolution and on every redirect hop.** `/api/agent/stage-packet` and `/api/agent/parse-booking-url` resolve the host and require every address to be globally routable, which closes decimal / hex / short IPv4 (`2130706433`, `0x7f000001`, `127.1`), wildcard DNS (`169.254.169.254.nip.io`), CGNAT, and URLs carrying credentials. `ingest_url(..., public_only=True)` installs an httpx request hook (new `dashboard/services/public_url_guard.py`) so a public page that redirects to an internal address is refused before the hop is sent. Other `ingest_url` callers are unchanged (`public_only` defaults to `False`).
+- **Agent responses do not echo exception text.** Fetch and ID-scan failures return fixed warnings and log only the exception type.
+- **Oversized ID images are skipped.** `id_image_base64` longer than 16,000,000 characters is not decoded or scanned; the packet is still staged with a warning.
+
+### Tests
+- `tests/test_agent_packet.py` is on the CI list. New cases: numeric-IP and wildcard-DNS SSRF forms answer 400 on both endpoints without calling `ingest_url`; a redirect to `127.0.0.1` is refused under `public_only=True`; staging writes no arrests row and no `Booking_Number`, and does not echo exception text; an oversized ID image is not scanned. DNS is stubbed in tests.
+
 ## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
 
 ### Fixed

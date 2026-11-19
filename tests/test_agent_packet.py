@@ -18,6 +18,41 @@ from dashboard.routers.agent_packet import router as agent_packet_router
 from tests.bb_fake_mongo import FakeCollection
 
 
+_PUBLIC_IP = "93.184.216.34"
+
+
+def _fake_resolve(mapping=None):
+    """Resolver stub: hosts in ``mapping`` get those addresses, IP literals and
+    numeric forms map through ``ipaddress`` semantics, anything else is public."""
+    import ipaddress
+    import socket
+
+    mapping = mapping or {}
+
+    def _resolve(host, port):
+        if host in mapping:
+            return list(mapping[host])
+        try:
+            return [str(ipaddress.ip_address(host))]
+        except ValueError:
+            pass
+        try:
+            # inet_aton accepts decimal / hex / short IPv4 like getaddrinfo does
+            return [socket.inet_ntoa(socket.inet_aton(host))]
+        except OSError:
+            return [_PUBLIC_IP]
+
+    return _resolve
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _stub_dns(monkeypatch):
+    monkeypatch.setattr("dashboard.services.public_url_guard._resolve", _fake_resolve())
+
+
 def _make_client():
     app = FastAPI()
     app.include_router(agent_packet_router)
@@ -156,10 +191,131 @@ def test_stage_packet_merges_booking_url_id_ocr_and_chat_input(monkeypatch):
     assert pkt["docuseal_submission_id"] is None
     assert pkt["surety_id"] == "palmetto"
     assert len(cols["intake_queue"].docs) == 1
-    assert len(cols["arrests"].docs) == 1
+    # Agent input never creates arrest records (scraper source of truth)
+    assert len(cols["arrests"].docs) == 0
 
 
 def test_sl_hydrate_deep_link_opens_paperwork_packet():
     js = (ROOT / "dashboard" / "sl-hydrate.js").read_text(encoding="utf-8")
     assert "packet_id" in js
     assert "SLPaperwork.startFromBond" in js
+
+
+def test_stage_packet_blocks_numeric_and_wildcard_dns_ssrf(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    monkeypatch.setattr(
+        "dashboard.services.public_url_guard._resolve",
+        _fake_resolve({
+            "169.254.169.254.nip.io": ["169.254.169.254"],
+            "internal.example.com": ["10.0.0.5"],
+            "cgnat.example.com": ["100.64.0.1"],
+            "mixed.example.com": [_PUBLIC_IP, "127.0.0.1"],
+        }),
+    )
+    client = _make_client()
+    ingest = AsyncMock(return_value={"success": False})
+    with patch("dashboard.routers.agent_packet.ingest_url", ingest):
+        for bad_url in (
+            "http://2130706433/",
+            "http://0x7f000001/",
+            "http://127.1/",
+            "http://169.254.169.254.nip.io/latest/meta-data/",
+            "http://internal.example.com/admin",
+            "http://cgnat.example.com/",
+            "http://mixed.example.com/",
+            "http://user:pw@example.com/",
+        ):
+            for path in ("/api/agent/stage-packet", "/api/agent/parse-booking-url"):
+                resp = client.post(
+                    path,
+                    headers={"X-API-Key": "secret-gas-key"},
+                    json={"booking_url": bad_url},
+                )
+                assert resp.status_code == 400, f"{path} {bad_url} -> {resp.status_code}"
+    ingest.assert_not_awaited()
+
+
+def test_ingest_url_public_only_refuses_redirect_to_internal_host(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    from dashboard.services import url_ingest_service
+
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.host == "jail.example.com":
+            return httpx.Response(302, headers={"Location": "http://127.0.0.1:8000/secret"})
+        return httpx.Response(200, text="<html><title>SECRET</title>Name: X Y</html>")
+
+    real_client = httpx.AsyncClient
+
+    def client_factory(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(url_ingest_service.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr("config.source_guard.fail_closed_reason", lambda *a, **k: None)
+
+    res = asyncio.run(url_ingest_service.ingest_url("https://jail.example.com/booking/1", public_only=True))
+    assert res["success"] is False
+    assert "SECRET" not in str(res)
+    assert seen == ["https://jail.example.com/booking/1"]
+
+
+def test_stage_packet_does_not_write_arrests_or_leak_exception_text(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = {
+        "arrests": FakeCollection("arrests"),
+        "intake_queue": FakeCollection("intake_queue"),
+        "paperwork_packets": FakeCollection("paperwork_packets"),
+    }
+    boom = AsyncMock(side_effect=RuntimeError("mongodb://admin:hunter2@10.0.0.5 traceback"))
+    with patch("dashboard.routers.agent_packet.get_collection", side_effect=lambda name: cols[name]), \
+         patch("dashboard.routers.agent_packet.ingest_url", boom), \
+         patch("dashboard.routers.agent_packet.IDScannerService.scan_id_image",
+               AsyncMock(side_effect=RuntimeError("ocr internal /srv/secret path"))):
+        resp = client.post(
+            "/api/agent/stage-packet",
+            headers={"X-API-Key": "secret-gas-key"},
+            json={
+                "booking_url": "https://jail.example.com/booking/1",
+                "defendant": {"full_name": "Test Person", "booking_number": "TEST-0001", "county": "Lee"},
+                "indemnitor": {"full_name": "Test Cosigner", "phone": "2395550100"},
+                "id_image_base64": base64.b64encode(b"\xff\xd8\xff\xd9").decode(),
+            },
+        )
+    assert resp.status_code == 200
+    body = resp.text
+    assert "hunter2" not in body and "traceback" not in body and "/srv/secret" not in body
+    assert cols["arrests"].docs == []
+    for doc in cols["intake_queue"].docs + cols["paperwork_packets"].docs:
+        assert "Booking_Number" not in doc
+
+
+def test_stage_packet_rejects_oversized_id_image(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    monkeypatch.setattr("dashboard.routers.agent_packet.MAX_ID_IMAGE_B64_CHARS", 16)
+    client = _make_client()
+    cols = {
+        "arrests": FakeCollection("arrests"),
+        "intake_queue": FakeCollection("intake_queue"),
+        "paperwork_packets": FakeCollection("paperwork_packets"),
+    }
+    scan = AsyncMock(return_value={"success": True, "data": {}})
+    with patch("dashboard.routers.agent_packet.get_collection", side_effect=lambda name: cols[name]), \
+         patch("dashboard.routers.agent_packet.IDScannerService.scan_id_image", scan):
+        resp = client.post(
+            "/api/agent/stage-packet",
+            headers={"X-API-Key": "secret-gas-key"},
+            json={
+                "defendant": {"full_name": "Test Person", "booking_number": "TEST-0002"},
+                "id_image_base64": "A" * 64,
+            },
+        )
+    assert resp.status_code == 200
+    scan.assert_not_awaited()
+    assert any("too large" in w for w in resp.json()["warnings"])
