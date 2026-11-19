@@ -16,6 +16,19 @@ The relay opens a **headed** Patchright Chromium window. Plain urllib and headle
 - Install the browser the relay launches: `python -m patchright install chromium`. Do not use `python -m playwright install chromium` for this relay.
 - `--headless` exists and defaults off. Leave it off.
 
+## Relay stderr (`fetch_failed`)
+
+The relay writes these lines to its own stderr. A LaunchAgent keeps that stream only at the plist's `StandardErrorPath`. This repo does not ship that plist. Leads Ops reads the path set on the Mac.
+
+| Stderr line | Meaning |
+|---|---|
+| `[mac-relay] browser_worker started` | The browser thread started. Chromium itself opens on the first `/fetch`. |
+| `[mac-relay] browser_worker failed error_type=<ExcClass> detail=omitted` | The thread did not start. `detail` is always `omitted`. The exception text is not written. |
+| `[mac-relay] request` | One served request. A success logs this line and nothing else. |
+| `[mac-relay] fetch_failed county=<Manatee or Sarasota> error_type=<ExcClass> detail=omitted` | `read_allowlisted` raised. The HTTP response is still 502 `{"error":"fetch_failed","error_type":"..."}`. This is not a roster read. |
+
+`fetch_failed` means the allowlisted fetch raised (browser failed to open, no display, navigation error, closed page) before a page was returned. `detail=omitted` means the exception text was withheld: it can contain a page snippet, a local path, or other personal data. The line shows the exception class only. It does not include the relay token, request headers, the request line, or the page body. The 2026-11-17 7:58 AM ET case was this 502 with only `[mac-relay] request` on stderr; the new line is what shows the exception class. Manatee and Sarasota stay `fail_closed`.
+
 ## What was removed (2026-10-07, owner decision via CoS)
 
 - The APE/Warren residential proxy and office/Tailscale SOCKS resolver (`MANATEE_EGRESS_MODE=auto`). Setting `auto` now raises a config error.

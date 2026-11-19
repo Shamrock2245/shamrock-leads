@@ -1220,9 +1220,20 @@ def test_transactions_unavailable_writes_nothing(db, monkeypatch):
 
 
 def test_poller_marks_gmail_read_only_after_commit(db, monkeypatch):
+    """Mark Gmail read only after commit. Slack stays on the mock, not the network.
+
+    The autouse fixture already unsets ``SLACK_WEBHOOK_LEADS``. Clear it again
+    here, and replace ``httpx.AsyncClient`` the same way as
+    ``test_clean_poller_charge_posts_leads_note_once_after_commit``, so a host
+    ``.env`` cannot post this receipt.
+    """
     db["bond_cases"].docs.append(_bond())
     body = "Amount $100.00\nBooking: BK-1\nTransaction id: TX-POLL\n"
     read = []
+    monkeypatch.delenv("SLACK_WEBHOOK_LEADS", raising=False)
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    client = _SlackPost()
+    monkeypatch.setattr("httpx.AsyncClient", client)
 
     class Reader:
         is_configured = True
@@ -1255,6 +1266,61 @@ def test_poller_marks_gmail_read_only_after_commit(db, monkeypatch):
     assert unread["processed"] == 0
     assert unread["errors"] == 1
     assert read == []
+    assert client.posts == []
+
+
+def test_poller_clean_charge_makes_no_real_http_when_leads_webhook_is_set(
+    db, monkeypatch, blocked_outbound_hosts,
+):
+    """A clean poller charge must not open a socket when the leads webhook is set.
+
+    2026-10-29 and 2026-11-16 posted
+    ``SwipeSimple receipt (Gmail poll) — $100.00 | Booking: BK-1`` because
+    pytest inherited ``SLACK_WEBHOOK_LEADS`` from the host environment.
+    ``setenv`` puts that outer value back after the autouse clear. httpx is
+    not mocked. The conftest guard has to refuse the host before any real
+    transport runs.
+    """
+    import socket
+
+    hook = "https://hooks.slack.com/services/T00000000/B00000000/not-a-real-hook"
+    monkeypatch.setenv("SLACK_WEBHOOK_LEADS", hook)
+    socket_calls = []
+
+    def _no_socket(*args, **kwargs):
+        socket_calls.append(True)
+        raise AssertionError("real socket connect during poller charge")
+
+    monkeypatch.setattr(socket.socket, "connect", _no_socket)
+    monkeypatch.setattr(socket, "create_connection", _no_socket)
+
+    class Reader:
+        def __init__(self):
+            self.queue = []
+            self.is_configured = True
+
+        def search_messages(self, query, max_results=20):
+            return list(self.queue)
+
+        def mark_as_read(self, mid):
+            return None
+
+    reader = Reader()
+    monkeypatch.setattr(
+        "dashboard.services.gmail_reader.GmailReaderService",
+        lambda: reader,
+    )
+    db["bond_cases"].docs.append(_bond())
+    reader.queue = [{
+        "message_id": "m-clean",
+        "subject": "Receipt",
+        "body": "Amount $100.00\nBooking: BK-1\nTransaction id: TX-CLEAN\n",
+    }]
+    clean = _run(SwipeSimpleReceiptPoller(db=db).poll())
+    assert clean["processed"] == 1
+    assert db["bond_cases"].docs[0]["last_transaction_id"] == "TX-CLEAN"
+    assert socket_calls == []
+    assert blocked_outbound_hosts == ["hooks.slack.com"]
 
 
 class _LockColl(Coll):

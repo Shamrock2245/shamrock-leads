@@ -39,6 +39,9 @@ MAX_BODY = 2_000_000
 CF_WAIT_S = 25.0
 CF_POLL_S = 0.4
 _CHALLENGE_TITLES = ("just a moment", "attention required")
+# Exception text is not logged. Playwright and Chromium messages can carry a
+# page snippet, a local path, or other personal data. The class name is enough.
+_DETAIL_CODE = "omitted"
 Fetch = Callable[[str], Tuple[int, str]]
 
 
@@ -67,6 +70,91 @@ def clip_body(html: str) -> str:
     if len(text) > MAX_BODY:
         return text[:MAX_BODY]
     return text
+
+
+def _redaction_marker(secret: str) -> str:
+    """A stand-in that does not contain ``secret``.
+
+    ``[redacted]`` is the usual marker. If the token is a substring of that
+    word (``redacted``, ``act``, ``[``), appending characters never removes the
+    match, so the marker is eight copies of a character the token does not
+    contain. The scans are bounded.
+    """
+    plain = "[redacted]"
+    if secret not in plain:
+        return plain
+    for start, stop in ((48, 58), (65, 91), (97, 123), (32, 127)):
+        for code in range(start, stop):
+            ch = chr(code)
+            if ch not in secret:
+                return ch * 8
+    return "\ufffd" * 8
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    """Replace ``secret`` so a stderr line cannot echo the relay token."""
+    if not secret or secret not in text:
+        return text
+    return text.replace(secret, _redaction_marker(secret))
+
+
+def _allowlisted_county(county: str, state: str) -> str:
+    """Canonical allowlisted county, or ``unknown`` so the raw query is not logged."""
+    name = " ".join(str(county or "").split())
+    state_code = " ".join(str(state or "").split()).upper()
+    if relay_target(name, state_code):
+        return name
+    return "unknown"
+
+
+def _write_stderr(line: str) -> None:
+    sys.stderr.write(line if line.endswith("\n") else line + "\n")
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def _emit(line: str, token: str) -> None:
+    """Write one stderr line after removing the relay token from the whole line.
+
+    The static words (``mac``, ``relay``, ``fetch``, ``error_type``) can be the
+    token. Redacting only the county, class, and ``omitted`` would leave that
+    credential in the prefix. ``main`` strips the env token before it is used
+    for auth, so the logger strips too. Otherwise ``" relay "`` would leave
+    ``relay`` in ``[mac-relay]``.
+    """
+    _write_stderr(_redact_secret(line, str(token or "").strip()))
+
+
+def log_fetch_failed(county: str, state: str, exc: BaseException, token: str) -> None:
+    """One stderr line when ``read_allowlisted`` raises.
+
+    The line carries the allowlisted county and the exception class. ``detail``
+    is the fixed code ``omitted``: ``str(exc)`` is not written. The whole line,
+    including the static words, is redacted before it is written. It does not
+    include the token, request headers, the request line, or the page body.
+    The HTTP payload stays ``fetch_failed`` plus ``error_type``.
+    """
+    _emit(
+        "[mac-relay] fetch_failed "
+        f"county={_allowlisted_county(county, state)} "
+        f"error_type={type(exc).__name__} detail={_DETAIL_CODE}",
+        token,
+    )
+
+
+def log_browser_worker(started: bool, exc: BaseException | None = None) -> None:
+    """One stderr line after the browser worker thread starts, or fails to."""
+    token = os.getenv(RELAY_TOKEN_ENV, "")
+    if started:
+        _emit("[mac-relay] browser_worker started", token)
+        return
+    error_type = type(exc).__name__ if exc is not None else "Exception"
+    _emit(
+        f"[mac-relay] browser_worker failed error_type={error_type} detail={_DETAIL_CODE}",
+        token,
+    )
 
 
 def read_cleared_page(page, url: str, *, timeout_s: float, sleep: Callable[[float], None]) -> Tuple[int, str]:
@@ -122,7 +210,12 @@ class HeadedBrowser:
         self._page = None
         self._jobs: queue.Queue = queue.Queue()
         self._worker = threading.Thread(target=self._run, name="mac-relay-browser", daemon=True)
-        self._worker.start()
+        try:
+            self._worker.start()
+        except Exception as exc:
+            log_browser_worker(False, exc)
+            raise
+        log_browser_worker(True)
 
     def fetch(self, url: str) -> Tuple[int, str]:
         done = threading.Event()
@@ -225,6 +318,7 @@ def make_handler(expected_token: str, fetch: Fetch):
             try:
                 status, body = read_allowlisted(county, state, fetch)
             except Exception as exc:
+                log_fetch_failed(county, state, exc, expected_token)
                 self._send(502, {"error": "fetch_failed", "error_type": type(exc).__name__})
                 return
             if status == 404 and not body:
@@ -235,8 +329,9 @@ def make_handler(expected_token: str, fetch: Fetch):
 
         def log_message(self, fmt, *args):
             # Do not log the request line: it can carry the county page, and
-            # the token is a header we never want in an access log.
-            sys.stderr.write("[mac-relay] request\n")
+            # the token is a header we never want in an access log. The static
+            # words are redacted too, in case the token is one of them.
+            _emit("[mac-relay] request", expected_token)
 
         def _send(self, code: int, payload: dict) -> None:
             raw = json.dumps(payload).encode("utf-8")

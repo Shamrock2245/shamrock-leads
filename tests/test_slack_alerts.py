@@ -182,3 +182,55 @@ async def test_automation_digest_alerts_fallback(monkeypatch):
     success = await post_slack("POA low stock alert", webhook_env="SLACK_WEBHOOK_ALERTS")
     assert success is True
     assert called_url == "https://hooks.slack.com/services/ERRORS/HOOK"
+
+
+def test_settings_snapshot_and_dotenv_keep_send_credentials_empty(tmp_path):
+    """Collection must not freeze a host webhook onto Settings.
+
+    ``load_dotenv`` runs at import, before the autouse fixture. A later
+    ``load_dotenv`` must not put a leads webhook or Twilio token back, and
+    ``Settings`` stays empty so ``RearrestChecker`` cannot read a live URL.
+    """
+    from dotenv import load_dotenv
+
+    from config.settings import Settings
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "SLACK_WEBHOOK_LEADS=https://hooks.slack.com/services/T000/B000/not-real\n"
+        "TWILIO_AUTH_TOKEN=not-a-real-token\n"
+    )
+    load_dotenv(env_file, override=False)
+    assert os.environ.get("SLACK_WEBHOOK_LEADS", "") == ""
+    assert os.environ.get("TWILIO_AUTH_TOKEN", "") == ""
+    assert Settings.SLACK_WEBHOOK_LEADS == ""
+    assert Settings.TWILIO_AUTH_TOKEN == ""
+    assert Settings.TWILIO_ACCOUNT_SID == ""
+
+
+def test_urllib_and_aiohttp_slack_posts_are_blocked(blocked_outbound_hosts):
+    """Repeat-offender Slack uses urllib; POA Slack uses aiohttp."""
+    import asyncio
+    import urllib.request
+
+    import aiohttp
+
+    from tests.conftest import OutboundHTTPBlocked
+
+    hook = "https://hooks.slack.com/services/T000/B000/not-real"
+    request = urllib.request.Request(
+        hook,
+        data=b"{}",
+        headers={"Content-Type": "application/json"},
+    )
+    with pytest.raises(OutboundHTTPBlocked):
+        urllib.request.urlopen(request, timeout=1)
+
+    async def post():
+        timeout = aiohttp.ClientTimeout(total=1)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            await session.post(hook, json={"text": "nope"})
+
+    with pytest.raises(OutboundHTTPBlocked):
+        asyncio.run(post())
+    assert blocked_outbound_hosts == ["hooks.slack.com", "hooks.slack.com"]

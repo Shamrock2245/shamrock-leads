@@ -2425,10 +2425,10 @@
       </div>
     </div>
 
-    <!-- Regional Court Intelligence (SE US — Juriscraper + CourtListener) -->
+    <!-- Regional Court Intelligence (CourtListener v4 Case Law & Dockets) -->
     <div style="margin-top:22px">
       <div class="int-chart-panel" style="padding:20px">
-        <div class="int-chart-title">🏛️ Regional Court Intelligence <span class="int-chart-badge" style="background:#6366f1">SE US · 12 States</span></div>
+        <div class="int-chart-title">🏛️ CourtListener Case Law &amp; Docket Intelligence <span class="int-chart-badge" style="background:#6366f1;color:#fff">CourtListener v4 · 15 States · Case Law &amp; Dockets</span></div>
         <div id="intCourtIntelPanel">
           <div style="padding:16px;text-align:center;color:var(--muted)"><span class="spinner-sm"></span> Loading court intelligence...</div>
         </div>
@@ -2457,6 +2457,20 @@
     <div class="modal-body" id="intFeatureBody"></div>
     <div class="modal-footer">
       <button class="btn-cancel" onclick="document.getElementById('intFeatureModal').classList.remove('show')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ CASE DOSSIER MODAL (Court -> Docket -> Cluster -> Opinion) ═══ -->
+<div id="intCaseDossierModal" class="modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal" style="max-width:860px;max-height:90vh;display:flex;flex-direction:column">
+    <div class="modal-header">
+      <h2 id="intDossierTitle">📖 Case Law Dossier</h2>
+      <button class="modal-close" onclick="document.getElementById('intCaseDossierModal').classList.remove('show')">✕</button>
+    </div>
+    <div class="modal-body" id="intDossierBody" style="overflow-y:auto;max-height:70vh"></div>
+    <div class="modal-footer" id="intDossierFooter">
+      <button class="btn-cancel" onclick="document.getElementById('intCaseDossierModal').classList.remove('show')">Close</button>
     </div>
   </div>
 </div>
@@ -3910,7 +3924,7 @@
 <script defer src="/sl-inventory.js?v=7"></script>
 <script defer src="/sl-analytics.js?v=4"></script>
 <script defer src="/sl-analytics-apex.js?v=4"></script>
-<script defer src="/sl-intelligence.js?v=1"></script>
+<script defer src="/sl-intelligence.js?v=2"></script>
 <script defer src="/sl-docket-monitor.js?v=1"></script>
 <script defer src="/sl-legal-nlp.js?v=1"></script>
 <script defer src="/sl-calendar.js?v=4"></script>

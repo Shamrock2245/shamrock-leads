@@ -12,6 +12,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_sarasota_detail_contract.py` on the CI list. Synthetic fixtures only.
 
+## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
+
+### Fixed
+- **Pytest no longer inherits live send credentials.** `tests/conftest.py` unsets Slack webhooks (`SLACK_WEBHOOK_*`, including `SLACK_WEBHOOK_LEADS` and `SLACK_WEBHOOK_URL`, plus `SLACK_BOT_TOKEN`), BlueBubbles (`BLUEBUBBLES_*` and the `BB_PASSWORD` alias), SwipeSimple live and credential variables (`SWIPESIMPLE_SESSION`, `SWIPESIMPLE_LIVE`, `SWIPESIMPLE_DISPATCH_LIVE`, `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING`, and the other SwipeSimple secrets and pay-link aliases the app reads), DocuSeal API key and URL variables, Gmail OAuth send credentials, and Twilio send credentials for every test. A test that sets one of those with `monkeypatch.setenv` still sees its own value.
+- **Pytest refuses real outbound HTTP.** `httpx.Client.send`, `httpx.AsyncClient.send`, `requests.Session.send`, `urllib.request.urlopen`, and `aiohttp.ClientSession._request` raise for a non-localhost host on a real transport. `TestClient`, ASGI, and other in-process transports still run. respx or a monkeypatch of the client still replaces the guard. Production send behavior is unchanged.
+- **Send credentials are cleared before test collection.** `config/settings.py` loads `.env` and copies Slack and Twilio values onto `Settings` at import. The test harness occupies those variables before test modules import, and a later `load_dotenv` cannot put them back, so `RearrestChecker` does not keep a live webhook from the host environment.
+
+### Tests
+- `test_poller_marks_gmail_read_only_after_commit` clears `SLACK_WEBHOOK_LEADS` and mocks `httpx`, matching `test_clean_poller_charge_posts_leads_note_once_after_commit`.
+- `test_poller_clean_charge_makes_no_real_http_when_leads_webhook_is_set` proves a clean Gmail-poll charge does not make a real HTTP call when `SLACK_WEBHOOK_LEADS` is set in the environment.
+- `test_settings_snapshot_and_dotenv_keep_send_credentials_empty` and `test_urllib_and_aiohttp_slack_posts_are_blocked` cover the import-time snapshot and the urllib/aiohttp Slack paths.
+
+## [Unreleased] — 2026-11-17 (Mac relay fetch_failed stderr)
+
+### Fixed
+- **`scripts/mac_roster_relay.py` logs why `/fetch` returned 502.** When `read_allowlisted` raises, stderr gets one line: `[mac-relay] fetch_failed county=<allowlisted county> error_type=<ExcClass> detail=omitted`. `detail` is the fixed code `omitted`. Exception text is never written. The line does not include the token, request headers, the request line, or the page body. The HTTP body is still `{"error":"fetch_failed","error_type":...}`. A successful fetch still logs only `[mac-relay] request`.
+- **The browser worker is visible at startup.** After the worker thread starts, stderr gets `[mac-relay] browser_worker started`. If that thread fails to start, the line is `[mac-relay] browser_worker failed error_type=<ExcClass> detail=omitted`. That line does not include the exception text. Manatee and Sarasota stay `fail_closed`.
+- **The redaction marker cannot hang the request.** The whole stderr line is redacted before it is written, including the static words `mac`, `relay`, `fetch`, and `error_type`, and the browser-worker lines. The logger strips the env token the same way startup does, so a padded value such as `" relay "` does not leave `relay` in the line. The usual marker is `[redacted]`. When the token is a substring of that word, the marker is eight copies of a character the token does not contain, chosen with a bounded scan. The marker is not applied to exception text, because that text is not logged. A token such as `redacted` still returns 502.
+
+### Tests
+- `tests/test_jail_access_strategy.py` (already on the CI list): the failure line has county and error_type; the token is absent from stderr when the exception text contains it; the success path logs only the bare request line.
+
 ## [Unreleased] — 2026-11-12 (Tenant scope for the iMessage SMS fallback log)
 
 ### Fixed
