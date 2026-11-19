@@ -228,6 +228,12 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "interval_seconds": 14400,       # 4 hours
     },
+    # Scheduler may run. FEDERAL_BOND_RISK_ALERTS still defaults off, so the
+    # cycle does not call CourtListener or write staff alerts until that flag is on.
+    "federal_bond_risk": {
+        "enabled": True,
+        "interval_seconds": 21600,       # 6 hours
+    },
     "court_intel": {
         "enabled": True,
         "interval_seconds": 21600,       # 6 hours

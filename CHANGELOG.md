@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-19 (Florida federal bond-risk staff alerts)
+
+### Added
+- **Staff alert when an active client has a Florida federal criminal case with a bond-risk event.** `dashboard/services/federal_bond_risk.py` reuses the CourtListener v4 client for FLMD, FLSD, and FLND dockets, docket entries, and RECAP. Events are bond conditions set or changed, a detention hearing, failure to appear, a warrant, or revocation or modification of release.
+- **Matching fails closed.** A row is confirmed and auto-linked only when the full name matches and the docket's date of birth matches a date we hold, or a case or agency number we already hold matches the docket. Full name alone is `possible` for staff review and is not auto-linked. A conflicting date of birth, a surname-only caption, or two confirmed clients on the same event is not auto-linked.
+- **`FEDERAL_BOND_RISK_ALERTS` is off by default.** While it is off, the scan does not call CourtListener and does not write alerts. With the flag on and `COURTLISTENER_API_TOKEN` unset, the scan skips and `GET /api/docket-monitor/federal-bond-risk` (and the docket-monitor status payload) reports that anonymous v4 search and docket calls are rejected. Calls use field selection, back off on HTTP 429, and do not follow a second page.
+- **Staff see the alert in the CRM notification center** (`type: federal_bond_risk`), on the docket monitor feed (LINKED or REVIEW), and on Slack `#alerts` through `SlackNotifier.notify_alert`. Nothing is texted, emailed, or iMessaged.
+
+### Tests
+- `tests/test_federal_bond_risk.py` (on the CI list).
+
 ## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
 
 ### Fixed

@@ -92,6 +92,25 @@ async def _run_docket_monitor():
     result = await run_docket_scan(get_db(), limit=100)
     logger.info("[DocketMonitor] ✅ %d bonds, %d events", result.get("bonds_scanned", 0), result.get("events_found", 0))
 
+async def _run_federal_bond_risk():
+    """Florida federal bond-risk scan. No CourtListener call unless the flag and token are set."""
+    from dashboard.services.federal_bond_risk import run_federal_bond_risk_scan
+    from dashboard.extensions import get_db
+    result = await run_federal_bond_risk_scan(get_db())
+    if result.get("skipped"):
+        logger.info(
+            "[FederalBondRisk] skipped=%s warning=%s",
+            result.get("skipped"),
+            "yes" if result.get("warning") else "no",
+        )
+    else:
+        logger.info(
+            "[FederalBondRisk] rows=%s confirmed=%s possible=%s",
+            result.get("rows_written", 0),
+            result.get("confirmed", 0),
+            result.get("possible", 0),
+        )
+
 async def _run_court_intel():
     from dashboard.services.court_data_ingestor import run_ingestion
     from dashboard.extensions import get_db
@@ -887,6 +906,8 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("outreach_queue",     "OutreachQueue",       30,  10, _run_outreach_queue),
     CronDef("alpha_engine",       "AlphaEngine",       14400, 180, _run_alpha_engine),
     CronDef("docket_monitor",     "DocketMonitor",     14400, 120, _run_docket_monitor),
+    # Flag FEDERAL_BOND_RISK_ALERTS defaults off, so this cycle does not call CourtListener.
+    CronDef("federal_bond_risk",  "FederalBondRisk",   21600, 180, _run_federal_bond_risk),
     CronDef("court_intel",        "CourtIntel",        21600,  60, _run_court_intel),
     CronDef("nlp_enrichment",     "NLP-Enrich",         7200,  90, _run_nlp_enrichment),
     CronDef("bb_health",          "BB-Health",           600,  30, _run_bb_health),

@@ -434,6 +434,7 @@ class SlackNotifier:
         level: str = "warning",
         details: Optional[Dict[str, Any]] = None,
         source: Optional[str] = None,
+        bridge: bool = True,
     ) -> bool:
         """
         Send an operational or system alert to the #alerts channel.
@@ -512,14 +513,16 @@ class SlackNotifier:
 
         slack_ok = self._post(self.webhook_alerts, payload)
 
-        # Bridge to dashboard Notification Center (best-effort, non-blocking)
-        self._bridge_to_notification_center(
-            notification_type="system_alert",
-            title=f"{emoji} {safe_title}",
-            message=safe_msg[:300],
-            entity_id=source or "system",
-            metadata={"level": level, "details": details or {}},
-        )
+        # Bridge to dashboard Notification Center (best-effort, non-blocking).
+        # Callers that write their own CRM row pass bridge=False.
+        if bridge:
+            self._bridge_to_notification_center(
+                notification_type="system_alert",
+                title=f"{emoji} {safe_title}",
+                message=safe_msg[:300],
+                entity_id=source or "system",
+                metadata={"level": level, "details": details or {}},
+            )
 
         return slack_ok
 

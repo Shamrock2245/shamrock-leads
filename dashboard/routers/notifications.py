@@ -43,6 +43,7 @@ NOTIFICATION_TYPES = {
     "discharge": {"icon": "✅", "priority": "medium", "color": "#10b981"},
     "forfeiture": {"icon": "⚠️", "priority": "critical", "color": "#dc2626"},
     "bb_message": {"icon": "💬", "priority": "medium", "color": "#3b82f6"},
+    "federal_bond_risk": {"icon": "⚖️", "priority": "critical", "color": "#dc2626"},
 }
 
 PRIORITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
