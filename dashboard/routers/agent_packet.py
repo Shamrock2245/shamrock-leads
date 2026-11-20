@@ -103,8 +103,9 @@ class AgentStagePacketRequest(BaseModel):
         description="Optional base64 or data-URI photo of the indemnitor's back ID",
     )
     surety: Optional[str] = Field(
-        "osi",
-        description="Preferred surety code (e.g. 'osi', 'palmetto'). Staff confirms POA & surety in Super CRM.",
+        None,
+        description="Surety code ('osi' or 'palmetto'). When omitted the packet is staged with no "
+        "surety and staff must confirm one in Super CRM (never defaults to OSI).",
     )
     notes: Optional[str] = Field(None, description="Optional notes from the chat agent or bondsman")
     idempotency_key: Optional[str] = Field(
@@ -177,38 +178,227 @@ def _scoped_key_hash(scope: str, key: str) -> str:
     return hashlib.sha256(f"agent-stage-packet|{scope}|{key}".encode("utf-8")).hexdigest()
 
 
-def _idempotent_response(prior: dict, fingerprint: str):
-    if prior.get("agent_idempotency_fingerprint") != fingerprint:
-        return JSONResponse(
-            {
-                "success": False,
-                "error": "Idempotency key was already used with a different payload.",
-                "code": "idempotency_key_conflict",
-            },
-            status_code=409,
-        )
-    packet_id = prior.get("paperwork_packet_id")
-    return {
+# A ``pending`` claim older than this is treated as abandoned and may be retaken.
+IDEMPOTENCY_PENDING_STALE_S = 120
+SURETY_UNCONFIRMED_WARNING = (
+    "surety_unconfirmed: no surety was supplied; staff must confirm OSI or Palmetto in Super CRM."
+)
+IDEMPOTENCY_RETRY_AFTER_S = 5
+
+
+def _conflict_response():
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "Idempotency key was already used with a different payload.",
+            "code": "idempotency_key_conflict",
+        },
+        status_code=409,
+    )
+
+
+def _in_progress_response():
+    return JSONResponse(
+        {
+            "success": False,
+            "error": "A request with this idempotency key is still in progress. Retry shortly.",
+            "code": "idempotency_in_progress",
+        },
+        status_code=409,
+        headers={"Retry-After": str(IDEMPOTENCY_RETRY_AFTER_S)},
+    )
+
+
+def _replay_response(intake: dict, *, recovered: bool = False) -> dict:
+    packet_id = intake.get("paperwork_packet_id")
+    out = {
         "success": True,
         "status": "staged_ready_for_staff",
         "idempotent_replay": True,
         "packet_id": packet_id,
-        "intake_id": prior.get("intake_id"),
+        "intake_id": intake.get("intake_id"),
         "super_crm_url": f"{_super_crm_base_url()}/?tab=paperwork&packet_id={packet_id}",
-        "surety": prior.get("agent_surety"),
-        "warnings": [],
+        "surety": intake.get("agent_surety"),
+        "surety_confirmed": bool(intake.get("agent_surety")),
+        "warnings": [] if intake.get("agent_surety") else [SURETY_UNCONFIRMED_WARNING],
     }
+    if recovered:
+        out["idempotency_recovered"] = True
+    return out
+
+
+def _as_utc(value: Any) -> Optional[datetime]:
+    if not isinstance(value, datetime):
+        return None
+    # pymongo returns naive UTC datetimes unless the client is tz_aware.
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _packet_doc_from_intake(intake: dict, surety: Optional[str], now: datetime) -> dict:
+    """Staged paperwork_packets doc built only from the stored intake (never DocuSeal).
+
+    ``surety`` None leaves ``template`` / ``surety_id`` unset so the CRM readiness
+    chain keeps "Surety Confirmed" red and DocuSeal paths fail closed
+    (``require_surety``) until staff confirm one.
+    """
+    doc = {
+        "packet_id": intake.get("paperwork_packet_id"),
+        "intake_id": intake.get("intake_id"),
+        "bond_case_id": None,
+        "packet_type": "full",
+        "template": surety,
+        "surety_id": surety,
+        "status": "staged",
+        "staged_by_agent": True,
+        "booking_url": intake.get("booking_url"),
+        "documents": [],
+        "defendant_name": intake.get("defendant_name"),
+        "defendant_county": intake.get("defendant_county"),
+        "defendant_state": intake.get("defendant_state"),
+        "defendant_booking_number": intake.get("defendant_booking_number"),
+        "bond_amount": intake.get("bond_amount"),
+        "charges": intake.get("charges"),
+        "indemnitor_name": intake.get("indemnitor_name"),
+        "indemnitor_email": intake.get("indemnitor_email"),
+        "indemnitor_phone": intake.get("indemnitor_phone"),
+        "created_at": now,
+        "updated_at": now,
+        "delivered_via": None,
+        "esign_provider": "docuseal",
+        "docuseal_submission_id": None,
+        "docuseal_status": None,
+        "packet_version": 1,
+        "voided": False,
+    }
+    if intake.get("agent_idempotency_key"):
+        doc["agent_idempotency_key"] = intake["agent_idempotency_key"]
+    return doc
+
+
+async def _packet_exists(packet_id: Optional[str]) -> bool:
+    if not packet_id:
+        return False
+    found = await get_collection("paperwork_packets").find_one(
+        {"packet_id": packet_id}, {"_id": 0, "packet_id": 1}
+    )
+    return bool(found)
+
+
+async def _write_claimed_packet(intake_col, intake: dict, attempt: str, surety: Optional[str], now: datetime):
+    """Write the packet for a claim this request holds. Returns an error response or None.
+
+    The packet is upserted on its packet_id with ``$setOnInsert`` after an
+    existence check, so a write that actually landed before an error was raised
+    is never duplicated by a retry. Claim state moves pending -> complete only
+    after the write; on failure it is marked failed (never deleted).
+    """
+    claim_filter = {"intake_id": intake.get("intake_id"), "idempotency_attempt": attempt}
+    packet_id = intake.get("paperwork_packet_id")
+    try:
+        if not await _packet_exists(packet_id):
+            await get_collection("paperwork_packets").update_one(
+                {"packet_id": packet_id},
+                {"$setOnInsert": _packet_doc_from_intake(intake, surety, now)},
+                upsert=True,
+            )
+    except Exception as exc:
+        logger.warning("[agent-packet] packet write failed (%s)", type(exc).__name__)
+        try:
+            await intake_col.update_one(
+                claim_filter,
+                {"$set": {
+                    "idempotency_state": "failed",
+                    "idempotency_error": "packet_write_failed",
+                    "idempotency_failed_at": datetime.now(timezone.utc),
+                }},
+            )
+        except Exception as mark_exc:
+            # Claim stays pending; it becomes retakeable once stale.
+            logger.warning("[agent-packet] could not mark claim failed (%s)", type(mark_exc).__name__)
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "The packet could not be saved. Retry with the same idempotency key.",
+                "code": "packet_write_failed",
+                "retryable": True,
+            },
+            status_code=503,
+            headers={"Retry-After": str(IDEMPOTENCY_RETRY_AFTER_S)},
+        )
+    try:
+        await intake_col.update_one(
+            claim_filter,
+            {"$set": {
+                "idempotency_state": "complete",
+                "idempotency_completed_at": datetime.now(timezone.utc),
+            }},
+        )
+    except Exception as exc:
+        # Packet exists; a later replay re-verifies it once the pending claim is stale.
+        logger.warning("[agent-packet] could not mark claim complete (%s)", type(exc).__name__)
+    return None
+
+
+async def _resolve_existing_claim(intake_col, prior: dict, fingerprint: str):
+    """Answer a request whose idempotency key already has an intake claim."""
+    if prior.get("agent_idempotency_fingerprint") != fingerprint:
+        return _conflict_response()
+    now = datetime.now(timezone.utc)
+    raw_state = prior.get("idempotency_state")
+    state = raw_state or "complete"
+    if state == "complete":
+        if await _packet_exists(prior.get("paperwork_packet_id")):
+            return _replay_response(prior)
+        # Claim says complete but the packet is missing: treat as failed.
+    elif state == "pending":
+        claimed_at = _as_utc(prior.get("idempotency_claimed_at"))
+        if claimed_at and (now - claimed_at).total_seconds() <= IDEMPOTENCY_PENDING_STALE_S:
+            return _in_progress_response()
+        # Stale (or undated) pending: treat as failed.
+    # failed / stale pending / complete-without-packet: retake the claim atomically.
+    from pymongo import ReturnDocument
+
+    retake_filter = {
+        "intake_id": prior.get("intake_id"),
+        "agent_idempotency_key": prior.get("agent_idempotency_key"),
+        "agent_idempotency_fingerprint": fingerprint,
+        "idempotency_attempt": prior.get("idempotency_attempt"),
+    }
+    if raw_state is not None:
+        retake_filter["idempotency_state"] = raw_state
+    new_attempt = uuid.uuid4().hex
+    retaken = await intake_col.find_one_and_update(
+        retake_filter,
+        {"$set": {
+            "idempotency_state": "pending",
+            "idempotency_attempt": new_attempt,
+            "idempotency_claimed_at": now,
+            "idempotency_retaken_at": now,
+            "idempotency_retaken_from": state,
+        }},
+        return_document=ReturnDocument.AFTER,
+        projection={"_id": 0},
+    )
+    if not retaken:
+        # Another request changed the claim first.
+        return _in_progress_response()
+    err = await _write_claimed_packet(
+        intake_col, retaken, new_attempt, retaken.get("agent_surety"), now
+    )
+    if err is not None:
+        return err
+    return _replay_response(retaken, recovered=True)
 
 
 def _resolve_surety(raw: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """(canonical surety id, error). Missing keeps today's default ('osi')."""
+    """(canonical surety id or None, error). Missing stays None: agent packets never default to OSI."""
     from dashboard.services.surety_registry import UnsupportedSuretyError, optional_surety
 
     try:
         sid = optional_surety(raw)
     except UnsupportedSuretyError:
         return None, "Unknown or inactive surety. Use a configured surety (e.g. 'osi' or 'palmetto')."
-    return (sid or "osi"), None
+    return sid, None
 
 
 async def _validate_public_booking_url(raw_url: str) -> Optional[str]:
@@ -324,7 +514,7 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
         # Fast replay path: no booking fetch or OCR for a repeat.
         prior = await intake_col.find_one({"agent_idempotency_key": idem_hash}, {"_id": 0})
         if prior:
-            return _idempotent_response(prior, fingerprint)
+            return await _resolve_existing_claim(intake_col, prior, fingerprint)
 
     warnings: list[str] = []
     parsed_booking: dict[str, Any] = {}
@@ -429,6 +619,8 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
         warnings.append("Indemnitor name is missing.")
     if not ind_email and not ind_phone:
         warnings.append("Indemnitor phone and email are both missing.")
+    if not surety:
+        warnings.append(SURETY_UNCONFIRMED_WARNING)
 
     now = datetime.now(timezone.utc)
     intake_id = f"INT-AGT-{uuid.uuid4().hex[:10].upper()}"
@@ -499,10 +691,17 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
         "updated_at": now,
     }
     intake_col = get_collection("intake_queue")
+    attempt = None
     if idem_hash:
+        attempt = uuid.uuid4().hex
         intake_doc["agent_idempotency_key"] = idem_hash
         intake_doc["agent_idempotency_fingerprint"] = fingerprint
         intake_doc["agent_surety"] = surety
+        # Claim lifecycle: pending (now) -> complete after the packet write, or
+        # failed if it raises. Docs are never deleted.
+        intake_doc["idempotency_state"] = "pending"
+        intake_doc["idempotency_attempt"] = attempt
+        intake_doc["idempotency_claimed_at"] = now
         # Atomic claim: the intake doc itself is the claim. Only the request whose
         # upsert inserted it (prior is None) goes on to write the packet.
         from pymongo import ReturnDocument
@@ -515,43 +714,19 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
             projection={"_id": 0},
         )
         if prior:
-            return _idempotent_response(prior, fingerprint)
+            return await _resolve_existing_claim(intake_col, prior, fingerprint)
     else:
         await intake_col.insert_one(intake_doc)
 
     # 7. Insert staged paperwork_packets record (never creates DocuSeal submission here)
-    packet_doc = {
-        "packet_id": packet_id,
-        "intake_id": intake_id,
-        "bond_case_id": None,
-        "packet_type": "full",
-        "template": surety,
-        "surety_id": surety,
-        "status": "staged",
-        "staged_by_agent": True,
-        "booking_url": booking_url,
-        "documents": [],
-        "defendant_name": def_full,
-        "defendant_county": def_county,
-        "defendant_state": def_state,
-        "defendant_booking_number": def_booking,
-        "bond_amount": bond_amount,
-        "charges": raw_charges,
-        "indemnitor_name": ind_full,
-        "indemnitor_email": ind_email,
-        "indemnitor_phone": ind_phone,
-        "created_at": now,
-        "updated_at": now,
-        "delivered_via": None,
-        "esign_provider": "docuseal",
-        "docuseal_submission_id": None,
-        "docuseal_status": None,
-        "packet_version": 1,
-        "voided": False,
-    }
     if idem_hash:
-        packet_doc["agent_idempotency_key"] = idem_hash
-    await get_collection("paperwork_packets").insert_one(packet_doc)
+        err = await _write_claimed_packet(intake_col, intake_doc, attempt, surety, now)
+        if err is not None:
+            return err
+    else:
+        await get_collection("paperwork_packets").insert_one(
+            _packet_doc_from_intake(intake_doc, surety, now)
+        )
 
     super_crm_url = f"{_super_crm_base_url()}/?tab=paperwork&packet_id={packet_id}"
     logger.info(
@@ -566,6 +741,7 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
         "intake_id": intake_id,
         "super_crm_url": super_crm_url,
         "surety": surety,
+        "surety_confirmed": bool(surety),
         "defendant": {
             "full_name": def_full,
             "booking_number": def_booking,

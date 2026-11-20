@@ -3508,6 +3508,14 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
     except Exception:
         body = {}
 
+    if packet.get("staged_by_agent") and not (
+        packet.get("surety_id") or packet.get("template") or body.get("surety_id")
+    ):
+        # Chat-agent packets never default to OSI: staff must confirm the surety.
+        return JSONResponse(
+            {"success": False, "error": "surety_required", "code": "surety_required"},
+            status_code=422,
+        )
     surety_for_template = (packet.get("surety_id") or packet.get("template") or body.get("surety_id") or "osi").lower()
     from dashboard.services.surety_entitlements import entitlement_denial
 

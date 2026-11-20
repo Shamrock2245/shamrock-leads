@@ -109,13 +109,14 @@ const SLPaperwork = {
       const pid = p.packet_id || '—';
       const defName = p.defendant_name || p.booking_number || '—';
       const indName = p.indemnitor_name || '—';
-      const surety = (p.surety_id || 'osi').toUpperCase();
+      // Chat-agent packets with no surety are unconfirmed, not OSI.
+      const surety = (p.surety_id || (p.staged_by_agent ? 'unconfirmed' : 'osi')).toUpperCase();
       const status = p.status || p.signnow_status || 'draft';
       const dt = p.created_at ? p.created_at.slice(0, 10) : '—';
       const amt = p.premium_amount || p.bond_amount ? (p.premium_amount || (p.bond_amount * 0.1)) : 500.0;
 
-      const suretyChipCls = surety === 'OSI' ? 'inv-chip-osi' : 'inv-chip-palm';
-      const suretyIcon = surety === 'OSI' ? '🛡️ OSI' : '🌴 PSC';
+      const suretyChipCls = surety === 'OSI' ? 'inv-chip-osi' : (surety === 'UNCONFIRMED' ? '' : 'inv-chip-palm');
+      const suretyIcon = surety === 'OSI' ? '🛡️ OSI' : (surety === 'UNCONFIRMED' ? '⚠️ Surety?' : '🌴 PSC');
 
       let statusBadge = `<span class="badge bg-blue">${this._esc(status)}</span>`;
       if (['signed', 'completed'].includes(status)) {
@@ -170,7 +171,7 @@ const SLPaperwork = {
       else if (st === 'draft') matchSt = ['draft', 'created'].includes(pStatus);
       else if (st === 'voided') matchSt = pStatus === 'voided';
 
-      const pSurety = (p.surety_id || 'osi').toLowerCase();
+      const pSurety = (p.surety_id || (p.staged_by_agent ? 'unconfirmed' : 'osi')).toLowerCase();
       const matchSur = sur === 'all' || pSurety === sur.toLowerCase();
 
       return matchQ && matchSt && matchSur;

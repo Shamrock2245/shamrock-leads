@@ -684,14 +684,74 @@ def test_surety_is_normalized_to_canonical_id(monkeypatch):
         assert pkt["surety_id"] == expected and pkt["template"] == expected
 
 
-def test_missing_surety_keeps_osi_default(monkeypatch):
+def test_missing_surety_is_staged_unconfirmed_not_osi(monkeypatch):
+    import asyncio
+
+    import pytest as _pytest
+
+    from dashboard.services.surety_registry import UnsupportedSuretyError, require_surety
+    from tests.bb_fake_mongo import FakeDB
+
     monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
     client = _make_client()
-    for body in (dict(_DEF), {**_DEF, "surety": None}, {**_DEF, "surety": ""}):
+    for body in (dict(_DEF), {**_DEF, "surety": None}, {**_DEF, "surety": ""}, {**_DEF, "surety": "  "}):
         cols = _cols()
         resp = _stage(client, cols, body)
         assert resp.status_code == 200
-        assert cols["paperwork_packets"].docs[0]["surety_id"] == "osi"
+        data = resp.json()
+        assert data["surety"] is None and data["surety_confirmed"] is False
+        assert any(w.startswith("surety_unconfirmed") for w in data["warnings"])
+        pkt = cols["paperwork_packets"].docs[0]
+        assert pkt["surety_id"] is None and pkt["template"] is None
+        assert "osi" not in {str(pkt.get("surety_id")), str(pkt.get("template"))}
+
+    # Readiness: packet context resolves no surety, so "Surety Confirmed" stays red
+    # (sl-paperwork.js marks it ready only for osi/palmetto) and DocuSeal paths that
+    # call require_surety fail closed.
+    db = FakeDB()
+    db.collections["paperwork_packets"] = cols["paperwork_packets"]
+    db.collections["intake_queue"] = cols["intake_queue"]
+    monkeypatch.setattr("dashboard.extensions.get_collection", db.get_collection)
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    ctx = asyncio.run(resolve_case_context(packet_id=pkt["packet_id"]))
+    assert not ctx.get("surety_id")
+    with _pytest.raises(UnsupportedSuretyError):
+        require_surety(ctx.get("surety_id"))
+    js = (ROOT / "dashboard" / "sl-paperwork.js").read_text(encoding="utf-8")
+    assert "ready: surety === 'osi' || surety === 'palmetto'" in js
+
+
+def test_explicit_osi_and_palmetto_still_confirmed(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    for raw in ("osi", "palmetto"):
+        cols = _cols()
+        resp = _stage(client, cols, {**_DEF, "surety": raw})
+        data = resp.json()
+        assert resp.status_code == 200 and data["surety"] == raw and data["surety_confirmed"] is True
+        assert not any(w.startswith("surety_unconfirmed") for w in data["warnings"])
+        assert cols["paperwork_packets"].docs[0]["surety_id"] == raw
+
+
+def test_docuseal_push_refuses_agent_packet_without_surety(monkeypatch):
+    from fastapi import FastAPI
+
+    from dashboard.routers import paperwork as paperwork_mod
+
+    app = FastAPI()
+    app.include_router(paperwork_mod.paperwork_bp)
+    client = TestClient(app)
+    denial = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        paperwork_mod, "_load_packet",
+        AsyncMock(return_value={"packet_id": "PKT-T1", "staged_by_agent": True, "surety_id": None, "template": None}),
+    )
+    with patch("dashboard.services.surety_entitlements.entitlement_denial", denial):
+        resp = client.post("/api/paperwork/PKT-T1/docuseal", json={})
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "surety_required"
+    denial.assert_not_awaited()
 
 
 def test_unknown_or_inactive_surety_is_422_before_any_write(monkeypatch):
@@ -818,3 +878,192 @@ def test_idempotency_key_validation(monkeypatch):
     _stage(client, cols, _DEF)
     assert len(cols["paperwork_packets"].docs) == 2
     assert all("agent_idempotency_key" not in d for d in cols["intake_queue"].docs)
+
+
+# ── Idempotency claim lifecycle (pending -> complete | failed) ───────────────
+
+
+class _FlakyPackets(FakeCollection):
+    """paperwork_packets whose upsert raises ``fail_times`` times.
+
+    ``land_before_raise`` simulates a write that reached Mongo before the error.
+    """
+
+    def __init__(self, name, fail_times=1, land_before_raise=False):
+        super().__init__(name)
+        self.fail_times = fail_times
+        self.land_before_raise = land_before_raise
+
+    async def update_one(self, flt, update, upsert=False):
+        if self.fail_times > 0:
+            self.fail_times -= 1
+            if self.land_before_raise:
+                await super().update_one(flt, update, upsert=upsert)
+            raise RuntimeError("mongo write timeout")
+        return await super().update_one(flt, update, upsert=upsert)
+
+
+def _flaky_cols(**kw):
+    cols = _cols(_AtomicFakeCollection)
+    cols["paperwork_packets"] = _FlakyPackets("paperwork_packets", **kw)
+    return cols
+
+
+def test_packet_write_failure_marks_claim_failed_and_retry_recovers(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _flaky_cols(fail_times=1)
+    hdr = {"Idempotency-Key": "flaky-1"}
+
+    first = _stage(client, cols, _DEF, hdr)
+    assert first.status_code == 503
+    assert first.json()["code"] == "packet_write_failed"
+    assert "packet_id" not in first.json()
+    assert "mongo write timeout" not in first.text
+    (intake,) = cols["intake_queue"].docs
+    assert intake["idempotency_state"] == "failed"
+    assert intake["idempotency_error"] == "packet_write_failed"
+    assert intake["idempotency_failed_at"]
+    assert cols["paperwork_packets"].docs == []
+
+    retry = _stage(client, cols, _DEF, hdr)
+    assert retry.status_code == 200
+    data = retry.json()
+    assert data["idempotent_replay"] is True and data["idempotency_recovered"] is True
+    assert data["intake_id"] == intake["intake_id"]
+    assert data["packet_id"] == intake["paperwork_packet_id"]
+    assert [p["packet_id"] for p in cols["paperwork_packets"].docs] == [data["packet_id"]]
+    assert len(cols["intake_queue"].docs) == 1  # same intake reused, nothing deleted
+    assert cols["intake_queue"].docs[0]["idempotency_state"] == "complete"
+
+    again = _stage(client, cols, _DEF, hdr)
+    assert again.status_code == 200 and again.json()["packet_id"] == data["packet_id"]
+    assert "idempotency_recovered" not in again.json()
+    assert len(cols["paperwork_packets"].docs) == 1
+
+
+def test_retry_that_fails_again_errors_cleanly_without_phantom_id(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _flaky_cols(fail_times=2)
+    hdr = {"Idempotency-Key": "flaky-2"}
+    assert _stage(client, cols, _DEF, hdr).status_code == 503
+    second = _stage(client, cols, _DEF, hdr)
+    assert second.status_code == 503
+    assert "packet_id" not in second.json()
+    assert cols["paperwork_packets"].docs == []
+    assert cols["intake_queue"].docs[0]["idempotency_state"] == "failed"
+    third = _stage(client, cols, _DEF, hdr)
+    assert third.status_code == 200
+    assert len(cols["paperwork_packets"].docs) == 1
+
+
+def test_write_that_landed_before_error_is_not_duplicated(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _flaky_cols(fail_times=1, land_before_raise=True)
+    hdr = {"Idempotency-Key": "landed"}
+    assert _stage(client, cols, _DEF, hdr).status_code == 503
+    retry = _stage(client, cols, _DEF, hdr)
+    assert retry.status_code == 200
+    assert len(cols["paperwork_packets"].docs) == 1
+    assert retry.json()["packet_id"] == cols["paperwork_packets"].docs[0]["packet_id"]
+
+
+def _seed_claim(cols, state, claimed_at, packet=False):
+    """Stage once to get a real claim, then rewrite its state/timestamps."""
+    import datetime as _dt
+
+    intake = cols["intake_queue"].docs[0]
+    intake["idempotency_state"] = state
+    intake["idempotency_claimed_at"] = claimed_at
+    if not packet:
+        cols["paperwork_packets"].docs.clear()
+    return intake, _dt
+
+
+def test_fresh_pending_claim_answers_in_progress(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+    hdr = {"Idempotency-Key": "pending-fresh"}
+    assert _stage(client, cols, _DEF, hdr).status_code == 200
+    _seed_claim(cols, "pending", datetime.now(timezone.utc) - timedelta(seconds=10))
+    resp = _stage(client, cols, _DEF, hdr)
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "idempotency_in_progress"
+    assert resp.headers["Retry-After"]
+    assert "packet_id" not in resp.json()
+    assert cols["paperwork_packets"].docs == []
+
+
+def test_stale_pending_claim_is_retaken(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+    hdr = {"Idempotency-Key": "pending-stale"}
+    first = _stage(client, cols, _DEF, hdr)
+    # naive datetime, as pymongo returns by default
+    _seed_claim(cols, "pending", datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5))
+    resp = _stage(client, cols, _DEF, hdr)
+    assert resp.status_code == 200
+    assert resp.json()["idempotency_recovered"] is True
+    assert resp.json()["packet_id"] == first.json()["packet_id"]
+    assert len(cols["paperwork_packets"].docs) == 1
+    assert cols["intake_queue"].docs[0]["idempotency_state"] == "complete"
+    assert cols["intake_queue"].docs[0]["idempotency_retaken_from"] == "pending"
+
+
+def test_complete_claim_without_packet_is_not_replayed_as_phantom(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+    hdr = {"Idempotency-Key": "complete-missing"}
+    first = _stage(client, cols, _DEF, hdr)
+    _seed_claim(cols, "complete", datetime.now(timezone.utc))
+    resp = _stage(client, cols, _DEF, hdr)
+    assert resp.status_code == 200
+    assert resp.json()["idempotency_recovered"] is True
+    assert [p["packet_id"] for p in cols["paperwork_packets"].docs] == [first.json()["packet_id"]]
+
+
+def test_retake_loses_race_answers_in_progress(monkeypatch):
+    """If another request changed the claim between read and retake, no write happens."""
+    from datetime import datetime, timezone
+
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+    hdr = {"Idempotency-Key": "retake-race"}
+    _stage(client, cols, _DEF, hdr)
+    intake, _ = _seed_claim(cols, "failed", datetime.now(timezone.utc))
+    real_find_one = cols["intake_queue"].find_one
+
+    async def stale_read(*a, **k):
+        doc = await real_find_one(*a, **k)
+        intake["idempotency_attempt"] = "someone-else"  # concurrent retake won
+        return doc
+
+    cols["intake_queue"].find_one = stale_read
+    resp = _stage(client, cols, _DEF, hdr)
+    assert resp.status_code == 409 and resp.json()["code"] == "idempotency_in_progress"
+    assert cols["paperwork_packets"].docs == []
+
+
+def test_retake_requires_matching_fingerprint(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _flaky_cols(fail_times=1)
+    hdr = {"Idempotency-Key": "fp"}
+    assert _stage(client, cols, _DEF, hdr).status_code == 503
+    changed = {"defendant": {**_DEF["defendant"], "booking_number": "TEST-0199"}}
+    resp = _stage(client, cols, changed, hdr)
+    assert resp.status_code == 409 and resp.json()["code"] == "idempotency_key_conflict"
+    assert cols["paperwork_packets"].docs == []
+    assert cols["intake_queue"].docs[0]["idempotency_state"] == "failed"
