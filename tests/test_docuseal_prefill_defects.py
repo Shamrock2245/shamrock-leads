@@ -30,6 +30,43 @@ def test_second_poa_is_kept_when_poa_number_is_also_set():
     assert values["BondNumbers"] == "A, B"
 
 
+def test_stale_charge_list_does_not_add_a_poa():
+    """The printed charge source wins. A leftover charge_list is not a power."""
+    values = _prefill({
+        "defendant_name": "TEST-Doe, John",
+        "surety_id": "osi",
+        "poa_number": "TEST-PRIMARY",
+        "charge_details": [
+            {"charge": "TEST CHARGE", "poa_number": "TEST-LIVE", "bond_amount": 1000},
+        ],
+        "charge_list": [
+            {"charge": "STALE CHARGE", "poa_number": "TEST-STALE", "bond_amount": 1000},
+        ],
+        "defendant": {
+            "charge_details": [
+                {"charge": "NESTED STALE", "poa_number": "TEST-NESTED", "bond_amount": 1000},
+            ],
+        },
+    })
+    assert values["all_poa_numbers"] == "TEST-LIVE, TEST-PRIMARY"
+    assert values["bond_numbers"] == "TEST-LIVE, TEST-PRIMARY"
+    assert values["poa_numbers"] == "TEST-LIVE, TEST-PRIMARY"
+    assert "TEST-STALE" not in values["all_poa_numbers"]
+    assert "TEST-NESTED" not in values["all_poa_numbers"]
+
+
+def test_empty_charge_details_uses_charge_list_poas():
+    values = _prefill({
+        "defendant_name": "TEST-Doe, John",
+        "surety_id": "osi",
+        "charge_details": [],
+        "charge_list": [
+            {"charge": "TEST CHARGE", "poa_number": "TEST-LIST", "bond_amount": 1000},
+        ],
+    })
+    assert values["all_poa_numbers"] == "TEST-LIST"
+
+
 def test_poa_list_order_is_list_then_charge_rows_then_singular():
     values = _prefill({
         "defendant_name": "TEST-Doe, John",

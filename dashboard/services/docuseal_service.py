@@ -722,32 +722,24 @@ def _dedupe_keep_order(items: List[str]) -> List[str]:
     return out
 
 
-def _charge_poa_tokens(bond_data: Dict[str, Any], defendant: Any) -> List[str]:
+def _charge_poa_tokens(bond_data: Dict[str, Any], _defendant: Any) -> List[str]:
+    """POAs on the one charge source the packet prints.
+
+    ``resolve_verbatim_charge_rows`` picks the first non-empty list:
+    ``charge_details``, then ``charge_list``, then ``charges``, then the
+    nested defendant's ``charge_details`` and ``charges``. A later stale
+    list is not read. The nested defendant is read from ``bond_data``.
+    """
+    from dashboard.services.charge_verbatim import resolve_verbatim_charge_rows
+
     tokens: List[str] = []
-    sources: List[Any] = [bond_data]
-    if isinstance(defendant, dict):
-        sources.append(defendant)
-    for source in sources:
-        for key in ("charge_details", "charge_list", "charges"):
-            rows = source.get(key)
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                tokens.extend(
-                    _poa_tokens(
-                        row.get("poa_number")
-                        or row.get("POA_Number")
-                        or row.get("poa_full")
-                        or row.get("poa")
-                    )
-                )
+    for row in resolve_verbatim_charge_rows(bond_data):
+        tokens.extend(_poa_tokens(getattr(row, "poa_number", "")))
     return tokens
 
 
 def _ordered_poa_numbers(bond_data: Dict[str, Any], defendant: Any) -> List[str]:
-    """poa_numbers, then charge-row POAs, then poa_number. First spelling wins."""
+    """poa_numbers, then printed charge-row POAs, then poa_number. First spelling wins."""
     listed = bond_data.get("poa_numbers")
     if listed is None:
         listed = bond_data.get("POA_Numbers")
