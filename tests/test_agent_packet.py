@@ -235,34 +235,244 @@ def test_stage_packet_blocks_numeric_and_wildcard_dns_ssrf(monkeypatch):
     ingest.assert_not_awaited()
 
 
+class _Recorder:
+    """Inner transport stub: records each pinned request, answers from ``routes``."""
+
+    def __init__(self, routes):
+        self.routes = routes
+        self.requests = []
+
+    def factory(self):
+        import httpx
+
+        def handler(request):
+            self.requests.append(request)
+            sni = request.extensions.get("sni_hostname")
+            return self.routes[sni](request)
+
+        return httpx.MockTransport(handler)
+
+
+def _pinned_client(recorder):
+    import httpx
+
+    from dashboard.services.public_url_guard import PinnedPublicTransport
+
+    transport = PinnedPublicTransport(verify=False, inner_factory=recorder.factory)
+    return httpx.AsyncClient(transport=transport, follow_redirects=True)
+
+
+def test_pinned_transport_connects_to_checked_ip_with_original_host_and_sni(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    monkeypatch.setattr(
+        "dashboard.services.public_url_guard._resolve",
+        _fake_resolve({"jail.example.com": ["93.184.216.34"]}),
+    )
+    rec = _Recorder({"jail.example.com": lambda r: httpx.Response(200, text="ok")})
+
+    async def run():
+        async with _pinned_client(rec) as client:
+            return await client.get("https://jail.example.com:8443/booking/1?id=7")
+
+    resp = asyncio.run(run())
+    assert resp.status_code == 200
+    assert str(resp.request.url) == "https://jail.example.com:8443/booking/1?id=7"
+    (sent,) = rec.requests
+    assert sent.url.host == "93.184.216.34"
+    assert sent.url.port == 8443
+    assert sent.url.raw_path == b"/booking/1?id=7"
+    assert sent.headers["Host"] == "jail.example.com:8443"
+    assert sent.extensions["sni_hostname"] == "jail.example.com"
+
+
+def test_dns_rebinding_after_check_never_connects_to_loopback(monkeypatch):
+    """Public on the check, 127.0.0.1 on every later lookup: no connection is made."""
+    import httpx
+
+    from dashboard.services import url_ingest_service
+    from dashboard.services.public_url_guard import PinnedPublicTransport
+
+    lookups = []
+
+    def rebinding_resolve(host, port):
+        lookups.append(host)
+        return ["93.184.216.34"] if len(lookups) == 1 else ["127.0.0.1"]
+
+    monkeypatch.setattr("dashboard.services.public_url_guard._resolve", rebinding_resolve)
+    monkeypatch.setattr("config.source_guard.fail_closed_reason", lambda *a, **k: None)
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    rec = _Recorder({"rebind.example.com": lambda r: httpx.Response(200, text="<title>SECRET</title>")})
+    monkeypatch.setattr(
+        url_ingest_service,
+        "_public_only_transport",
+        lambda: PinnedPublicTransport(verify=False, inner_factory=rec.factory),
+    )
+    client = _make_client()
+    cols = {
+        "arrests": FakeCollection("arrests"),
+        "intake_queue": FakeCollection("intake_queue"),
+        "paperwork_packets": FakeCollection("paperwork_packets"),
+    }
+    with patch("dashboard.routers.agent_packet.get_collection", side_effect=lambda name: cols[name]):
+        resp = client.post(
+            "/api/agent/parse-booking-url",
+            headers={"X-API-Key": "secret-gas-key"},
+            json={"booking_url": "https://rebind.example.com/booking/1"},
+        )
+    assert resp.status_code == 422
+    assert "SECRET" not in resp.text
+    assert len(lookups) == 2  # router check + transport pin; no third lookup at connect
+    assert rec.requests == []
+
+
+def test_redirect_hops_are_revalidated_and_repinned(monkeypatch):
+    import asyncio
+
+    import httpx
+    import pytest as _pytest
+
+    from dashboard.services.public_url_guard import UnsafeURLError
+
+    monkeypatch.setattr(
+        "dashboard.services.public_url_guard._resolve",
+        _fake_resolve({
+            "a.example.com": ["93.184.216.34"],
+            "b.example.org": ["93.184.216.35"],
+            "evil.example.net": ["10.0.0.5"],
+        }),
+    )
+    rec = _Recorder({
+        "a.example.com": lambda r: httpx.Response(
+            302,
+            headers={"Location": "https://b.example.org/next" if r.url.path == "/start" else "http://evil.example.net/x"},
+        ),
+        "b.example.org": lambda r: httpx.Response(200, text="final"),
+        "evil.example.net": lambda r: httpx.Response(200, text="SECRET"),
+    })
+
+    async def get(path):
+        async with _pinned_client(rec) as client:
+            return await client.get(f"https://a.example.com{path}")
+
+    resp = asyncio.run(get("/start"))
+    assert resp.text == "final"
+    assert [(r.url.host, r.headers["Host"], r.extensions["sni_hostname"]) for r in rec.requests] == [
+        ("93.184.216.34", "a.example.com", "a.example.com"),
+        ("93.184.216.35", "b.example.org", "b.example.org"),
+    ]
+
+    rec.requests.clear()
+    with _pytest.raises(UnsafeURLError):
+        asyncio.run(get("/to-internal"))
+    assert [r.extensions["sni_hostname"] for r in rec.requests] == ["a.example.com"]
+
+
+def test_pinned_transport_real_httpcore_stack_uses_pinned_ip_and_sni(monkeypatch):
+    """Through httpx/httpcore with a fake network backend: TCP goes to the pinned
+    IP and TLS server_hostname (SNI + cert hostname check) is the original host."""
+    import asyncio
+    import ssl
+
+    import httpcore
+    import httpx
+    from httpcore._backends.mock import AsyncMockBackend, AsyncMockStream
+
+    from dashboard.services.public_url_guard import PinnedPublicTransport
+
+    monkeypatch.setattr(
+        "dashboard.services.public_url_guard._resolve",
+        _fake_resolve({"jail.example.com": ["93.184.216.34"]}),
+    )
+    seen = {}
+
+    class Stream(AsyncMockStream):
+        async def start_tls(self, ssl_context, server_hostname=None, timeout=None):
+            seen["server_hostname"] = server_hostname
+            seen["check_hostname"] = ssl_context.check_hostname
+            return self
+
+    class Backend(AsyncMockBackend):
+        async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+            seen["tcp"] = (host, port)
+            return Stream(list(self._buffer), http2=self._http2)
+
+    raw = [b"HTTP/1.1 200 OK\r\n", b"Content-Length: 2\r\n", b"\r\n", b"ok"]
+
+    def inner():
+        t = httpx.AsyncHTTPTransport(verify=True)
+        t._pool = httpcore.AsyncConnectionPool(
+            ssl_context=ssl.create_default_context(), network_backend=Backend(raw)
+        )
+        return t
+
+    async def run():
+        transport = PinnedPublicTransport(verify=True, inner_factory=inner)
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await client.get("https://jail.example.com/booking/1")
+
+    resp = asyncio.run(run())
+    assert resp.text == "ok"
+    assert seen["tcp"] == ("93.184.216.34", 443)
+    assert seen["server_hostname"] == "jail.example.com"
+    assert seen["check_hostname"] is True
+
+
+def test_ingest_url_default_is_not_pinned(monkeypatch):
+    from dashboard.services import url_ingest_service
+
+    calls = []
+    monkeypatch.setattr(url_ingest_service, "_public_only_transport", lambda: calls.append(1))
+    monkeypatch.setattr("config.source_guard.fail_closed_reason", lambda *a, **k: None)
+
+    import asyncio
+
+    import httpx
+
+    real_client = httpx.AsyncClient
+    kwargs_seen = {}
+
+    def client_factory(*args, **kwargs):
+        kwargs_seen.update(kwargs)
+        kwargs["transport"] = httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(url_ingest_service.httpx, "AsyncClient", client_factory)
+    asyncio.run(url_ingest_service.ingest_url("https://jail.example.com/booking/1"))
+    assert calls == []
+    assert kwargs_seen["transport"] is None
+    assert kwargs_seen["trust_env"] is True
+
+
 def test_ingest_url_public_only_refuses_redirect_to_internal_host(monkeypatch):
     import asyncio
 
     import httpx
 
     from dashboard.services import url_ingest_service
+    from dashboard.services.public_url_guard import PinnedPublicTransport
 
-    seen = []
-
-    def handler(request):
-        seen.append(str(request.url))
-        if request.url.host == "jail.example.com":
-            return httpx.Response(302, headers={"Location": "http://127.0.0.1:8000/secret"})
-        return httpx.Response(200, text="<html><title>SECRET</title>Name: X Y</html>")
-
-    real_client = httpx.AsyncClient
-
-    def client_factory(*args, **kwargs):
-        kwargs["transport"] = httpx.MockTransport(handler)
-        return real_client(*args, **kwargs)
-
-    monkeypatch.setattr(url_ingest_service.httpx, "AsyncClient", client_factory)
+    monkeypatch.setattr(
+        "dashboard.services.public_url_guard._resolve",
+        _fake_resolve({"jail.example.com": ["93.184.216.34"]}),
+    )
+    rec = _Recorder({
+        "jail.example.com": lambda r: httpx.Response(302, headers={"Location": "http://127.0.0.1:8000/secret"}),
+        "127.0.0.1": lambda r: httpx.Response(200, text="<html><title>SECRET</title>Name: X Y</html>"),
+    })
+    monkeypatch.setattr(
+        url_ingest_service,
+        "_public_only_transport",
+        lambda: PinnedPublicTransport(verify=False, inner_factory=rec.factory),
+    )
     monkeypatch.setattr("config.source_guard.fail_closed_reason", lambda *a, **k: None)
 
     res = asyncio.run(url_ingest_service.ingest_url("https://jail.example.com/booking/1", public_only=True))
     assert res["success"] is False
     assert "SECRET" not in str(res)
-    assert seen == ["https://jail.example.com/booking/1"]
+    assert [r.extensions["sni_hostname"] for r in rec.requests] == ["jail.example.com"]
 
 
 def test_stage_packet_does_not_write_arrests_or_leak_exception_text(monkeypatch):
