@@ -64,6 +64,7 @@ jobs:
           pytest -q \
             tests/test_tenant_scope.py \
             tests/test_agent_packet.py \
+            tests/test_packet_surety_confirm.py \
             tests/test_agency_onboarding.py \
             tests/test_agency_billing.py \
             tests/test_surety_entitlements.py \
