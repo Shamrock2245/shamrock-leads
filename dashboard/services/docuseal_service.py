@@ -198,6 +198,16 @@ def _schedule_date(*vals: Any) -> str:
     return text
 
 
+def _office_now() -> datetime:
+    """Printed form clock in America/New_York, the same zone as Schedule A.
+
+    A UTC instant after local midnight still belongs to the previous office day.
+    """
+    from dashboard.services.ar_math import local_datetime
+
+    return local_datetime(datetime.now(timezone.utc))
+
+
 def _schedule_money(*vals: Any) -> str:
     """First positive amount, in the same dollar form as the bond total."""
     for val in vals:
@@ -564,6 +574,189 @@ def _split_full_name(name: str) -> tuple[str, str, str]:
     if len(parts) == 2:
         return parts[0], "", parts[1]
     return parts[0], " ".join(parts[1:-1]), parts[-1]
+
+
+# Printed defendant line is "Last, First". Suffixes are not a last name.
+_DEFENDANT_NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v"})
+_APOSTROPHE_CHARS = dict.fromkeys("`'´’‘ʻʼ", "'")
+
+
+def _letters_are_all_caps(text: str) -> bool:
+    letters = [ch for ch in text if ch.isalpha()]
+    return bool(letters) and all(ch.isupper() for ch in letters)
+
+
+def _simple_name_cap(token: str) -> str:
+    if not token:
+        return ""
+    return token[0].upper() + token[1:].lower()
+
+
+def _title_case_name_token(token: str) -> str:
+    """Title-case one all-caps token. Mixed-case input never reaches here.
+
+    A leading TEST- marker stays uppercase so the synthetic namespace is
+    still TEST-. Mc/Mac and apostrophes are capped on the following letter
+    (McDonald, O'Neal), and each hyphen segment is capped on its own.
+    """
+    if not token:
+        return ""
+    if "-" in token:
+        parts = token.split("-")
+        cased: List[str] = []
+        for index, part in enumerate(parts):
+            if index == 0 and part.upper() == "TEST":
+                cased.append("TEST")
+            else:
+                cased.append(_title_case_name_token(part))
+        return "-".join(cased)
+    normalized = "".join(_APOSTROPHE_CHARS.get(ch, ch) for ch in token)
+    if "'" in normalized:
+        left, right = normalized.split("'", 1)
+        return _title_case_name_token(left) + "'" + _title_case_name_token(right)
+    low = normalized.lower()
+    if low.startswith("mc") and len(normalized) > 3 and normalized[2].isalpha():
+        return "Mc" + _simple_name_cap(normalized[2:])
+    if low.startswith("mac") and len(normalized) > 4 and normalized[3].isalpha():
+        return "Mac" + _simple_name_cap(normalized[3:])
+    return _simple_name_cap(normalized)
+
+
+def _title_case_name_text(text: str) -> str:
+    return " ".join(_title_case_name_token(part) for part in text.split() if part)
+
+
+def _case_name_text(text: str) -> str:
+    """Title-case an all-caps name. Leave any mixed-case spelling as written."""
+    cleaned = " ".join(str(text or "").split())
+    if not cleaned or not _letters_are_all_caps(cleaned):
+        return cleaned
+    return _title_case_name_text(cleaned)
+
+
+def _strip_name_suffix(parts: List[str]) -> List[str]:
+    kept = list(parts)
+    while kept and kept[-1].rstrip(".").lower() in _DEFENDANT_NAME_SUFFIXES:
+        kept.pop()
+    return kept
+
+
+def _first_and_last_from_raw(raw: str) -> tuple[str, str]:
+    """First and last only. Middle tokens and Jr/Sr/II/III/IV/V are dropped."""
+    text = " ".join(str(raw or "").split())
+    if not text:
+        return "", ""
+    if "," in text:
+        last_side, rest = [part.strip() for part in text.split(",", 1)]
+        last_parts = _strip_name_suffix(last_side.split())
+        given = _strip_name_suffix(rest.split())
+        first = given[0] if given else ""
+        return first, " ".join(last_parts)
+    parts = _strip_name_suffix(text.split())
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return "", parts[0]
+    return parts[0], parts[-1]
+
+
+def _format_defendant_display_name(raw: str, first: str = "", last: str = "") -> str:
+    """Owner rule for the printed defendant line: 'Last, First', no middle name.
+
+    Structured first and last win when both are present. An all-caps roster
+    string is title-cased. A mixed-case string keeps the letters it arrived with.
+    """
+    structured_first = " ".join(str(first or "").split())
+    structured_last = " ".join(str(last or "").split())
+    if (
+        structured_first
+        and structured_last
+        and not _is_placeholder_party_name(structured_first)
+        and not _is_placeholder_party_name(structured_last)
+    ):
+        shown_first = _case_name_text(structured_first).split()
+        shown_last = _case_name_text(structured_last)
+        if shown_last and shown_first:
+            return f"{shown_last}, {shown_first[0]}"
+    text = " ".join(str(raw or "").split())
+    if not text or _is_placeholder_party_name(text):
+        return text
+    all_caps = _letters_are_all_caps(text)
+    parsed_first, parsed_last = _first_and_last_from_raw(text)
+    if all_caps:
+        parsed_first = _title_case_name_text(parsed_first)
+        parsed_last = _title_case_name_text(parsed_last)
+    if parsed_last and parsed_first:
+        return f"{parsed_last}, {parsed_first}"
+    return parsed_last or parsed_first or text
+
+
+def _strip_trailing_court(value: Any) -> str:
+    """The form already prints the word Court. Do not print it twice."""
+    text = " ".join(str(value or "").split())
+    return re.sub(r"\s+court$", "", text, flags=re.IGNORECASE).strip()
+
+
+def _poa_tokens(value: Any) -> List[str]:
+    if value is None or isinstance(value, (bool, dict)):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        tokens: List[str] = []
+        for item in value:
+            tokens.extend(_poa_tokens(item))
+        return tokens
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "n/a", "tbd"}:
+        return []
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _dedupe_keep_order(items: List[str]) -> List[str]:
+    seen = set()
+    out: List[str] = []
+    for item in items:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+def _charge_poa_tokens(bond_data: Dict[str, Any], defendant: Any) -> List[str]:
+    tokens: List[str] = []
+    sources: List[Any] = [bond_data]
+    if isinstance(defendant, dict):
+        sources.append(defendant)
+    for source in sources:
+        for key in ("charge_details", "charge_list", "charges"):
+            rows = source.get(key)
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                tokens.extend(
+                    _poa_tokens(
+                        row.get("poa_number")
+                        or row.get("POA_Number")
+                        or row.get("poa_full")
+                        or row.get("poa")
+                    )
+                )
+    return tokens
+
+
+def _ordered_poa_numbers(bond_data: Dict[str, Any], defendant: Any) -> List[str]:
+    """poa_numbers, then charge-row POAs, then poa_number. First spelling wins."""
+    listed = bond_data.get("poa_numbers")
+    if listed is None:
+        listed = bond_data.get("POA_Numbers")
+    primary = bond_data.get("poa_number")
+    if primary is None or (isinstance(primary, str) and not primary.strip()):
+        primary = bond_data.get("POA_Number")
+    return _dedupe_keep_order(
+        _poa_tokens(listed) + _charge_poa_tokens(bond_data, defendant) + _poa_tokens(primary)
+    )
 
 
 class DocuSealPacketValidationError(ValueError):
@@ -1013,7 +1206,8 @@ class DocuSealService:
         parties open sign links after PIN unlock.
         order defaults to ``random`` so indemnitor, co-indemnitor, and
         defendant can each open their /s/{slug} link immediately (OpenAPI).
-        send_sms is omitted unless the caller sets it. Staff test cases set it false.
+        send_sms is omitted unless the caller sets it. create_submission_for_packet
+        sets it false on the body and on each submitter. Staff test cases do too.
         """
         # Internal natural keys (core/booking_identity.py) never reach a document.
         from core.booking_identity import scrub_internal_keys
@@ -1209,6 +1403,7 @@ class DocuSealService:
         values: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         send_email: bool = False,
+        send_sms: bool = False,
         order: Optional[int] = None,
         fields: Optional[List[Dict[str, Any]]] = None,
         completed_redirect_url: Optional[str] = None,
@@ -1222,6 +1417,7 @@ class DocuSealService:
             "role": role,
             "email": clean_email,
             "send_email": send_email,
+            "send_sms": bool(send_sms),
         }
         if name:
             s["name"] = name
@@ -1267,7 +1463,7 @@ class DocuSealService:
         def_ = bond_data.get("defendant") if isinstance(bond_data.get("defendant"), dict) else {}
         ind = bond_data.get("indemnitor") if isinstance(bond_data.get("indemnitor"), dict) else {}
 
-        defendant_name = (
+        raw_defendant_name = (
             bond_data.get("defendant_name")
             or def_.get("name")
             or " ".join(
@@ -1282,6 +1478,19 @@ class DocuSealService:
             )
             or "To Be Named"
         ).strip()
+        structured_first = _text(
+            _person_text(def_, "first_name", "firstName", "First_Name"),
+            bond_data.get("defendant_first_name"),
+        )
+        structured_last = _text(
+            _person_text(def_, "last_name", "lastName", "Last_Name"),
+            bond_data.get("defendant_last_name"),
+        )
+        defendant_name = _format_defendant_display_name(
+            raw_defendant_name,
+            first=structured_first,
+            last=structured_last,
+        ) or raw_defendant_name
         indemnitor_name = (
             bond_data.get("indemnitor_name")
             or ind.get("name")
@@ -1344,7 +1553,7 @@ class DocuSealService:
         else:
             county_full = county or "Lee County"
 
-        court_type = (
+        court_type = _strip_trailing_court(
             bond_data.get("court_type")
             or bond_data.get("CourtType")
             or "County/Circuit"
@@ -1359,15 +1568,16 @@ class DocuSealService:
         )
         case_number = str(case_number or "").strip()
 
-        poa_raw = bond_data.get("poa_number") or bond_data.get("POA_Number") or bond_data.get("poa_numbers") or ""
-        if isinstance(poa_raw, list):
-            poa_list = [str(x).strip() for x in poa_raw if str(x).strip()]
-            poa = poa_list[0] if poa_list else ""
-            poa_all = ", ".join(poa_list)
-        else:
-            poa_list = [x.strip() for x in str(poa_raw).split(",") if x.strip()]
-            poa = poa_list[0] if poa_list else ""
-            poa_all = ", ".join(poa_list)
+        # Write Bond stores the first power in poa_number and the full list in
+        # poa_numbers. Prefer the list, then each charge row, then the singular
+        # number, so the second power is not dropped.
+        poa_list = _ordered_poa_numbers(bond_data, def_)
+        primary_poa = bond_data.get("poa_number")
+        if primary_poa is None or (isinstance(primary_poa, str) and not primary_poa.strip()):
+            primary_poa = bond_data.get("POA_Number")
+        primary_tokens = _poa_tokens(primary_poa)
+        poa = primary_tokens[0] if primary_tokens else (poa_list[0] if poa_list else "")
+        poa_all = ", ".join(poa_list)
 
         booking = public_booking_number(
             bond_data.get("booking_number")
@@ -1443,7 +1653,7 @@ class DocuSealService:
             or ""
         )
 
-        now = datetime.now(timezone.utc)
+        now = _office_now()
         today_iso = now.strftime("%Y-%m-%d")
         today_slash = now.strftime("%m/%d/%Y")
         today_long = now.strftime("%B %d, %Y").replace(" 0", " ")  # e.g. August 7, 2026
@@ -1737,7 +1947,7 @@ class DocuSealService:
             "bondsman_license": agent_license,
         }
 
-        def_first, def_middle, def_last = _split_full_name(defendant_name)
+        def_first, def_middle, def_last = _split_full_name(raw_defendant_name)
         ind_first, ind_middle, ind_last = _split_full_name(indemnitor_name)
         def_first = _person_text(def_, "first_name", "firstName", "First_Name") or def_first
         def_middle = _person_text(def_, "middle_name", "middleName", "Middle_Name") or def_middle
@@ -2435,6 +2645,7 @@ class DocuSealService:
                     values=payload_values,
                     metadata={"packet_id": packet_id, "party_role": "bondsman"},
                     send_email=send_email,
+                    send_sms=False,
                     fields=signer_fields,
                     completed_redirect_url=_done_for(ROLE_BONDSMAN),
                 )
@@ -2474,6 +2685,7 @@ class DocuSealService:
                         "indemnitor_index": idx,
                     },
                     send_email=send_email,
+                    send_sms=False,
                     fields=signer_fields,
                     completed_redirect_url=_done_for(party_role),
                 )
@@ -2517,6 +2729,7 @@ class DocuSealService:
                         "defendant_delivery_authorization": defendant_delivery_authorization,
                     },
                     send_email=send_email,
+                    send_sms=False,
                     fields=signer_fields,
                     completed_redirect_url=_done_for(ROLE_DEFENDANT),
                 )
@@ -2547,7 +2760,7 @@ class DocuSealService:
             send_email=send_email,
             order=order,
             completed_redirect_url=redirect,
-            send_sms=False if staff_test_case else None,
+            send_sms=False,
         )
         result = self.normalize_create_response(raw)
         result["packet_id"] = packet_id

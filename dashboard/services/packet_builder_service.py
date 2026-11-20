@@ -963,7 +963,9 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
     ind_csz = ", ".join(filter(None, [ind.get("city"), ind.get("state")]))
     if ind.get("zip"):
         ind_csz = f"{ind_csz} {ind['zip']}".strip()
-    now = datetime.now(timezone.utc)
+    from dashboard.services.docuseal_service import _office_now
+
+    now = _office_now()
     today = now.strftime("%m/%d/%Y")
     today_long = now.strftime("%B %d, %Y").replace(" 0", " ")
     today_day = str(now.day)

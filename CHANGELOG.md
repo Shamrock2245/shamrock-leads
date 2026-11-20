@@ -3,6 +3,18 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-20 (Write Bond DocuSeal prefill)
+
+### Fixed
+- **The second power is no longer dropped.** `prefill_values_from_bond` builds `all_poa_numbers`, `bond_numbers`, and `poa_numbers` from `poa_numbers`, then each charge-row POA, then `poa_number`, in that order. Duplicates are removed and the first spelling is kept. A singular `poa_number` no longer replaces the rest of the list.
+- **The printed defendant name is Last, First, with no middle name.** `defendant_name` and `DefName` use structured first and last when both are present. An all-caps roster name is title-cased. A mixed-case name is left as written. Hyphens and apostrophes stay intact, including Mc and Mac names, and a leading `TEST-` marker stays uppercase.
+- **Court type no longer repeats the word Court.** A trailing `Court` is removed, so `Circuit Court` prints as `Circuit` on a form that already says Court. `Circuit` is unchanged.
+- **Printed bond dates use America/New_York.** `today_date` and the long date follow the office calendar, the same way Schedule A does. A time after midnight UTC still shows the previous local day. The packet-builder preview uses the same clock.
+- **A DocuSeal packet create sets `send_sms` false.** `create_submission_for_packet` sets `send_sms` false on the submission body and on each submitter, next to `send_email` false. This path does not text a signer.
+
+### Tests
+- `tests/test_docuseal_prefill_defects.py`.
+
 ## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
 
 ### Fixed
