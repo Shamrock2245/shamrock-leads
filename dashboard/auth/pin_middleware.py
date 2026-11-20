@@ -299,6 +299,49 @@ def is_machine_auth_valid(request: Request) -> bool:
     return False
 
 
+# Chat-agent packet routes that also accept ``Authorization: Bearer <machine key>``.
+# Bearer is accepted on these exact paths only; every other route keeps the
+# X-API-Key / X-Internal-Token / staff-session rules above.
+AGENT_PACKET_BEARER_PATHS = frozenset({
+    "/api/agent/stage-packet",
+    "/api/agent/issue-packet",
+    "/api/agent/parse-booking-url",
+})
+MACHINE_KEY_ENV_NAMES = ("GAS_API_KEY", "LEADS_INTERNAL_TOKEN", "INTERNAL_API_TOKEN")
+
+
+def machine_key_name(token: str) -> str | None:
+    """Env name of the configured machine key equal to ``token`` (constant-time), else None.
+
+    Fails closed: an empty token or an unset/blank key never matches.
+    """
+    import secrets
+
+    provided = (token or "").strip().encode("utf-8", "surrogateescape")
+    if not provided:
+        return None
+    matched = None
+    for env_name in MACHINE_KEY_ENV_NAMES:
+        expected = (os.getenv(env_name) or "").strip().encode("utf-8", "surrogateescape")
+        if expected and secrets.compare_digest(provided, expected) and matched is None:
+            matched = env_name
+    return matched
+
+
+def bearer_token(request: Request) -> str:
+    auth = (request.headers.get("Authorization") or "").strip()
+    if auth[:7].lower() != "bearer ":
+        return ""
+    return auth[7:].strip()
+
+
+def is_agent_packet_bearer_valid(request: Request) -> bool:
+    """True only for an agent-packet path with a Bearer token equal to a machine key."""
+    if request.url.path not in AGENT_PACKET_BEARER_PATHS:
+        return False
+    return machine_key_name(bearer_token(request)) is not None
+
+
 def _is_paperwork_host(request: Request) -> bool:
     """True when request is for the public indemnitor portal host."""
     host = (request.headers.get("host") or request.url.hostname or "").lower()
@@ -348,6 +391,9 @@ class PinAuthMiddleware(BaseHTTPMiddleware):
         # Machine routes (Node-RED, Shannon, external crons, automation sweeps):
         # Allow requests with valid GAS_API_KEY or LEADS_INTERNAL_TOKEN
         if is_machine_auth_valid(request):
+            return await call_next(request)
+        # Chat-agent packet routes only: Bearer <machine key> (Custom GPT Actions).
+        if is_agent_packet_bearer_valid(request):
             return await call_next(request)
 
         # Recovery is fail-closed before static/open bypasses. A recovery

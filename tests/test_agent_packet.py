@@ -529,3 +529,292 @@ def test_stage_packet_rejects_oversized_id_image(monkeypatch):
     assert resp.status_code == 200
     scan.assert_not_awaited()
     assert any("too large" in w for w in resp.json()["warnings"])
+
+
+# ── Bearer at the PIN middleware (agent-packet routes only) ─────────────────
+
+
+def _middleware_client(monkeypatch, *, gas="secret-gas-key", internal=None):
+    from fastapi import FastAPI
+
+    from dashboard.auth.pin_middleware import PinAuthMiddleware
+
+    monkeypatch.setenv("DASHBOARD_PIN", "test-pin-not-real")
+    monkeypatch.setattr("dashboard.auth.pin_middleware.DASHBOARD_PIN", "test-pin-not-real")
+    monkeypatch.setenv("SECRET_KEY", "agent-packet-test-secret")
+    for name in ("GAS_API_KEY", "LEADS_INTERNAL_TOKEN", "INTERNAL_API_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    if gas is not None:
+        monkeypatch.setenv("GAS_API_KEY", gas)
+    if internal is not None:
+        monkeypatch.setenv("INTERNAL_API_TOKEN", internal)
+
+    app = FastAPI()
+    app.include_router(agent_packet_router)
+
+    @app.post("/api/other/thing")
+    async def other():
+        return {"ok": True}
+
+    app.add_middleware(PinAuthMiddleware)
+    return TestClient(app)
+
+
+_PARSE_OK = {"success": True, "data": {"full_name": "TEST PERSON"}, "parse_method": "stub"}
+
+
+def test_bearer_machine_key_passes_middleware_and_router(monkeypatch):
+    client = _middleware_client(monkeypatch)
+    with patch("dashboard.routers.agent_packet.ingest_url", AsyncMock(return_value=_PARSE_OK)):
+        for prefix in ("Bearer", "bearer"):
+            resp = client.post(
+                "/api/agent/parse-booking-url",
+                headers={"Authorization": f"{prefix} secret-gas-key"},
+                json={"booking_url": "https://jail.example.com/b/1"},
+            )
+            assert resp.status_code == 200, resp.text
+    # stage-packet and issue-packet are let through too (router answers, not middleware)
+    for path in ("/api/agent/stage-packet", "/api/agent/issue-packet"):
+        resp = client.post(path, headers={"Authorization": "Bearer secret-gas-key"}, json={"surety": "nope"})
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "surety_unsupported"
+
+
+def test_bearer_other_configured_machine_key_is_accepted(monkeypatch):
+    client = _middleware_client(monkeypatch, gas=None, internal="secret-internal")
+    with patch("dashboard.routers.agent_packet.ingest_url", AsyncMock(return_value=_PARSE_OK)):
+        resp = client.post(
+            "/api/agent/parse-booking-url",
+            headers={"Authorization": "Bearer secret-internal"},
+            json={"booking_url": "https://jail.example.com/b/1"},
+        )
+    assert resp.status_code == 200
+
+
+def test_bearer_wrong_missing_or_empty_is_401(monkeypatch):
+    client = _middleware_client(monkeypatch)
+    ingest = AsyncMock(return_value=_PARSE_OK)
+    with patch("dashboard.routers.agent_packet.ingest_url", ingest):
+        for headers in (
+            {},
+            {"Authorization": "Bearer wrong"},
+            {"Authorization": "Bearer "},
+            {"Authorization": "Bearer"},
+            {"Authorization": "secret-gas-key"},
+            {"Authorization": "Basic secret-gas-key"},
+            {"Authorization": "Bearer secret-gas-key-extra"},
+            {"Authorization": "Bearer s\u00e9cret".encode("latin-1")},
+        ):
+            resp = client.post(
+                "/api/agent/parse-booking-url",
+                headers=headers,
+                json={"booking_url": "https://jail.example.com/b/1"},
+            )
+            assert resp.status_code == 401, headers
+    ingest.assert_not_awaited()
+
+
+def test_bearer_fails_closed_when_no_machine_key_configured(monkeypatch):
+    client = _middleware_client(monkeypatch, gas=None)
+    for token in ("", "secret-gas-key", "None"):
+        resp = client.post(
+            "/api/agent/stage-packet",
+            headers={"Authorization": f"Bearer {token}"},
+            json={},
+        )
+        assert resp.status_code == 401
+
+
+def test_bearer_is_not_accepted_on_other_routes(monkeypatch):
+    client = _middleware_client(monkeypatch)
+    for path in ("/api/other/thing", "/api/agent/stage-packet/", "/api/agent/other"):
+        resp = client.post(path, headers={"Authorization": "Bearer secret-gas-key"}, json={})
+        assert resp.status_code == 401, path
+
+
+def test_x_api_key_behavior_unchanged(monkeypatch):
+    client = _middleware_client(monkeypatch)
+    assert client.post("/api/other/thing", headers={"X-API-Key": "secret-gas-key"}).status_code == 200
+    assert client.post("/api/other/thing", headers={"X-API-Key": "wrong"}).status_code == 401
+    with patch("dashboard.routers.agent_packet.ingest_url", AsyncMock(return_value=_PARSE_OK)):
+        ok = client.post(
+            "/api/agent/parse-booking-url",
+            headers={"X-API-Key": "secret-gas-key"},
+            json={"booking_url": "https://jail.example.com/b/1"},
+        )
+        bad = client.post(
+            "/api/agent/parse-booking-url",
+            headers={"X-API-Key": "wrong"},
+            json={"booking_url": "https://jail.example.com/b/1"},
+        )
+    assert ok.status_code == 200
+    assert bad.status_code == 401
+
+
+# ── Surety ────────────────────────────────────────────────────────────────────
+
+
+def _stage(client, cols, json_body, headers=None):
+    hdrs = {"X-API-Key": "secret-gas-key"}
+    hdrs.update(headers or {})
+    with patch("dashboard.routers.agent_packet.get_collection", side_effect=lambda name: cols[name]):
+        return client.post("/api/agent/stage-packet", headers=hdrs, json=json_body)
+
+
+def _cols(intake_cls=None):
+    return {
+        "arrests": FakeCollection("arrests"),
+        "intake_queue": (intake_cls or FakeCollection)("intake_queue"),
+        "paperwork_packets": FakeCollection("paperwork_packets"),
+    }
+
+
+_DEF = {"defendant": {"full_name": "Test Person", "booking_number": "TEST-0100", "county": "Lee"}}
+
+
+def test_surety_is_normalized_to_canonical_id(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    for raw, expected in (("PALMETTO", "palmetto"), (" Palmetto ", "palmetto"), ("OSI", "osi"), ("osi", "osi")):
+        cols = _cols()
+        resp = _stage(client, cols, {**_DEF, "surety": raw})
+        assert resp.status_code == 200, raw
+        assert resp.json()["surety"] == expected
+        pkt = cols["paperwork_packets"].docs[0]
+        assert pkt["surety_id"] == expected and pkt["template"] == expected
+
+
+def test_missing_surety_keeps_osi_default(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    for body in (dict(_DEF), {**_DEF, "surety": None}, {**_DEF, "surety": ""}):
+        cols = _cols()
+        resp = _stage(client, cols, body)
+        assert resp.status_code == 200
+        assert cols["paperwork_packets"].docs[0]["surety_id"] == "osi"
+
+
+def test_unknown_or_inactive_surety_is_422_before_any_write(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    monkeypatch.setattr("dashboard.services.surety_registry._published_doc", lambda sid: None)
+    client = _make_client()
+    ingest = AsyncMock(return_value=_PARSE_OK)
+    for raw in ("acme", "lexington", "osi; drop", "{'$ne': 1}"):
+        cols = _cols()
+        with patch("dashboard.routers.agent_packet.ingest_url", ingest):
+            resp = _stage(client, cols, {**_DEF, "booking_url": "https://jail.example.com/b/1", "surety": raw})
+        assert resp.status_code == 422, raw
+        assert resp.json()["code"] == "surety_unsupported"
+        assert all(not c.docs for c in cols.values())
+    ingest.assert_not_awaited()
+
+
+# ── Idempotency ───────────────────────────────────────────────────────────────
+
+
+class _AtomicFakeCollection(FakeCollection):
+    """FakeCollection + find_one_and_update($setOnInsert, upsert, ReturnDocument.BEFORE)."""
+
+    calls = 0
+
+    async def find_one_and_update(self, flt, update, upsert=False, return_document=None, projection=None):
+        type(self).calls += 1
+        import copy
+
+        for d in self.docs:
+            from tests.bb_fake_mongo import matches
+
+            if matches(d, flt):
+                before = self._project(d, projection)
+                self._apply(d, update)
+                return before
+        if upsert:
+            new = {k: v for k, v in flt.items() if not k.startswith("$")}
+            new.update(copy.deepcopy(update.get("$setOnInsert") or {}))
+            self._apply(new, update)
+            self.docs.append(new)
+        return None
+
+
+def test_idempotency_repeat_returns_original_ids_and_creates_nothing(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+    body = {**_DEF, "surety": "palmetto"}
+    first = _stage(client, cols, body, {"Idempotency-Key": "chat-42"})
+    assert first.status_code == 200
+    ingest = AsyncMock(return_value=_PARSE_OK)
+    with patch("dashboard.routers.agent_packet.ingest_url", ingest):
+        again = _stage(client, cols, body, {"Idempotency-Key": "chat-42"})
+        via_body = _stage(client, cols, {**body, "idempotency_key": "chat-42"})
+    for resp in (again, via_body):
+        assert resp.status_code == 200
+        assert resp.json()["idempotent_replay"] is True
+        assert resp.json()["packet_id"] == first.json()["packet_id"]
+        assert resp.json()["intake_id"] == first.json()["intake_id"]
+        assert resp.json()["surety"] == "palmetto"
+    ingest.assert_not_awaited()
+    assert len(cols["intake_queue"].docs) == 1
+    assert len(cols["paperwork_packets"].docs) == 1
+    intake = cols["intake_queue"].docs[0]
+    pkt = cols["paperwork_packets"].docs[0]
+    assert intake["agent_idempotency_key"] == pkt["agent_idempotency_key"]
+    assert "chat-42" not in intake["agent_idempotency_key"]  # stored hashed + caller-scoped
+
+
+def test_idempotency_same_key_different_payload_is_409(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+    assert _stage(client, cols, _DEF, {"Idempotency-Key": "k1"}).status_code == 200
+    changed = {"defendant": {**_DEF["defendant"], "booking_number": "TEST-0101"}}
+    resp = _stage(client, cols, changed, {"Idempotency-Key": "k1"})
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "idempotency_key_conflict"
+    assert len(cols["intake_queue"].docs) == 1 and len(cols["paperwork_packets"].docs) == 1
+
+
+def test_idempotency_claim_is_atomic_when_precheck_races(monkeypatch):
+    """Both requests miss the read-only pre-check; only the upsert winner writes a packet."""
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+
+    async def miss(*a, **k):
+        return None
+
+    cols["intake_queue"].find_one = miss
+    first = _stage(client, cols, _DEF, {"Idempotency-Key": "race"})
+    second = _stage(client, cols, _DEF, {"Idempotency-Key": "race"})
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json()["idempotent_replay"] is True
+    assert second.json()["packet_id"] == first.json()["packet_id"]
+    assert len(cols["intake_queue"].docs) == 1
+    assert len(cols["paperwork_packets"].docs) == 1
+
+
+def test_idempotency_keys_are_scoped_by_caller(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    monkeypatch.setenv("LEADS_INTERNAL_TOKEN", "secret-internal")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+    a = _stage(client, cols, _DEF, {"Idempotency-Key": "shared"})
+    b = _stage(client, cols, _DEF, {"Idempotency-Key": "shared", "X-API-Key": "secret-internal"})
+    assert a.status_code == 200 and b.status_code == 200
+    assert a.json()["packet_id"] != b.json()["packet_id"]
+    assert len(cols["paperwork_packets"].docs) == 2
+
+
+def test_idempotency_key_validation(monkeypatch):
+    monkeypatch.setenv("GAS_API_KEY", "secret-gas-key")
+    client = _make_client()
+    cols = _cols(_AtomicFakeCollection)
+    mismatch = _stage(client, cols, {**_DEF, "idempotency_key": "a"}, {"Idempotency-Key": "b"})
+    too_long = _stage(client, cols, {**_DEF, "idempotency_key": "x" * 201})
+    assert mismatch.status_code == 400 and too_long.status_code == 400
+    assert all(not c.docs for c in cols.values())
+    # No key: unchanged behavior, every call stages a new packet
+    _stage(client, cols, _DEF)
+    _stage(client, cols, _DEF)
+    assert len(cols["paperwork_packets"].docs) == 2
+    assert all("agent_idempotency_key" not in d for d in cols["intake_queue"].docs)

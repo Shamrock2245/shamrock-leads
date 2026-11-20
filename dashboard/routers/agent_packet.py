@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import json
 import ipaddress
 import logging
 import os
-import secrets
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -36,7 +37,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from dashboard.auth.pin_middleware import get_session_from_request, is_machine_auth_valid
+from dashboard.auth.pin_middleware import (
+    bearer_token,
+    get_session_from_request,
+    is_machine_auth_valid,
+    machine_key_name,
+)
 from dashboard.extensions import get_collection
 from dashboard.services.id_scanner_service import IDScannerService
 from dashboard.services.public_url_guard import check_public_url
@@ -101,6 +107,11 @@ class AgentStagePacketRequest(BaseModel):
         description="Preferred surety code (e.g. 'osi', 'palmetto'). Staff confirms POA & surety in Super CRM.",
     )
     notes: Optional[str] = Field(None, description="Optional notes from the chat agent or bondsman")
+    idempotency_key: Optional[str] = Field(
+        None,
+        description="Optional retry key (same as the Idempotency-Key header). A repeat with the "
+        "same key and payload returns the original ids; a different payload returns 409.",
+    )
 
 
 class AgentParseBookingRequest(BaseModel):
@@ -109,20 +120,95 @@ class AgentParseBookingRequest(BaseModel):
     state: Optional[str] = "FL"
 
 
-def _is_authorized(request: Request) -> bool:
+def _caller_scope(request: Request) -> Optional[str]:
+    """Authenticated caller id used to scope idempotency keys, or None (unauthorized).
+
+    Machine callers are scoped by which configured key they used (env name, never
+    the value); staff by tenant + email from the session.
+    """
     if is_machine_auth_valid(request):
-        return True
-    if get_session_from_request(request):
-        return True
-    auth = (request.headers.get("Authorization") or "").strip()
-    if auth.lower().startswith("bearer "):
-        token = auth[7:].strip()
-        if token:
-            for env_name in ("GAS_API_KEY", "LEADS_INTERNAL_TOKEN", "INTERNAL_API_TOKEN"):
-                expected = (os.getenv(env_name) or "").strip()
-                if expected and secrets.compare_digest(token, expected):
-                    return True
-    return False
+        provided = (
+            request.headers.get("X-API-Key")
+            or request.headers.get("X-Api-Key")
+            or request.headers.get("X-Internal-Token")
+            or request.query_params.get("api_key")
+            or ""
+        )
+        return f"machine:{machine_key_name(provided) or 'key'}"
+    bearer_key = machine_key_name(bearer_token(request))
+    if bearer_key:
+        return f"machine:{bearer_key}"
+    sess = get_session_from_request(request)
+    if sess:
+        tenant = str(sess.get("tenant_id") or "").strip()
+        who = str(sess.get("email") or sess.get("agent_name") or sess.get("role") or "staff").strip().lower()
+        return f"staff:{tenant}:{who}"
+    return None
+
+
+def _is_authorized(request: Request) -> bool:
+    return _caller_scope(request) is not None
+
+
+_MAX_IDEMPOTENCY_KEY_LEN = 200
+
+
+def _idempotency_key(request: Request, body: "AgentStagePacketRequest") -> tuple[Optional[str], Optional[str]]:
+    """(key, error). Header ``Idempotency-Key`` or body ``idempotency_key``; both must agree."""
+    header = (request.headers.get("Idempotency-Key") or "").strip()
+    field = (body.idempotency_key or "").strip()
+    if header and field and header != field:
+        return None, "Idempotency-Key header and idempotency_key field differ"
+    key = header or field
+    if not key:
+        return None, None
+    if len(key) > _MAX_IDEMPOTENCY_KEY_LEN or not key.isprintable():
+        return None, "Idempotency key must be 1-200 printable characters"
+    return key, None
+
+
+def _payload_fingerprint(body: "AgentStagePacketRequest") -> str:
+    payload = body.model_dump(exclude={"idempotency_key"})
+    canon = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def _scoped_key_hash(scope: str, key: str) -> str:
+    return hashlib.sha256(f"agent-stage-packet|{scope}|{key}".encode("utf-8")).hexdigest()
+
+
+def _idempotent_response(prior: dict, fingerprint: str):
+    if prior.get("agent_idempotency_fingerprint") != fingerprint:
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Idempotency key was already used with a different payload.",
+                "code": "idempotency_key_conflict",
+            },
+            status_code=409,
+        )
+    packet_id = prior.get("paperwork_packet_id")
+    return {
+        "success": True,
+        "status": "staged_ready_for_staff",
+        "idempotent_replay": True,
+        "packet_id": packet_id,
+        "intake_id": prior.get("intake_id"),
+        "super_crm_url": f"{_super_crm_base_url()}/?tab=paperwork&packet_id={packet_id}",
+        "surety": prior.get("agent_surety"),
+        "warnings": [],
+    }
+
+
+def _resolve_surety(raw: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """(canonical surety id, error). Missing keeps today's default ('osi')."""
+    from dashboard.services.surety_registry import UnsupportedSuretyError, optional_surety
+
+    try:
+        sid = optional_surety(raw)
+    except UnsupportedSuretyError:
+        return None, "Unknown or inactive surety. Use a configured surety (e.g. 'osi' or 'palmetto')."
+    return (sid or "osi"), None
 
 
 async def _validate_public_booking_url(raw_url: str) -> Optional[str]:
@@ -218,8 +304,27 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
 
     Returns a 1-click Super CRM URL so staff can assign the POA, edit any details, and send DocuSeal.
     """
-    if not _is_authorized(request):
+    scope = _caller_scope(request)
+    if scope is None:
         return JSONResponse({"success": False, "error": "Unauthorized"}, status_code=401)
+
+    surety, surety_err = _resolve_surety(body.surety)
+    if surety_err:
+        return JSONResponse(
+            {"success": False, "error": surety_err, "code": "surety_unsupported"}, status_code=422
+        )
+
+    idem_key, idem_err = _idempotency_key(request, body)
+    if idem_err:
+        return JSONResponse({"success": False, "error": idem_err}, status_code=400)
+    idem_hash = _scoped_key_hash(scope, idem_key) if idem_key else None
+    fingerprint = _payload_fingerprint(body) if idem_key else None
+    if idem_hash:
+        intake_col = get_collection("intake_queue")
+        # Fast replay path: no booking fetch or OCR for a repeat.
+        prior = await intake_col.find_one({"agent_idempotency_key": idem_hash}, {"_id": 0})
+        if prior:
+            return _idempotent_response(prior, fingerprint)
 
     warnings: list[str] = []
     parsed_booking: dict[str, Any] = {}
@@ -328,7 +433,6 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
     now = datetime.now(timezone.utc)
     intake_id = f"INT-AGT-{uuid.uuid4().hex[:10].upper()}"
     packet_id = f"PKT-{uuid.uuid4().hex[:10].upper()}"
-    surety = (body.surety or "osi").strip().lower() or "osi"
 
     # 5. No arrests write. ``arrests`` is the scraper source of truth (dedup
     # key state + county + booking_number) and packet context treats an arrests
@@ -394,7 +498,26 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
         "created_at": now,
         "updated_at": now,
     }
-    await get_collection("intake_queue").insert_one(intake_doc)
+    intake_col = get_collection("intake_queue")
+    if idem_hash:
+        intake_doc["agent_idempotency_key"] = idem_hash
+        intake_doc["agent_idempotency_fingerprint"] = fingerprint
+        intake_doc["agent_surety"] = surety
+        # Atomic claim: the intake doc itself is the claim. Only the request whose
+        # upsert inserted it (prior is None) goes on to write the packet.
+        from pymongo import ReturnDocument
+
+        prior = await intake_col.find_one_and_update(
+            {"agent_idempotency_key": idem_hash},
+            {"$setOnInsert": intake_doc},
+            upsert=True,
+            return_document=ReturnDocument.BEFORE,
+            projection={"_id": 0},
+        )
+        if prior:
+            return _idempotent_response(prior, fingerprint)
+    else:
+        await intake_col.insert_one(intake_doc)
 
     # 7. Insert staged paperwork_packets record (never creates DocuSeal submission here)
     packet_doc = {
@@ -426,6 +549,8 @@ async def stage_packet_for_staff(request: Request, body: AgentStagePacketRequest
         "packet_version": 1,
         "voided": False,
     }
+    if idem_hash:
+        packet_doc["agent_idempotency_key"] = idem_hash
     await get_collection("paperwork_packets").insert_one(packet_doc)
 
     super_crm_url = f"{_super_crm_base_url()}/?tab=paperwork&packet_id={packet_id}"
