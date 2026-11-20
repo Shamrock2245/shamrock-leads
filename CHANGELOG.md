@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-18 (Sarasota detail-page booking number)
+
+### Added
+- **Sarasota detail pages are keyed on the Court Case Number.** Owner ruling 2026-11-20, relayed by Chief of Staff: the key is that number exactly as published on `table#data-table`, with only end whitespace removed. One record per distinct case number on the detail page. Each charge row stays its own charge. Booking numbers and intake timestamps are lists on the record when a case spans more than one booking, and they are not the key. A row with no case number is skipped. The skip log is the county, the reason, and the count. The person PIN and the Booking Number are not fallback keys. `No Bond Available` stays text. A published `$0.00` stays 0. Blank release plus a Current Inmate Population listing is the only in-custody mark, and `status_source` says so.
+- **Detail fetches are capped and paced** the same way as Hernando: 200 pages a run, 0.4 seconds before each page. The window moves one cap ahead each UTC day, so a stable list of about 1,065 people is not fetched from the same first page forever. A detail page with no desktop charge table, or without the booking columns, fails the walk instead of being skipped. `scrape()` still returns nothing. `SOURCE_CONTRACT_VALIDATED` stays false and Health stays `fail_closed`. The Mac relay, then stealth plus solver, then fail closed order is unchanged.
+
+### Tests
+- `tests/test_sarasota_detail_contract.py` on the CI list. Synthetic fixtures only. `test_detail_rows_are_keyed_on_the_court_case_number`, `test_row_without_a_case_number_is_skipped_and_logged`, `test_two_charges_on_one_case_stay_distinct`, and `test_booking_number_without_a_case_number_writes_nothing`.
+
 ## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
 
 ### Fixed
