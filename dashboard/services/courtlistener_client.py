@@ -502,8 +502,12 @@ class CourtListenerClient:
             "warning": ANONYMOUS_V4_REJECTED,
         }
 
-    async def _read_v4(self, url: str, params: dict) -> dict:
-        """One GET. Does not follow ``next``. 429/5xx backoff lives on ``_request_with_retry``."""
+    async def _read_v4(self, url: str, params: Optional[dict] = None) -> dict:
+        """One GET. 429/5xx backoff lives on ``_request_with_retry``.
+
+        Callers that follow ``next`` must cap the number of calls. This method
+        itself never requests a second page.
+        """
         if not (self.api_token or "").strip():
             return self._no_token_result()
         if self._in_maintenance_window():
@@ -516,7 +520,8 @@ class CourtListenerClient:
                 "data": None,
             }
         try:
-            resp = await self._request_with_retry("get", url, params=params)
+            request_kwargs = {"params": params} if params else {}
+            resp = await self._request_with_retry("get", url, **request_kwargs)
         except Exception as exc:
             log.warning("CourtListener request failed: %s", type(exc).__name__)
             return {
@@ -593,20 +598,136 @@ class CourtListenerClient:
             params["court"] = " ".join(str(c).strip() for c in courts if str(c).strip())
         return await self._read_v4("/search/", params)
 
+    async def search_recent(
+        self,
+        *,
+        search_type: str,
+        query: str,
+        courts: Optional[list] = None,
+        filed_after: Optional[str] = None,
+        page_size: int = 20,
+        max_pages: int = 3,
+        pause_s: float = 0.0,
+    ) -> dict:
+        """Recent ``/search/`` hits inside a caller-supplied window.
+
+        Follows ``next`` at most ``max_pages`` times (hard cap 3). Field
+        filters stay on the first request. 429 backoff is ``_request_with_retry``.
+        """
+        stype = (search_type or "").strip().lower()
+        if stype not in {"o", "r", "rd", "d", "p", "oa"}:
+            return {
+                "success": False,
+                "error": "bad_search_type",
+                "status_code": None,
+                "results": [],
+                "data": None,
+                "pages_fetched": 0,
+            }
+        page_cap = max(1, min(int(max_pages or 1), 3))
+        params: Optional[dict] = {
+            "type": stype,
+            "q": (query or "").strip(),
+            "page_size": max(1, min(int(page_size or 20), 20)),
+            "order_by": "dateFiled desc",
+        }
+        if filed_after:
+            params["filed_after"] = filed_after
+        if courts:
+            params["court"] = " ".join(str(c).strip() for c in courts if str(c).strip())
+
+        url = "/search/"
+        combined: list = []
+        pages = 0
+        last: dict = {"success": False, "results": [], "status_code": None, "data": None}
+        for _ in range(page_cap):
+            last = await self._read_v4(url, params)
+            pages += 1
+            if not last.get("success"):
+                last["results"] = combined
+                last["pages_fetched"] = pages if not combined else pages - 1
+                return last
+            combined.extend(last.get("results") or [])
+            data = last.get("data") if isinstance(last.get("data"), dict) else {}
+            next_url = str((data or {}).get("next") or "").strip()
+            if not next_url or pages >= page_cap:
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": bool(next_url) and pages >= page_cap,
+                }
+            url = next_url
+            params = None
+            if pause_s:
+                await asyncio.sleep(pause_s)
+        return {
+            "success": True,
+            "status_code": 200,
+            "results": combined,
+            "pages_fetched": pages,
+            "truncated": True,
+        }
+
     async def get_docket_brief(self, docket_id: int) -> dict:
         """Docket metadata with field selection. One document, no related rows."""
         params = {"fields": DOCKET_BRIEF_FIELDS}
         return await self._read_v4(f"/dockets/{int(docket_id)}/", params)
 
-    async def list_docket_entries(self, docket_id: int, page_size: int = 15) -> dict:
-        """Newest docket entries for one docket. One page, no plain_text."""
-        params = {
+    async def list_docket_entries(
+        self,
+        docket_id: int,
+        page_size: int = 15,
+        max_pages: int = 1,
+        pause_s: float = 0.0,
+    ) -> dict:
+        """Newest docket entries. ``max_pages`` is capped at 3. No plain_text.
+
+        The first request selects fields. A later page uses the ``next`` URL
+        only, so the cursor is not widened into an unbounded walk.
+        """
+        page_cap = max(1, min(int(max_pages or 1), 3))
+        params: Optional[dict] = {
             "docket": int(docket_id),
             "fields": DOCKET_ENTRY_FIELDS,
             "order_by": "-date_filed",
             "page_size": max(1, min(int(page_size or 15), 20)),
         }
-        return await self._read_v4("/docket-entries/", params)
+        url = "/docket-entries/"
+        combined: list = []
+        pages = 0
+        for _ in range(page_cap):
+            res = await self._read_v4(url, params)
+            pages += 1
+            if not res.get("success"):
+                res["results"] = combined or res.get("results") or []
+                res["pages_fetched"] = pages if not combined else pages - 1
+                return res
+            combined.extend(res.get("results") or [])
+            data = res.get("data") if isinstance(res.get("data"), dict) else {}
+            next_url = str((data or {}).get("next") or "").strip()
+            if not next_url or pages >= page_cap:
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": bool(next_url) and pages >= page_cap,
+                }
+            url = next_url
+            params = None
+            if pause_s:
+                await asyncio.sleep(pause_s)
+        return {
+            "success": True,
+            "status_code": 200,
+            "results": combined,
+            "pages_fetched": pages,
+            "truncated": True,
+        }
 
     async def list_docket_parties(self, docket_id: int, page_size: int = 20) -> dict:
         """Party names for one docket. One page. ``extra_info`` may carry a DOB."""

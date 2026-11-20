@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-20 (Federal bond-risk review fixes)
+
+### Fixed
+- **A date of birth confirms only the party it belongs to.** On a multi-defendant Florida federal docket, another defendant's date of birth no longer auto-links a name match. That row stays `possible` unless the matching party's own date of birth, or a case or agency number already on file, confirms it. The matching party's own conflicting date of birth still drops the row.
+- **Recent filings are read inside a bounded window.** Search walks at most three pages of RECAP and docket results filed inside the last 45 days, ordered by filing date, and docket entries walk at most two pages. 429 responses still back off, detail calls still select fields, and a further `next` URL is not requested.
+- **Each filing alerts on its own.** The dedupe key includes the docket entry id or RECAP document id, so two detention hearings on one docket each produce a staff row. The same filing does not alert twice.
+- **Slack delivery is part of completion.** The CRM row is written once with `slack_delivered` false. The alert stays incomplete until `SlackNotifier.notify_alert` returns success. A later cycle retries Slack only and does not insert another notification.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers party-linked dates of birth, bounded search and entry pages, distinct filings, and a Slack retry without a second CRM row.
+
 ## [Unreleased] — 2026-11-19 (Florida federal bond-risk staff alerts)
 
 ### Added

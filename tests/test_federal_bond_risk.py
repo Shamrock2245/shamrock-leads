@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -16,10 +17,16 @@ from dashboard.services.courtlistener_client import (
 )
 from dashboard.services.federal_bond_risk import (
     FLAG,
+    MAX_ENTRY_PAGES,
+    MAX_SEARCH_PAGES,
     ClientIdentity,
+    DocketEvent,
+    DocketParty,
+    DocketView,
     classify_bond_risk,
     full_name_equal,
     load_active_clients,
+    match_client,
     run_federal_bond_risk_scan,
 )
 
@@ -152,6 +159,18 @@ class _CourtListener:
             return {"success": True, "status_code": 200, "results": self.hits}
         return {"success": True, "status_code": 200, "results": []}
 
+    async def search_recent(self, **kwargs):
+        self.calls.append(("search_recent", kwargs))
+        assert int(kwargs.get("max_pages") or 1) <= 3
+        assert kwargs.get("filed_after")
+        assert int(kwargs.get("page_size") or 20) <= 20
+        return await self.search_limited(
+            search_type=kwargs["search_type"],
+            query=kwargs["query"],
+            courts=kwargs["courts"],
+            page_size=kwargs.get("page_size") or 20,
+        )
+
     async def get_docket_brief(self, docket_id: int):
         self.calls.append(("brief", docket_id))
         data = self.brief.get(docket_id) if isinstance(self.brief, dict) and docket_id in self.brief else self.brief
@@ -161,8 +180,9 @@ class _CourtListener:
         self.calls.append(("parties", docket_id))
         return {"success": True, "status_code": 200, "results": self.parties}
 
-    async def list_docket_entries(self, docket_id: int):
+    async def list_docket_entries(self, docket_id: int, **kwargs):
         self.calls.append(("entries", docket_id))
+        assert int(kwargs.get("max_pages") or 1) <= 3
         return {"success": True, "status_code": 200, "results": self.entries}
 
     async def close(self):
@@ -681,3 +701,208 @@ def test_status_route_reports_the_token_warning(monkeypatch):
     assert "401" in body["warning"]
     assert body["count"] == 1
     assert body["alerts"][0]["match_status"] == "possible"
+
+
+def _docket_for(*parties: DocketParty, events=None) -> DocketView:
+    return DocketView(
+        docket_id="1001",
+        court_id="flmd",
+        court_name="M.D. Florida",
+        docket_number="2:24-cr-00123",
+        case_name="United States v. John Smith",
+        pacer_case_id="",
+        cause="",
+        names=["John Smith", "Jane Roe", *[party.name for party in parties]],
+        parties=list(parties),
+        events=events or [DocketEvent("warrant", "Warrant", "entry:1")],
+    )
+
+
+def test_dob_confirms_only_the_party_it_belongs_to():
+    john = DocketParty("Smith, John", frozenset({"1985-01-15"}))
+    jane = DocketParty("Roe, Jane", frozenset({"1990-02-02"}))
+    docket = _docket_for(john, jane)
+
+    wrong_party = match_client(_client(dobs=["1990-02-02"]), docket)
+    assert wrong_party[0] is None
+
+    bare_john = DocketParty("Smith, John", frozenset())
+    borrowed = match_client(_client(dobs=["1990-02-02"]), _docket_for(bare_john, jane))
+    assert borrowed == ("possible", ())
+
+    own = match_client(_client(dobs=["1985-01-15"]), docket)
+    assert own == ("confirmed", ("dob",))
+
+
+@pytest.mark.asyncio
+async def test_scan_does_not_auto_link_another_partys_dob(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued"}])],
+        brief={"id": 1001, "court_id": "flmd", "docket_number": "2:24-cr-00123", "case_name": "United States v. John Smith"},
+        parties=[
+            {"name": "Smith, John", "extra_info": ""},
+            {"name": "Roe, Jane", "extra_info": "DOB: 01/15/1985"},
+        ],
+        entries=[],
+    )
+    db = _DB()
+    result = await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert result["confirmed"] == 0
+    assert result["possible"] == 1
+    assert db.docket_events.docs[0]["auto_linked"] is False
+    assert db.docket_events.docs[0]["confirmations"] == []
+
+
+@pytest.mark.asyncio
+async def test_recent_search_walks_a_bounded_number_of_pages(monkeypatch):
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("dashboard.services.courtlistener_client.asyncio.sleep", fake_sleep)
+    calls = []
+
+    class _Response:
+        def __init__(self, payload):
+            self.status_code = 200
+            self._payload = payload
+            self.headers = {}
+
+        def json(self):
+            return self._payload
+
+    class _HTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls.append((url, dict(params or {})))
+            if "cursor=p4" in url:
+                raise AssertionError("paging passed the cap")
+            if url == "/search/":
+                return _Response({
+                    "results": [{"id": 1, "docket_id": 1, "dateFiled": "2026-11-18"}],
+                    "next": "https://www.courtlistener.com/api/rest/v4/search/?cursor=p2",
+                })
+            if "cursor=p2" in url:
+                return _Response({
+                    "results": [{"id": 2, "docket_id": 2, "dateFiled": "2026-11-10"}],
+                    "next": "https://www.courtlistener.com/api/rest/v4/search/?cursor=p3",
+                })
+            if "cursor=p3" in url:
+                return _Response({
+                    "results": [{"id": 3, "docket_id": 3}],
+                    "next": "https://www.courtlistener.com/api/rest/v4/search/?cursor=p4",
+                })
+            if url == "/docket-entries/" and len([item for item in calls if item[0] == "/docket-entries/"]) == 1:
+                return _Response({
+                    "results": [{"id": 8, "description": "Detention hearing", "date_filed": "2026-11-18"}],
+                    "next": "https://www.courtlistener.com/api/rest/v4/docket-entries/?cursor=e2",
+                })
+            if "cursor=e2" in url:
+                return _Response({
+                    "results": [{"id": 7, "description": "Older note", "date_filed": "2026-10-01"}],
+                    "next": "https://www.courtlistener.com/api/rest/v4/docket-entries/?cursor=e3",
+                })
+            raise AssertionError(url)
+
+    client = CourtListenerClient(api_token="test-token")
+    client._in_maintenance_window = lambda: False
+    client._client = _HTTP()
+    found = await client.search_recent(
+        search_type="r",
+        query="detention",
+        courts=["flmd", "flsd", "flnd"],
+        filed_after="2026-10-06",
+        page_size=50,
+        max_pages=MAX_SEARCH_PAGES,
+        pause_s=0,
+    )
+    assert found["pages_fetched"] == 3
+    assert found["truncated"] is True
+    assert [row["id"] for row in found["results"]] == [1, 2, 3]
+    first = calls[0][1]
+    assert first["filed_after"] == "2026-10-06"
+    assert first["order_by"] == "dateFiled desc"
+    assert first["page_size"] == 20
+    assert len([url for url, _params in calls if "cursor=p" in url or url == "/search/"]) == 3
+    assert not any("cursor=p4" in url for url, _params in calls)
+
+    entries = await client.list_docket_entries(5, page_size=20, max_pages=MAX_ENTRY_PAGES, pause_s=0)
+    assert entries["pages_fetched"] == 2
+    assert [row["id"] for row in entries["results"]] == [8, 7]
+    entry_params = [params for url, params in calls if url == "/docket-entries/"][0]
+    assert entry_params["fields"] == DOCKET_ENTRY_FIELDS
+    assert "plain_text" not in entry_params["fields"]
+    assert not any("cursor=e3" in url for url, _params in calls)
+
+
+@pytest.mark.asyncio
+async def test_distinct_filings_of_the_same_type_each_alert_once(monkeypatch):
+    _enable(monkeypatch)
+    today = datetime.now(timezone.utc).date().isoformat()
+    old = (datetime.now(timezone.utc).date() - timedelta(days=400)).isoformat()
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[])],
+        brief={"id": 1001, "court_id": "flmd", "docket_number": "2:24-cr-00123", "case_name": "United States v. John Smith"},
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        entries=[
+            {"id": 11, "description": "Detention hearing", "date_filed": today},
+            {"id": 12, "description": "Detention hearing", "date_filed": today},
+            {"id": 13, "description": "Detention hearing", "date_filed": old},
+        ],
+    )
+    db = _DB()
+    notifier = _Notifier()
+    result = await _scan(db, court, [_client(dobs=["1985-01-15"])], notifier)
+    assert result["rows_written"] == 2
+    filings = {row["filing_id"] for row in db.docket_events.docs}
+    assert filings == {"entry:11", "entry:12"}
+    assert all(row["alert_complete"] is True for row in db.docket_events.docs)
+    again = await _scan(db, court, [_client(dobs=["1985-01-15"])], notifier)
+    assert again["rows_written"] == 0
+    assert len(db.notifications.docs) == 2
+    assert len(notifier.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_slack_failure_retries_without_a_second_crm_row(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[{"id": 9, "description": "Failure to appear"}])],
+        brief={"id": 1001, "court_id": "flmd", "docket_number": "2:24-cr-00123", "case_name": "United States v. John Smith"},
+        parties=[{"name": "Smith, John"}],
+        entries=[],
+    )
+
+    class _Flaky:
+        def __init__(self):
+            self.calls = []
+
+        def notify_alert(self, **kwargs):
+            self.calls.append(kwargs)
+            assert kwargs["bridge"] is False
+            return len(self.calls) > 1
+
+    notifier = _Flaky()
+    db = _DB()
+    clients = [_client()]
+    first = await _scan(db, court, clients, notifier)
+    assert first["rows_written"] == 1
+    assert first["slack_sent"] == 0
+    assert first["slack_pending"] == 1
+    assert db.docket_events.docs[0]["slack_delivered"] is False
+    assert db.docket_events.docs[0]["alert_complete"] is False
+    assert len(db.notifications.docs) == 1
+
+    second = await _scan(db, court, clients, notifier)
+    assert second["rows_written"] == 0
+    assert second["slack_sent"] == 1
+    assert second["slack_pending"] == 0
+    assert len(db.notifications.docs) == 1
+    assert len(db.docket_events.docs) == 1
+    assert db.docket_events.docs[0]["slack_delivered"] is True
+    assert db.docket_events.docs[0]["alert_complete"] is True
+    assert db.docket_events.docs[0]["slack_attempts"] == 2
+    assert len(notifier.calls) == 2

@@ -3,14 +3,16 @@ Florida federal bond-risk alerts.
 
 Watches CourtListener v4 for criminal cases in FLMD, FLSD, and FLND that
 show a bond-risk event for someone who already has an active Shamrock bond.
-Reuses ``CourtListenerClient`` (token, 429 backoff, field selection, one page).
+Reuses ``CourtListenerClient`` (token, 429 backoff, field selection, a
+bounded number of recent pages).
 
 Matching fails closed:
-  * full name, plus a date of birth the docket actually has, or a case or
-    agency number we already hold → confirmed and auto-linked
-  * full name only → ``possible`` for staff review, not auto-linked
-  * a conflicting date of birth, a surname-only caption, or two confirmed
-    clients for the same docket → no auto-link
+  * full name, plus a date of birth on the party whose name matched, or a
+    case or agency number we already hold → confirmed and auto-linked
+  * full name only, or a date of birth that belongs to a different party →
+    ``possible`` for staff review, not auto-linked
+  * the matched party's own date of birth conflicts, a surname-only caption,
+    or two confirmed clients for the same filing → no auto-link
 
 ``FEDERAL_BOND_RISK_ALERTS`` defaults off. Nothing is written and CourtListener
 is not called until it is on. With the flag on and no token, the scan skips
@@ -20,12 +22,13 @@ Apple chat.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from core.booking_identity import redact_internal_keys
@@ -43,9 +46,12 @@ _ON = {"1", "true", "yes", "on"}
 ACTIVE_STATUSES = ("active", "monitoring", "alert")
 FL_FEDERAL_COURTS = frozenset(FL_FEDERAL_COURT_IDS)
 MAX_BONDS = 200
-MAX_DOCKETS = 8
+MAX_DOCKETS = 30
 MAX_ROWS = 30
 MAX_SLACK = 10
+LOOKBACK_DAYS = 45
+MAX_SEARCH_PAGES = 3
+MAX_ENTRY_PAGES = 2
 
 BOND_RISK_QUERY = (
     '"conditions of release" OR "detention hearing" OR "failure to appear" '
@@ -346,10 +352,19 @@ class ClientIdentity:
     status: str
 
 
+@dataclass(frozen=True)
+class DocketParty:
+    """One person on the docket. Their date of birth stays on this record."""
+
+    name: str
+    dobs: frozenset[str] = frozenset()
+
+
 @dataclass
 class DocketEvent:
     event_type: str
     label: str
+    filing_id: str
 
 
 @dataclass
@@ -362,7 +377,7 @@ class DocketView:
     pacer_case_id: str
     cause: str
     names: list[str] = field(default_factory=list)
-    dobs: set[str] = field(default_factory=set)
+    parties: list[DocketParty] = field(default_factory=list)
     numbers: set[str] = field(default_factory=set)
     events: list[DocketEvent] = field(default_factory=list)
     absolute_url: str = ""
@@ -383,22 +398,44 @@ class MatchDecision:
     confirmations: tuple[str, ...]
     event_type: str
     event_label: str
+    filing_id: str
     ambiguous: bool = False
+
+
+def party_dobs_for_client(client: ClientIdentity, docket: DocketView) -> Optional[set[str]]:
+    """Dates of birth on parties whose name matches the client.
+
+    ``None`` means no party name matched (a caption-only hit). An empty set
+    means a party matched and that party has no date of birth. Dates of birth
+    on other parties are not included.
+    """
+    matched = [
+        party for party in docket.parties
+        if any(full_name_equal(name, party.name) for name in client.names)
+    ]
+    if not matched:
+        return None
+    found: set[str] = set()
+    for party in matched:
+        found.update(party.dobs)
+    return found
 
 
 def match_client(client: ClientIdentity, docket: DocketView) -> tuple[Optional[str], tuple[str, ...]]:
     """Return (confirmed|possible|None, confirmation labels).
 
-    A date of birth that both sides have and that differs is a conflict:
-    the row is dropped, even when a case number overlaps.
+    A date of birth confirms the link only when it is on the party whose name
+    matched. A different party's date of birth does not confirm and does not
+    conflict. The matched party's own date of birth, when it differs, drops
+    the row even if a case number overlaps.
     """
     if not any(full_name_equal(name, other) for name in client.names for other in docket.names):
         return None, ()
-    docket_dobs = set(docket.dobs)
-    if client.dobs and docket_dobs and client.dobs.isdisjoint(docket_dobs):
+    party_dobs = party_dobs_for_client(client, docket)
+    if party_dobs is not None and client.dobs and party_dobs and client.dobs.isdisjoint(party_dobs):
         return None, ()
     confirmations = []
-    if client.dobs & docket_dobs:
+    if party_dobs and client.dobs & party_dobs:
         confirmations.append("dob")
     held_numbers = {
         ident for ident in (canonical_identifier(number) for number in client.numbers) if ident
@@ -425,6 +462,7 @@ def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[Ma
                 confirmations=confirmations,
                 event_type=event.event_type,
                 event_label=event.label,
+                filing_id=event.filing_id,
             ))
         confirmed = [row for row in group if row.status == "confirmed"]
         if len(confirmed) > 1:
@@ -477,9 +515,37 @@ def _staff_copy(decision: MatchDecision, docket: DocketView) -> tuple[str, str]:
     return _redact_sensitive(title), _redact_sensitive(message)
 
 
+def filing_window_start(now: Optional[datetime] = None) -> str:
+    """First calendar day of the recent-filings window, UTC."""
+    moment = now or datetime.now(timezone.utc)
+    return (moment.date() - timedelta(days=LOOKBACK_DAYS)).isoformat()
+
+
+def _parse_day(value: str) -> Optional[datetime]:
+    raw = str(value or "").strip()[:10]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def filing_in_window(value: str, start: Optional[str] = None) -> bool:
+    """True when a filing date is inside the window. A missing date is kept."""
+    day = _parse_day(value)
+    if day is None:
+        return True
+    window = _parse_day(start or filing_window_start())
+    if window is None:
+        return True
+    return day >= window
+
+
 def _source_id(docket: DocketView, decision: MatchDecision) -> str:
     key = docket.docket_id or canonical_identifier(docket.docket_number) or docket.docket_number
-    return f"fl-federal:{key}:{decision.event_type}:{decision.client.bond_case_id}"
+    filing = decision.filing_id or "filing-unknown"
+    return f"fl-federal:{key}:{decision.event_type}:{filing}:{decision.client.bond_case_id}"
 
 
 def _now() -> str:
@@ -604,8 +670,11 @@ def _stop_if_blocked(result: dict) -> None:
         )
 
 
-def _events_from_text(text: str) -> list[DocketEvent]:
-    return [DocketEvent(event_type, label) for event_type, label in classify_bond_risk(text)]
+def _events_from_text(text: str, filing_id: str) -> list[DocketEvent]:
+    return [
+        DocketEvent(event_type, label, filing_id)
+        for event_type, label in classify_bond_risk(text)
+    ]
 
 
 def _hit_docket_id(hit: dict, search_type: str) -> str:
@@ -617,26 +686,34 @@ def _hit_docket_id(hit: dict, search_type: str) -> str:
     return ""
 
 
-def _extend_events(docket: DocketView, text: str) -> None:
-    have = {event.event_type for event in docket.events}
-    for event in _events_from_text(text):
-        if event.event_type not in have:
+def _extend_events(docket: DocketView, text: str, filing_id: str) -> None:
+    """Keep every filing. The same event type on a new entry or document stays."""
+    if not filing_id:
+        return
+    have = {(event.event_type, event.filing_id) for event in docket.events}
+    for event in _events_from_text(text, filing_id):
+        key = (event.event_type, event.filing_id)
+        if key not in have:
             docket.events.append(event)
-            have.add(event.event_type)
+            have.add(key)
 
 
 async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float) -> list[DocketView]:
-    """Search RECAP and dockets once each, then hydrate at most ``MAX_DOCKETS``."""
+    """Search recent RECAP and docket pages, then hydrate at most ``MAX_DOCKETS``."""
     import asyncio
 
     surnames = _surnames(clients)
+    window = filing_window_start()
     seeds: dict[str, dict] = {}
     for search_type in ("r", "rd", "d"):
-        result = await client.search_limited(
+        result = await client.search_recent(
             search_type=search_type,
             query=BOND_RISK_QUERY,
             courts=list(FL_FEDERAL_COURT_IDS),
-            page_size=15,
+            filed_after=window,
+            page_size=20,
+            max_pages=MAX_SEARCH_PAGES,
+            pause_s=pause_s,
         )
         _stop_if_blocked(result)
         if not result.get("success"):
@@ -644,6 +721,9 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
             continue
         for hit in result.get("results") or []:
             if not isinstance(hit, dict):
+                continue
+            filed = _first_text(hit, "dateFiled", "date_filed", "dateArgued")
+            if filed and not filing_in_window(filed, window):
                 continue
             docket_id = _hit_docket_id(hit, search_type)
             if not str(docket_id).isdigit():
@@ -671,13 +751,13 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
     for seed in list(seeds.values())[:MAX_DOCKETS]:
         if pause_s:
             await asyncio.sleep(pause_s)
-        view = await _hydrate(client, seed)
+        view = await _hydrate(client, seed, pause_s)
         if view and view.events and is_fl_federal_criminal(view.court_id, view.docket_number):
             views.append(view)
     return views
 
 
-async def _hydrate(client, seed: dict) -> Optional[DocketView]:
+async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> Optional[DocketView]:
     hits = seed.get("hits") or []
     first = hits[0] if hits else {}
     docket_id = str(seed.get("id") or "")
@@ -700,10 +780,15 @@ async def _hydrate(client, seed: dict) -> Optional[DocketView]:
         log.warning("Docket %s parties unavailable: %s", docket_id, party_res.get("error"))
         return None
     parties = [row for row in (party_res.get("results") or []) if isinstance(row, dict)]
-    entry_res = await client.list_docket_entries(int(docket_id))
+    entry_res = await client.list_docket_entries(
+        int(docket_id), page_size=20, max_pages=MAX_ENTRY_PAGES, pause_s=pause_s,
+    )
     _stop_if_blocked(entry_res)
     if entry_res.get("success"):
-        entries = [row for row in (entry_res.get("results") or []) if isinstance(row, dict)]
+        entries = [
+            row for row in (entry_res.get("results") or [])
+            if isinstance(row, dict) and filing_in_window(str(row.get("date_filed") or ""))
+        ]
 
     court_id = _court_slug(brief) or _court_slug(first)
     docket_number = _first_text(brief, "docket_number") or _first_text(first, "docketNumber", "docket_number")
@@ -714,16 +799,17 @@ async def _hydrate(client, seed: dict) -> Optional[DocketView]:
     pacer = _first_text(brief, "pacer_case_id") or _first_text(first, "pacer_case_id")
     cause = _first_text(brief, "cause") or _first_text(first, "cause")
     names = defendant_names_from_caption(case_name)
-    dobs: set[str] = set()
+    party_rows: list[DocketParty] = []
     for party in parties:
         party_name = str(party.get("name") or "").strip()
-        if party_name:
-            names.append(party_name)
-        extra = str(party.get("extra_info") or "")
-        dobs |= extract_labeled_dobs(extra)
+        if not party_name:
+            continue
+        names.append(party_name)
+        party_dobs = extract_labeled_dobs(str(party.get("extra_info") or ""))
         labeled = normalize_dob(str(party.get("date_of_birth") or ""))
         if labeled:
-            dobs.add(labeled)
+            party_dobs.add(labeled)
+        party_rows.append(DocketParty(name=party_name, dobs=frozenset(party_dobs)))
     view = DocketView(
         docket_id=docket_id,
         court_id=court_id,
@@ -733,7 +819,7 @@ async def _hydrate(client, seed: dict) -> Optional[DocketView]:
         pacer_case_id=pacer,
         cause=cause,
         names=names,
-        dobs=dobs,
+        parties=party_rows,
         absolute_url=f"https://www.courtlistener.com/docket/{docket_id}/" if docket_id else "",
     )
     for value in (docket_number, pacer):
@@ -741,15 +827,25 @@ async def _hydrate(client, seed: dict) -> Optional[DocketView]:
         if ident:
             view.numbers.add(ident)
     for hit in hits:
-        _extend_events(view, _first_text(hit, "description", "short_description", "snippet"))
+        hit_filing = f"hit:{hit.get('id') or docket_id}"
+        _extend_events(view, _first_text(hit, "description", "short_description"), hit_filing)
         snippet = str(hit.get("snippet") or "")
-        _extend_events(view, snippet)
+        _extend_events(view, snippet, f"{hit_filing}:snippet")
         for doc in hit.get("recap_documents") or []:
             if isinstance(doc, dict):
                 blob = " ".join(str(doc.get(key) or "") for key in ("description", "short_description", "snippet"))
-                _extend_events(view, blob)
+                doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
+                _extend_events(view, blob, f"doc:{doc_id}" if doc_id else hit_filing)
     for entry in entries:
-        _extend_events(view, str(entry.get("description") or ""))
+        description = str(entry.get("description") or "")
+        entry_id = entry.get("id") or entry.get("entry_number") or ""
+        if entry_id:
+            filing = f"entry:{entry_id}"
+        elif description:
+            filing = "entry:" + hashlib.sha256(description.encode()).hexdigest()[:12]
+        else:
+            filing = ""
+        _extend_events(view, description, filing)
     return view
 
 
@@ -782,9 +878,13 @@ def _event_document(decision: MatchDecision, docket: DocketView, source_id: str)
         } else "high",
         "description": message,
         "title": title,
+        "filing_id": decision.filing_id,
         "acknowledged": False,
         "detected_at": _now(),
         "client_messages": 0,
+        "slack_delivered": False,
+        "alert_complete": False,
+        "slack_attempts": 0,
     }
 
 
@@ -811,6 +911,7 @@ def _notification(decision: MatchDecision, docket: DocketView, source_id: str) -
             "docket_number": docket.docket_number,
             "docket_id": docket.docket_id,
             "event_type": decision.event_type,
+            "filing_id": decision.filing_id,
             "source_id": source_id,
             "absolute_url": docket.absolute_url,
             "candidate_bond_case_id": decision.client.bond_case_id,
@@ -822,47 +923,80 @@ def _notification(decision: MatchDecision, docket: DocketView, source_id: str) -
 
 
 async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> str:
-    """Insert or upgrade one staff row. Returns ``new``, ``upgraded``, or ``duplicate``."""
+    """Insert or upgrade one staff row.
+
+    Returns ``new``, ``upgraded``, ``retry_slack``, or ``duplicate``.
+    A Slack retry does not write another CRM notification.
+    """
     source_id = _source_id(docket, decision)
     existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+    upgrade = bool(
+        existing
+        and existing.get("match_status") == "possible"
+        and decision.status == "confirmed"
+    )
+    if existing and not upgrade:
+        if not existing.get("slack_delivered"):
+            return "retry_slack"
+        return "duplicate"
     document = _event_document(decision, docket, source_id)
-    if existing and existing.get("match_status") == "confirmed":
-        return "duplicate"
-    if existing and not (existing.get("match_status") == "possible" and decision.status == "confirmed"):
-        return "duplicate"
     note = _notification(decision, docket, source_id)
     if existing:
         document["detected_at"] = existing.get("detected_at") or document["detected_at"]
         document["upgraded_at"] = _now()
+        document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
         await db.docket_events.update_one({"_id": existing.get("_id")}, {"$set": document})
     else:
         await db.docket_events.insert_one(document)
     await db.notifications.insert_one(note)
     log.info(
-        "Federal bond-risk %s court=%s event=%s auto_linked=%s",
-        decision.status, docket.court_id, decision.event_type, decision.status == "confirmed",
+        "Federal bond-risk %s court=%s event=%s filing=%s auto_linked=%s",
+        decision.status, docket.court_id, decision.event_type, decision.filing_id,
+        decision.status == "confirmed",
     )
     return "upgraded" if existing else "new"
+
+
+async def _record_slack(db, source_id: str, delivered: bool, attempts: int) -> None:
+    """Store whether Slack accepted this alert. Incomplete until delivery is true."""
+    now = _now()
+    fields = {
+        "slack_delivered": delivered,
+        "alert_complete": delivered,
+        "slack_attempts": attempts,
+        "slack_last_attempt_at": now,
+    }
+    if delivered:
+        fields["slack_delivered_at"] = now
+    await db.docket_events.update_one(
+        {"source": SOURCE, "source_id": source_id},
+        {"$set": fields},
+    )
 
 
 def _alert_slack(decision: MatchDecision, docket: DocketView, notifier) -> bool:
     title, message = _staff_copy(decision, docket)
     confirmed = decision.status == "confirmed"
-    return bool(notifier.notify_alert(
-        title=title[:140],
-        message=message,
-        level="critical" if confirmed else "warning",
-        details={
-            "court": docket.court_name,
-            "docket": docket.docket_number,
-            "event": decision.event_type,
-            "match_status": decision.status,
-            "auto_linked": confirmed,
-            "bond_case_id": decision.client.bond_case_id if confirmed else "",
-        },
-        source="FederalBondRisk",
-        bridge=False,
-    ))
+    try:
+        return bool(notifier.notify_alert(
+            title=title[:140],
+            message=message,
+            level="critical" if confirmed else "warning",
+            details={
+                "court": docket.court_name,
+                "docket": docket.docket_number,
+                "event": decision.event_type,
+                "filing_id": decision.filing_id,
+                "match_status": decision.status,
+                "auto_linked": confirmed,
+                "bond_case_id": decision.client.bond_case_id if confirmed else "",
+            },
+            source="FederalBondRisk",
+            bridge=False,
+        ))
+    except Exception as exc:
+        log.warning("Federal bond-risk Slack failed: %s", type(exc).__name__)
+        return False
 
 
 async def list_federal_bond_alerts(db, limit: int = 50) -> list[dict]:
@@ -936,21 +1070,32 @@ async def run_federal_bond_risk_scan(
         confirmed = 0
         possible = 0
         slack_sent = 0
+        slack_pending = 0
         for decision, docket in decisions:
+            source_id = _source_id(docket, decision)
             if written >= MAX_ROWS:
                 base["truncated"] = True
                 break
             outcome = await _store_decision(db, decision, docket)
             if outcome == "duplicate":
                 continue
-            written += 1
-            if decision.status == "confirmed":
-                confirmed += 1
+            if outcome != "retry_slack":
+                written += 1
+                if decision.status == "confirmed":
+                    confirmed += 1
+                else:
+                    possible += 1
+            if slack_sent >= MAX_SLACK:
+                slack_pending += 1
+                continue
+            existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+            attempts = int((existing or {}).get("slack_attempts") or 0) + 1
+            delivered = _alert_slack(decision, docket, notifier)
+            await _record_slack(db, source_id, delivered, attempts)
+            if delivered:
+                slack_sent += 1
             else:
-                possible += 1
-            if slack_sent < MAX_SLACK:
-                if _alert_slack(decision, docket, notifier):
-                    slack_sent += 1
+                slack_pending += 1
         return {
             **base,
             "skipped": None,
@@ -961,6 +1106,7 @@ async def run_federal_bond_risk_scan(
             "confirmed": confirmed,
             "possible": possible,
             "slack_sent": slack_sent,
+            "slack_pending": slack_pending,
             "client_messages": 0,
         }
     finally:
