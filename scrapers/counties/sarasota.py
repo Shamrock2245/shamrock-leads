@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 class SarasotaCountyScraper(JailTrackerBaseScraper):
     """Fail closed. The detail parser is ready; this flag still blocks fetch.
 
-    Owner directive 2026-11-13 keeps the fetch plan. The 2026-11-18 recon
-    found a 12-digit Booking Number on the detail page. The listing still has
-    no booking number. ``ACCESS_PLAN`` is unchanged.
+    Owner directive 2026-11-13 keeps the fetch plan. Owner ruling 2026-11-20:
+    the detail-page key is the Court Case Number as published. The listing
+    still has no booking number. ``ACCESS_PLAN`` is unchanged.
     """
 
     ACCESS_PLAN = SARASOTA_JAIL
@@ -39,10 +39,9 @@ class SarasotaCountyScraper(JailTrackerBaseScraper):
     SOURCE_CONTRACT_VALIDATED = False
     SOURCE_CONTRACT_REASON = (
         "official Sarasota listing has no booking number (person link id only). "
-        "2026-11-18 recon: the detail page charge table publishes a 12-digit "
-        "Booking Number and an Intake Date/Time. That parser is in "
-        "sarasota_contract.py, but this flag stays false, so scrape emits nothing "
-        "and does not fetch."
+        "Owner ruling 2026-11-20: the detail-page key is the Court Case Number "
+        "as published. The Booking Number and the person link id are not keys. "
+        "This flag stays false, so scrape emits nothing and does not fetch."
     )
 
     @property

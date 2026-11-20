@@ -68,10 +68,6 @@ def _page(rows, *, pin=PIN, stacked=None):
     )
 
 
-def _by_booking(records):
-    return {record.Booking_Number: record for record in records}
-
-
 def test_listing_href_spaces_are_stripped_and_the_label_date_is_dropped():
     html = '<a href="viewInmate.php?id=1000000001     ">TESTER, ALEX QUINN - 02/02/2000</a>'
     pin, label = listing_entries(html)[0]
@@ -83,101 +79,98 @@ def test_listing_href_spaces_are_stripped_and_the_label_date_is_dropped():
     assert "02/02/2000" not in name["full_name"]
 
 
-def test_detail_groups_bookings_and_ignores_the_stacked_table():
+def test_detail_rows_are_keyed_on_the_court_case_number():
+    """Two bookings that share one case number are one record. The case is the key."""
+    shared = "2024 CF 000111 NC"
     page = _page(
         [
-            _row("202500001111", "BATTERY", bond="$15000.00", case="2024 CF 000111 NC", hold="N"),
+            _row("202500001111", "BATTERY", bond="$15000.00", case=f"  {shared}  ", hold="N"),
+            _row("202400002222", "THEFT", bond="No Bond Available", case=shared, hold=""),
             _row("202500001111", "RESIST", bond="$0.00", case="2024 MM 000222 NC", hold="Y"),
-            _row("202400002222", "THEFT", bond="No Bond Available", case="2024 CF 000111 NC", hold=""),
-            _row("", "SHOULD NOT KEY", case="2024 CF 999999 NC", bond="$1.00"),
-            _row(PIN, "PIN IS NOT A BOOKING", case="2024 MM 000333 NC"),
-            _row("202300003333", "NO INTAKE", intake=""),
         ],
-        stacked=[_row("202399999999", "STACKED ONLY")],
+        stacked=[_row("202399999999", "STACKED ONLY", case="2024 CF 999999 NC")],
     )
     records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
-    by_booking = _by_booking(records)
-    assert set(by_booking) == {"202500001111", "202400002222"}
-    assert "202399999999" not in by_booking
-    assert "2024 CF 999999 NC" not in " ".join(record.Case_Number for record in records)
-    assert stats["skipped_rows"] == 3
-
-    first = by_booking["202500001111"]
-    assert first.Person_ID == PIN
-    assert first.Booking_Number != PIN
-    assert first.extra_data["person_pin"] == PIN
-    assert first.Booking_Date == "2024-12-31"
-    assert first.Booking_Time == "23:59:00.100"
-    assert first.Booking_Number.startswith("2025")
-    assert first.Charges == "BATTERY | RESIST"
-    assert first.Case_Number == "2024 CF 000111 NC | 2024 MM 000222 NC"
-    assert first.Bond_Amount == "15000"
-    assert [row["bond_amount"] for row in first.extra_data["charge_details"]] == [15000.0, 0.0]
-    assert [row["bond_raw"] for row in first.extra_data["charge_details"]] == ["$15000.00", "$0.00"]
-    assert [row["hold"] for row in first.extra_data["charge_details"]] == ["N", "Y"]
-    assert first.Bond_Type == ""
-    assert first.Status == "In Custody"
-    assert first.extra_data["status_source"] == (
-        "current_inmate_population_and_blank_release_date_time"
-    )
-    assert first.Last_Name == "TESTER" and first.First_Name == "ALEX"
-    assert first.DOB == ""
-    assert "02/02/2000" not in first.Full_Name
-    assert first.Race == "W" and first.Sex == "M"
-    assert first.extra_data["location"] == "POD 1"
-
-    second = by_booking["202400002222"]
-    assert second.Booking_Date == first.Booking_Date
-    assert second.Booking_Time == first.Booking_Time
-    assert second.Case_Number == "2024 CF 000111 NC"
-    assert second.Bond_Amount == ""
-    detail = second.extra_data["charge_details"][0]
-    assert detail["bond_amount"] is None
-    assert detail["bond_text"] == "No Bond Available"
-    assert detail["hold"] == ""
-    assert detail["bond_type"] == ""
+    by_case = {record.Case_Number: record for record in records}
+    assert set(by_case) == {shared, "2024 MM 000222 NC"}
+    assert "2024 CF 999999 NC" not in by_case
+    assert stats["skipped_rows"] == 0
+    shared_record = by_case[shared]
+    assert shared_record.Booking_Number == ""
+    assert shared_record.extra_data["record_key"] == shared
+    assert shared_record.extra_data["booking_numbers"] == ["202500001111", "202400002222"]
+    assert shared_record.Person_ID == PIN
+    assert shared_record.Booking_Number != PIN
+    assert PIN not in shared_record.extra_data["booking_numbers"]
+    assert shared_record.Last_Name == "TESTER" and shared_record.First_Name == "ALEX"
+    assert shared_record.DOB == ""
+    assert "02/02/2000" not in shared_record.Full_Name
+    assert shared_record.Status == "In Custody"
+    assert shared_record.Race == "W" and shared_record.Sex == "M"
+    other = by_case["2024 MM 000222 NC"]
+    assert other.Booking_Number == ""
+    assert other.extra_data["booking_numbers"] == ["202500001111"]
+    assert other.Bond_Amount == "0"
 
 
-def test_two_charge_rows_on_one_booking_are_one_record_with_two_charges():
-    """One source Booking Number, two charge rows: one booking, two charges."""
+def test_row_without_a_case_number_is_skipped_and_logged(caplog):
+    """A blank case number writes nothing. The log has county, reason, and count only."""
     page = _page([
-        _row("202500001111", "BATTERY", case="2024 CF 000111 NC", bond="$15000.00"),
-        _row("202500001111", "RESIST", case="2024 MM 000222 NC", bond="$500.00"),
+        _row("202500001111", "BATTERY", case="", bond="$15000.00"),
+        _row("202400002222", "RESIST", case="   ", bond="$500.00"),
+    ])
+    with caplog.at_level("INFO", logger="scrapers.counties.sarasota_contract"):
+        records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
+    assert records == []
+    assert stats["skipped_rows"] == 2
+    assert any(
+        "Sarasota FL skipped 2 charge rows: no court case number" in message
+        for message in caplog.messages
+    )
+    logged = " ".join(caplog.messages)
+    assert PIN not in logged
+    assert "202500001111" not in logged
+    assert "202400002222" not in logged
+    assert "TESTER" not in logged
+    assert "02/02/2000" not in logged
+
+
+def test_two_charges_on_one_case_stay_distinct():
+    """Two charge rows on one case stay two charge entries on one record."""
+    case = "2024 CF 000111 NC"
+    page = _page([
+        _row("202500001111", "BATTERY", case=case, bond="$15000.00"),
+        _row("202500001111", "RESIST", case=case, bond="$500.00"),
     ])
     records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
     assert stats["skipped_rows"] == 0
     assert len(records) == 1
     record = records[0]
-    assert record.Booking_Number == "202500001111"
-    assert record.Booking_Number != PIN
-    assert record.Person_ID == PIN
+    assert record.Case_Number == case
+    assert record.Booking_Number == ""
     charges = record.extra_data["charge_details"]
     assert len(charges) == 2
     assert [row["description"] for row in charges] == ["BATTERY", "RESIST"]
-    assert charges[0]["description"] != charges[1]["description"]
+    assert charges[0] is not charges[1]
     assert "BATTERY" not in charges[1]["description"]
     assert "RESIST" not in charges[0]["description"]
-    assert record.Charges == "BATTERY | RESIST"
-    assert record.Case_Number == "2024 CF 000111 NC | 2024 MM 000222 NC"
-    assert record.Case_Number != record.Booking_Number
+    assert record.extra_data["booking_numbers"] == ["202500001111"]
 
 
-def test_blank_booking_number_yields_zero_records_and_no_key():
-    """No source Booking Number means no record and no invented key."""
+def test_booking_number_without_a_case_number_writes_nothing(caplog):
+    """A booking number and a PIN, with no case number, are not keys."""
     page = _page([
-        _row("", "BATTERY", case="2024 CF 000111 NC", bond="$15000.00"),
-        _row("   ", "RESIST", case="2024 MM 000222 NC", bond="$500.00"),
-        _row(PIN, "PIN IS NOT A BOOKING", case="2024 CF 000111 NC"),
+        _row("202500001111", "BATTERY", case="", bond="$15000.00"),
+        _row(PIN, "PIN IS NOT A BOOKING", case=""),
     ])
-    records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
+    with caplog.at_level("INFO", logger="scrapers.counties.sarasota_contract"):
+        records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
     assert records == []
-    assert stats["skipped_rows"] == 3
-    keys = [record.Booking_Number for record in records]
-    assert keys == []
-    assert PIN not in keys
-    assert "2024 CF 000111 NC" not in keys
-    assert "2024 MM 000222 NC" not in keys
-    assert "" not in keys
+    assert stats["skipped_rows"] == 2
+    assert all(record.Booking_Number == "" for record in records)
+    logged = " ".join(caplog.messages)
+    assert "202500001111" not in logged
+    assert PIN not in logged
 
 
 def test_release_time_filled_is_not_in_custody():
@@ -198,26 +191,36 @@ def test_blank_release_off_the_roster_is_not_in_custody():
     assert "status_source" not in records[0].extra_data
 
 
-def test_detail_gate_opens_on_a_booking_number_and_stays_shut_on_a_pin_only_page():
-    good = _page([_row("202500001111", "BATTERY")])
+def test_detail_gate_opens_on_a_case_number_and_stays_shut_without_one():
+    good = _page([_row("202500001111", "BATTERY", case="2024 CF 000111 NC")])
     verdict = assess_detail(good, pin=PIN, on_roster=True)
     assert verdict.reopen_ok is True
     assert verdict.bookings == 1
 
-    pin_only = _page([_row("", "NO BOOKING", case="2024 MM 000222 NC")])
-    closed = assess_detail(pin_only, pin=PIN)
+    no_case = _page([_row("202500001111", "NO CASE", case="")])
+    closed = assess_detail(no_case, pin=PIN)
     assert closed.reopen_ok is False
-    assert "12-digit Booking Number" in " ".join(closed.reasons)
+    assert "Court Case Number" in " ".join(closed.reasons)
 
 
-def test_disagreeing_intake_timestamps_drop_that_booking():
+def test_two_bookings_on_one_case_keep_both_intakes():
+    case = "2024 CF 000111 NC"
     page = _page([
-        _row("202500001111", "BATTERY", intake="2024-12-31 23:59:00.100"),
-        _row("202500001111", "RESIST", intake="2025-01-01 00:00:00.000"),
+        _row("202500001111", "BATTERY", case=case, intake="2024-12-31 23:59:00.100"),
+        _row("202400002222", "RESIST", case=case, intake="2025-01-01 00:00:00.000"),
     ])
-    records, stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
-    assert records == []
-    assert stats["intake_conflicts"] == 1
+    records, _stats = parse_detail_page(page, pin=PIN, label=LABEL, on_roster=True)
+    assert len(records) == 1
+    record = records[0]
+    assert record.Case_Number == case
+    assert record.Booking_Number == ""
+    assert record.extra_data["booking_numbers"] == ["202500001111", "202400002222"]
+    assert record.extra_data["intakes"] == [
+        "2024-12-31 23:59:00.100",
+        "2025-01-01 00:00:00.000",
+    ]
+    assert record.Booking_Date == ""
+    assert record.Booking_Time == ""
 
 
 def test_detail_walk_caps_and_pauses_like_hernando():
@@ -234,7 +237,10 @@ def test_detail_walk_caps_and_pauses_like_hernando():
         fetched.append(pin)
         if pin == "1000000002":
             raise RuntimeError("detail unavailable")
-        return _page([_row(f"20240000000{pin[-1]}", "BATTERY")], pin=pin)
+        return _page(
+            [_row(f"20240000000{pin[-1]}", "BATTERY", case=f"2024 CF 00000{pin[-1]} NC")],
+            pin=pin,
+        )
 
     def sleep(seconds):
         pauses.append(seconds)
@@ -249,7 +255,9 @@ def test_detail_walk_caps_and_pauses_like_hernando():
     assert summary["fetched"] == 2
     assert summary["skipped_over_cap"] == 1
     assert summary["fetch_failures"] == 1
-    assert [record.Booking_Number for record in records] == ["202400000001"]
+    assert [record.Case_Number for record in records] == ["2024 CF 000001 NC"]
+    assert records[0].Booking_Number == ""
+    assert records[0].extra_data["booking_numbers"] == ["202400000001"]
     assert scraper.DETAIL_CAP == 200
     assert scraper.DETAIL_PAUSE_S == 0.4
     assert scraper.SOURCE_CONTRACT_VALIDATED is False

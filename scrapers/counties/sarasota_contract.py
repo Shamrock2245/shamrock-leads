@@ -1,13 +1,10 @@
 """Sarasota FL contract checks. No network.
 
 The current-inmate listing is still only a person link id, a name, and a
-date of birth. ``assess_listing`` records that. The 2026-11-18 detail recon
-found a real Booking Number on the desktop charge table, so ``assess_detail``
-and ``parse_detail_page`` are the reopen gate. ``SarasotaCountyScraper`` stays
-fail-closed and does not call them.
-
-A booking key is the 12-digit Booking Number cell only. The person PIN, the
-court case number, and the dates are never turned into a booking number.
+date of birth. ``assess_listing`` records that. The detail-page key is the
+Court Case Number exactly as published on ``table#data-table``. The Booking
+Number and the person PIN are data, not keys. ``SarasotaCountyScraper`` stays
+fail-closed and does not call the parser from ``scrape()``.
 """
 from __future__ import annotations
 
@@ -91,7 +88,6 @@ STATUS_ON_ROSTER = "current_inmate_population_and_blank_release_date_time"
 STATUS_RELEASE_FILLED = "release_date_time_filled"
 STATUS_RELEASE_CONFLICT = "release_date_time_conflict"
 
-_BOOKING_RE = re.compile(r"^\d{12}$")
 _INTAKE_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$")
 _MONEY_RE = re.compile(r"^\$(\d+)\.(\d{2})$")
 _LABEL_DATE_RE = re.compile(r"\s*-\s*\d{1,2}/\d{1,2}/\d{4}\s*$")
@@ -172,7 +168,7 @@ def _header_index(table) -> Optional[Dict[str, int]]:
         return None
     headers = [cell.get_text(" ", strip=True).lower() for cell in header_tr.find_all(["th", "td"])]
     index = {name: pos for pos, name in enumerate(headers)}
-    if "booking number" not in index or "intake date/time" not in index:
+    if "court case number" not in index:
         return None
     return index
 
@@ -192,6 +188,11 @@ def _cell(cells: Sequence[str], index: Dict[str, int], name: str) -> str:
     return cells[pos].strip()
 
 
+def _case_key(cells: Sequence[str], index: Dict[str, int]) -> str:
+    """Court Case Number with end whitespace removed. Internal spaces stay."""
+    return _cell(cells, index, "court case number")
+
+
 def parse_detail_page(
     page_html: str,
     *,
@@ -199,18 +200,17 @@ def parse_detail_page(
     label: str = "",
     on_roster: bool = False,
 ) -> Tuple[List[ArrestRecord], Dict[str, int]]:
-    """One record per distinct 12-digit Booking Number on ``table#data-table``.
+    """One record per distinct Court Case Number on ``table#data-table``.
 
-    Rows without that booking number, or without an Intake Date/Time, are
-    skipped. A stacked table that is not ``#data-table`` is ignored. The PIN
-    is ``Person_ID`` only.
+    A row with no case number is skipped. The case number is stored exactly
+    after trimming the ends. The Booking Number and the person PIN are never
+    the key. Each charge row stays its own charge entry.
     """
     soup = BeautifulSoup(page_html or "", "html.parser")
     stats = {
         "table_missing": 0,
         "columns_missing": 0,
         "skipped_rows": 0,
-        "intake_conflicts": 0,
     }
     table = soup.find("table", id="data-table")
     if table is None:
@@ -228,15 +228,14 @@ def parse_detail_page(
     order: List[str] = []
 
     for tr in _data_rows(table):
-        cells = [td.get_text(" ", strip=True) for td in tr.find_all(["td", "th"])]
+        raw = [td.get_text() for td in tr.find_all(["td", "th"])]
+        case_key = _case_key(raw, index)
+        if not case_key:
+            stats["skipped_rows"] += 1
+            continue
+        cells = [value.strip() for value in raw]
         booking = _cell(cells, index, "booking number")
         intake = _cell(cells, index, "intake date/time")
-        if not _BOOKING_RE.fullmatch(booking) or booking == pin_value:
-            stats["skipped_rows"] += 1
-            continue
-        if not _INTAKE_RE.fullmatch(intake):
-            stats["skipped_rows"] += 1
-            continue
         bond_amount, bond_text = _bond_cell(_cell(cells, index, "bond amount"))
         charge = {
             "charge": _cell(cells, index, "offense description"),
@@ -247,25 +246,31 @@ def parse_detail_page(
             "bond_amount": bond_amount,
             "bond_text": bond_text if bond_amount is None else "",
             "bond_type": _cell(cells, index, "bond type"),
+            "booking_number": booking,
             "intake": intake,
-            "case_number": _cell(cells, index, "court case number"),
+            "case_number": case_key,
             "release": _cell(cells, index, "release date/time"),
             "hold": _cell(cells, index, "hold"),
         }
-        group = grouped.get(booking)
+        group = grouped.get(case_key)
         if group is None:
-            grouped[booking] = group = {"intake": intake, "conflict": False, "charges": []}
-            order.append(booking)
-        elif group["intake"] != intake:
-            group["conflict"] = True
-            stats["intake_conflicts"] += 1
+            grouped[case_key] = group = {"charges": [], "booking_numbers": [], "intakes": []}
+            order.append(case_key)
         group["charges"].append(charge)
+        if booking and booking not in group["booking_numbers"]:
+            group["booking_numbers"].append(booking)
+        if intake and intake not in group["intakes"]:
+            group["intakes"].append(intake)
+
+    if stats["skipped_rows"]:
+        logger.info(
+            "Sarasota FL skipped %d charge rows: no court case number",
+            stats["skipped_rows"],
+        )
 
     records: List[ArrestRecord] = []
-    for booking in order:
-        group = grouped[booking]
-        if group["conflict"]:
-            continue
+    for case_key in order:
+        group = grouped[case_key]
         charges = group["charges"]
         releases = {c["release"] for c in charges if c["release"]}
         if not releases and on_roster:
@@ -286,15 +291,18 @@ def parse_detail_page(
             release_date = ""
         amounts = [c["bond_amount"] for c in charges]
         bond_amount = _format_total(sum(amounts)) if all(amount is not None for amount in amounts) else ""
-        cases: List[str] = []
-        for charge in charges:
-            if charge["case_number"] and charge["case_number"] not in cases:
-                cases.append(charge["case_number"])
         arraign_dates = [c["arraign_date"] for c in charges if c["arraign_date"]]
         court_date = arraign_dates[0] if len(set(arraign_dates)) == 1 else ""
-        intake_date, _, intake_time = group["intake"].partition(" ")
+        intakes = group["intakes"]
+        if len(intakes) == 1 and _INTAKE_RE.fullmatch(intakes[0]):
+            intake_date, _, intake_time = intakes[0].partition(" ")
+        else:
+            intake_date = intake_time = ""
         extra = {
-            "booking_key_origin": "detail Booking Number",
+            "record_key": case_key,
+            "record_key_origin": "detail Court Case Number",
+            "booking_numbers": list(group["booking_numbers"]),
+            "intakes": list(intakes),
             "person_pin": pin_value,
             "location": person.get("location", ""),
             "bond_published": bond_amount != "",
@@ -305,7 +313,7 @@ def parse_detail_page(
         records.append(ArrestRecord(
             County="Sarasota",
             State="FL",
-            Booking_Number=booking,
+            Booking_Number="",
             Person_ID=pin_value,
             Full_Name=names["full_name"],
             First_Name=names["first"],
@@ -318,7 +326,7 @@ def parse_detail_page(
             Charges=" | ".join(c["description"] for c in charges if c["description"]),
             Bond_Amount=bond_amount,
             Bond_Type="",
-            Case_Number=" | ".join(cases),
+            Case_Number=case_key,
             Court_Date=court_date,
             Status=status,
             Release_Date=release_date,
@@ -330,22 +338,22 @@ def parse_detail_page(
 
 
 def assess_detail(page_html: str, *, pin: str = "", on_roster: bool = True) -> SarasotaDetailVerdict:
-    """True only when the desktop table yields at least one source booking key."""
+    """True only when the desktop table yields at least one Court Case Number key."""
     records, stats = parse_detail_page(page_html, pin=pin, on_roster=on_roster)
     reasons: List[str] = []
     if stats["table_missing"]:
         reasons.append("no desktop charge table")
     elif stats["columns_missing"]:
-        reasons.append("charge table is missing Booking Number or Intake Date/Time")
+        reasons.append("charge table is missing Court Case Number")
     elif not records:
-        reasons.append("no charge row with a 12-digit Booking Number and an Intake Date/Time")
+        reasons.append("no charge row with a Court Case Number")
     for record in records:
-        if not _BOOKING_RE.fullmatch(record.Booking_Number):
-            reasons.append("booking key was not a 12-digit Booking Number")
-        if record.Person_ID and record.Booking_Number == record.Person_ID:
-            reasons.append("person PIN used as the booking key")
-        if not record.Booking_Date or not record.Booking_Time:
-            reasons.append("accepted booking has no Intake Date/Time")
+        if not (record.Case_Number or "").strip():
+            reasons.append("record has no court case number")
+        if record.Booking_Number:
+            reasons.append("booking number or PIN used as the key")
+        if record.extra_data.get("record_key") != record.Case_Number:
+            reasons.append("record key is not the court case number")
     return SarasotaDetailVerdict(
         reopen_ok=bool(records) and not reasons,
         bookings=len(records),

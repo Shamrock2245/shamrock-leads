@@ -46,7 +46,7 @@ See `FL_SARASOTA_MANATEE_AUDIT_2026-10-07.md`. Sarasota stays fail closed: the o
 
 ## 2026-11-18 Sarasota detail recon
 
-See `FL_SARASOTA_DETAIL_RECON_2026-11-18.md`. The desktop detail table publishes a 12-digit Booking Number and an Intake Date/Time. The parser keys on that booking number. The person PIN is not the key. Sarasota stays fail closed. The listing still has no booking number.
+See `FL_SARASOTA_DETAIL_RECON_2026-11-18.md`. Owner ruling 2026-11-20: the key is the Court Case Number exactly as published. The Booking Number and the person PIN are not keys. Sarasota stays fail closed. The listing still has no booking number.
 
 ## 2026-10-07 Charlotte hardening
 

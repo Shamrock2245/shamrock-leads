@@ -48,12 +48,18 @@ Relationships in the sample:
 
 ## Parser rules (not a promotion)
 
-- Accept a charge row only when it has a labelled 12-digit Booking Number and an Intake Date/Time.
-- One record per distinct Booking Number. Charges stay verbatim. Bond stays on each charge. Intake is the booking timestamp. Court case numbers stay in their own field.
-- Do not build a booking number from the PIN, the case number, or a date. A row with no booking number is skipped.
+Owner ruling, relayed by Chief of Staff on 2026-11-20: the key is the Court Case Number.
+
+- Accept a charge row only when the Court Case Number cell is non-blank after trimming the ends. Internal spaces stay. Do not derive, hash, or synthesize a case number.
+- One record per distinct case number on that detail page. Every charge row on that case stays its own charge entry. Do not merge or dedupe charges.
+- Booking Number and Intake Date/Time are data. If a case spans more than one booking, both booking numbers and both intake timestamps stay on the record as lists. They are not the key.
+- A row with no case number is skipped. The log line is the county, the reason `no court case number`, and the count. No names, dates of birth, or ids.
+- Do not fall back to the PIN or the Booking Number.
 - Unknown stays `""`. A published `$0.00` stays 0. `No Bond Available` stays text, not 0.
 - There is no custody label. Mark in custody only when the person is on the Current Inmate Population list and Release Date/Time is blank, and record `status_source` with that reason. A filled Release Date/Time is not in custody.
 - Keep the PIN as a person field, never as the key.
-- About 1,065 detail pages exist, so a run caps detail fetches at 200 and pauses 0.4 seconds before each one. The start index moves one window per UTC day. A page with no desktop charge table, or without the booking columns, fails the walk.
+- About 1,065 detail pages exist, so a run caps detail fetches at 200 and pauses 0.4 seconds before each one. The start index moves one window per UTC day. A page with no desktop charge table, or without the Court Case Number column, fails the walk.
+
+The 2026-11-18 read did not keep a 5-person fixture file. The note above records that two bookings can share one case number. The parser puts those booking numbers on that one case record. No published case numbers from that read are stored here.
 
 `scrape()` still returns nothing.
