@@ -162,7 +162,7 @@
         "defendant",
         "indemnitor"
       ],
-      "value": "One, Sample"
+      "value": "Sample Party One"
     },
     "defendant_state": {
       "readonly": false,

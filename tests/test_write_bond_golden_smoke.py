@@ -520,7 +520,7 @@ def test_unverified_indemnitor_refuses_before_payload(monkeypatch, surety_id, in
 # Importing the cases here runs them on that list without a workflow edit.
 from tests.test_docuseal_prefill_defects import (  # noqa: E402,F401
     test_all_caps_names_keep_hyphens_apostrophes_and_mc,
-    test_compound_surname_stays_with_the_last_name,
+    test_compound_surname_is_not_cut_to_the_last_word,
     test_court_type_drops_a_trailing_court_word,
     test_defendant_name_is_last_first_without_middle,
     test_packet_submission_sets_send_email_and_send_sms_false,

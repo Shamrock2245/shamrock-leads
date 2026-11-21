@@ -578,7 +578,9 @@ def _split_full_name(name: str) -> tuple[str, str, str]:
 
 # Printed defendant line is "Last, First". Suffixes are not a last name.
 _DEFENDANT_NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v"})
-# Particles stay with the surname. "JUAN DE LA CRUZ" is not "Cruz, Juan".
+# A two-word particle surname stays together ("Van Dyke"). A longer
+# space-delimited name is not split with this list: an unknown word such as
+# "los" is left in the original name instead of being dropped.
 _SURNAME_PARTICLES = frozenset({
     "al", "bin", "da", "das", "de", "del", "della", "den", "der", "di",
     "dos", "du", "la", "le", "ten", "ter", "van", "von",
@@ -651,30 +653,36 @@ def _strip_name_suffix(parts: List[str]) -> List[str]:
     return kept
 
 
-def _first_and_last_from_raw(raw: str) -> tuple[str, str]:
-    """First and last only. Middle tokens and Jr/Sr/II/III/IV/V are dropped."""
+def _first_and_last_from_raw(raw: str) -> tuple[str, str, bool]:
+    """Return (first, last, preserve).
+
+    Comma form is Last, First: the left side is the surname and only the
+    first given name is kept. A space-delimited name is reordered only when
+    it is first name, optional single-letter initials, and one last token.
+    Any other space-delimited name is preserved, so a compound surname is
+    not cut down to its final word. A two-word particle surname such as
+    Van Dyke stays the surname and is not given a first name.
+    """
     text = " ".join(str(raw or "").split())
     if not text:
-        return "", ""
+        return "", "", False
     if "," in text:
         last_side, rest = [part.strip() for part in text.split(",", 1)]
         last_parts = _strip_name_suffix(last_side.split())
         given = _strip_name_suffix(rest.split())
         first = given[0] if given else ""
-        return first, " ".join(last_parts)
+        return first, " ".join(last_parts), False
     parts = _strip_name_suffix(text.split())
     if not parts:
-        return "", ""
+        return "", "", False
     if len(parts) == 1:
-        return "", parts[0]
-    surname = [parts[-1]]
-    index = len(parts) - 2
-    while index >= 0 and parts[index].rstrip(".").lower() in _SURNAME_PARTICLES:
-        surname.insert(0, parts[index])
-        index -= 1
-    given = parts[: index + 1]
-    first = given[0] if given else ""
-    return first, " ".join(surname)
+        return "", parts[0], False
+    if len(parts) == 2 and parts[0].rstrip(".").lower() in _SURNAME_PARTICLES:
+        return "", " ".join(parts), False
+    interiors = parts[1:-1]
+    if interiors and any(len(tok.rstrip(".")) > 1 for tok in interiors):
+        return "", " ".join(parts), True
+    return parts[0], parts[-1], False
 
 
 def _format_defendant_display_name(raw: str, first: str = "", last: str = "") -> str:
@@ -682,6 +690,8 @@ def _format_defendant_display_name(raw: str, first: str = "", last: str = "") ->
 
     Structured first and last win when both are present. An all-caps roster
     string is title-cased. A mixed-case string keeps the letters it arrived with.
+    A space-delimited name that is not first name, initials, and one last
+    token is kept in its original order.
     """
     structured_first = " ".join(str(first or "").split())
     structured_last = " ".join(str(last or "").split())
@@ -699,7 +709,9 @@ def _format_defendant_display_name(raw: str, first: str = "", last: str = "") ->
     if not text or _is_placeholder_party_name(text):
         return text
     all_caps = _letters_are_all_caps(text)
-    parsed_first, parsed_last = _first_and_last_from_raw(text)
+    parsed_first, parsed_last, preserve = _first_and_last_from_raw(text)
+    if preserve:
+        return _case_name_text(parsed_last) if all_caps else parsed_last
     if all_caps:
         parsed_first = _title_case_name_text(parsed_first)
         parsed_last = _title_case_name_text(parsed_last)

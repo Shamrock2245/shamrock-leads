@@ -123,7 +123,7 @@
       "defendant",
       "indemnitor"
     ],
-    "value": "One, Sample"
+    "value": "Sample Party One"
   },
   "DefState": {
     "readonly": false,
@@ -141,7 +141,7 @@
       "defendant",
       "indemnitor"
     ],
-    "value": "One, Sample"
+    "value": "Sample Party One"
   },
   "FullName": {
     "readonly": false,
@@ -570,7 +570,7 @@
       "defendant",
       "indemnitor"
     ],
-    "value": "One, Sample"
+    "value": "Sample Party One"
   },
   "defendant_state": {
     "readonly": false,

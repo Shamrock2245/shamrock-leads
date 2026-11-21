@@ -137,13 +137,13 @@ def test_all_caps_names_keep_hyphens_apostrophes_and_mc():
     assert mixed["defendant_name"] == "TEST-McDonald, John"
 
 
-def test_compound_surname_stays_with_the_last_name():
+def test_compound_surname_is_not_cut_to_the_last_word():
     values = _prefill({
-        "defendant_name": "JUAN DE LA TEST-CRUZ",
+        "defendant_name": "JUAN DE LOS TEST-SANTOS",
         "surety_id": "osi",
     })
-    assert values["defendant_name"] == "De La TEST-Cruz, Juan"
-    assert values["DefName"] == "De La TEST-Cruz, Juan"
+    assert values["defendant_name"] == "Juan De Los TEST-Santos"
+    assert values["DefName"] == "Juan De Los TEST-Santos"
     van = _prefill({"defendant_name": "VAN TEST-DYKE", "surety_id": "osi"})
     assert van["defendant_name"] == "Van TEST-Dyke"
 
