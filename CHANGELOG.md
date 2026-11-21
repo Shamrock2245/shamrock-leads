@@ -3,6 +3,38 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-21 (Federal bond-risk filing identity)
+
+### Fixed
+- **New filings on older federal cases are kept.** The scan filters RECAP hits on `entry_date_filed`, the docket-entry date, and no longer drops a docket because `dateFiled` (the day the case was opened) is outside the window. Search asks CourtListener for `entry_date_filed_after`, not the case-initiation `filed_after`. Docket entries are still kept or dropped by their own `date_filed`.
+- **A RECAP document and its docket entry are one filing.** The document's docket-entry id, or the entry's nested document id, is the canonical filing id. The same risk phrase no longer creates two CRM rows or two Slack posts.
+- **Each alert is claimed with one upsert.** A unique partial index on `(source, source_id)` for `courtlistener_federal_bond_risk` makes a concurrent cron run and manual scan insert one row. The loser does not add a second notification. Slack delivery is still recorded separately: `alert_complete` stays false until Slack accepts the post, and a later cycle retries that post without another CRM row. A full Slack batch no longer skips those retries.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers an old case with a new entry, one alert for a document and its entry, the atomic claim, and a Slack retry after the per-cycle cap.
+
+## [Unreleased] — 2026-11-20 (Federal bond-risk review fixes)
+
+### Fixed
+- **A date of birth confirms only the party it belongs to.** On a multi-defendant Florida federal docket, another defendant's date of birth no longer auto-links a name match. That row stays `possible` unless the matching party's own date of birth, or a case or agency number already on file, confirms it. The matching party's own conflicting date of birth still drops the row.
+- **Recent filings are read inside a bounded window.** Search walks at most three pages of RECAP and docket results filed inside the last 45 days, ordered by filing date, and docket entries walk at most two pages. 429 responses still back off, detail calls still select fields, and a further `next` URL is not requested.
+- **Each filing alerts on its own.** The dedupe key includes the docket entry id or RECAP document id, so two detention hearings on one docket each produce a staff row. The same filing does not alert twice.
+- **Slack delivery is part of completion.** The CRM row is written once with `slack_delivered` false. The alert stays incomplete until `SlackNotifier.notify_alert` returns success. A later cycle retries Slack only and does not insert another notification.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers party-linked dates of birth, bounded search and entry pages, distinct filings, and a Slack retry without a second CRM row.
+
+## [Unreleased] — 2026-11-19 (Florida federal bond-risk staff alerts)
+
+### Added
+- **Staff alert when an active client has a Florida federal criminal case with a bond-risk event.** `dashboard/services/federal_bond_risk.py` reuses the CourtListener v4 client for FLMD, FLSD, and FLND dockets, docket entries, and RECAP. Events are bond conditions set or changed, a detention hearing, failure to appear, a warrant, or revocation or modification of release.
+- **Matching fails closed.** A row is confirmed and auto-linked only when the full name matches and the docket's date of birth matches a date we hold, or a case or agency number we already hold matches the docket. Full name alone is `possible` for staff review and is not auto-linked. A conflicting date of birth, a surname-only caption, or two confirmed clients on the same event is not auto-linked.
+- **`FEDERAL_BOND_RISK_ALERTS` is off by default.** While it is off, the scan does not call CourtListener and does not write alerts. With the flag on and `COURTLISTENER_API_TOKEN` unset, the scan skips and `GET /api/docket-monitor/federal-bond-risk` (and the docket-monitor status payload) reports that anonymous v4 search and docket calls are rejected. Calls use field selection, back off on HTTP 429, and do not follow a second page.
+- **Staff see the alert in the CRM notification center** (`type: federal_bond_risk`), on the docket monitor feed (LINKED or REVIEW), and on Slack `#alerts` through `SlackNotifier.notify_alert`. Nothing is texted, emailed, or iMessaged.
+
+### Tests
+- `tests/test_federal_bond_risk.py` (on the CI list).
+
 ## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
 
 ### Fixed

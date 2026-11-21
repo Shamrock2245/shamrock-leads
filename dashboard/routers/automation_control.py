@@ -136,7 +136,7 @@ ALL_SERVICE_KEYS = {
     "swipesimple_session_keepalive",
     "compliance_backfill", "matching_backlog", "lee_clerk_watch", "lee_freshness", "lee_indemnitor_discovery", "overdue_tasks",
     # Intelligence Pipeline
-    "alpha_engine", "docket_monitor", "court_intel", "nlp_enrichment",
+    "alpha_engine", "docket_monitor", "federal_bond_risk", "court_intel", "nlp_enrichment",
     # Monitoring & Compliance
     "court_reminders", "rearrest_detection", "delinquency_scanner",
     "fta_alert", "missed_payment", "installment_invoices", "court_email", "bb_health", "data_retention",
@@ -178,6 +178,7 @@ SERVICE_META = {
     "auto_reply":          {"name": "AI Auto-Reply",       "icon": "🤖", "category": "revenue",  "desc": "AI responds to inbound iMessages (Shannon)"},
     "alpha_engine":        {"name": "Alpha Engine",        "icon": "🧬", "category": "intel",    "desc": "Deep enrichment / ranking pass on hot inventory"},
     "docket_monitor":      {"name": "Docket Monitor",      "icon": "⚖️", "category": "intel",    "desc": "CourtListener docket scan for active bonds"},
+    "federal_bond_risk":   {"name": "Federal Bond Risk",   "icon": "⚖️", "category": "intel",    "desc": "FLMD/FLSD/FLND criminal bond-risk alerts. Off unless FEDERAL_BOND_RISK_ALERTS is on. Staff CRM and #alerts only."},
     "court_intel":         {"name": "Court Intelligence",  "icon": "🏛️", "category": "intel",    "desc": "Court opinion ingestion (30-day window)"},
     "nlp_enrichment":      {"name": "NLP Enrichment",      "icon": "🧠", "category": "intel",    "desc": "Charge analysis & FTA risk scoring"},
     "court_reminders":     {"name": "Court Reminders",     "icon": "📅", "category": "monitor",  "desc": "4-touch court date reminders via BlueBubbles"},
