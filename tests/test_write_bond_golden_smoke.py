@@ -519,7 +519,8 @@ def test_unverified_indemnitor_refuses_before_payload(monkeypatch, surety_id, in
 # The CI pytest list names this file and not tests/test_docuseal_prefill_defects.py.
 # Importing the cases here runs them on that list without a workflow edit.
 from tests.test_docuseal_prefill_defects import (  # noqa: E402,F401
-    test_all_caps_names_keep_hyphens_apostrophes_and_mc,
+    test_ambiguous_raw_name_does_not_fill_component_fields,
+    test_verified_last_name_survives_a_stale_raw_name,
     test_compound_surname_is_not_cut_to_the_last_word,
     test_conflicting_poa_number_fails_closed,
     test_court_type_drops_a_trailing_court_word,

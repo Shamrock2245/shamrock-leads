@@ -730,6 +730,23 @@ def _format_defendant_display_name(
         shown_last = _case_name_text(structured_last)
         if shown_last and shown_first:
             return f"{shown_last}, {shown_first[0]}"
+    if (
+        structured_last
+        and not structured_first
+        and not _is_placeholder_party_name(structured_last)
+    ):
+        shown_last = _case_name_text(structured_last)
+        parsed_first, parsed_last, preserve = _first_and_last_from_raw(text)
+        same_last = (
+            not preserve
+            and parsed_first
+            and _name_token(parsed_last) == _name_token(structured_last)
+        )
+        if same_last:
+            if _letters_are_all_caps(text):
+                parsed_first = _title_case_name_text(parsed_first)
+            return f"{shown_last}, {parsed_first}"
+        return shown_last
     if not text or _is_placeholder_party_name(text):
         return text
     all_caps = _letters_are_all_caps(text)
@@ -742,6 +759,10 @@ def _format_defendant_display_name(
     if parsed_last and parsed_first:
         return f"{parsed_last}, {parsed_first}"
     return parsed_last or parsed_first or text
+
+
+def _name_token(value: str) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
 
 
 def _strip_trailing_court(value: Any) -> str:
@@ -1575,8 +1596,8 @@ class DocuSealService:
         )
         defendant_name = _format_defendant_display_name(
             raw_defendant_name,
-            first=structured_first,
-            last=structured_last,
+            first=structured_first if not def_.get("first_name_synthesized") else "",
+            last=structured_last if not def_.get("last_name_synthesized") else "",
             synthesized=bool(def_.get("name_parts_synthesized")),
         ) or raw_defendant_name
         indemnitor_name = (
@@ -2037,11 +2058,31 @@ class DocuSealService:
         }
 
         def_first, def_middle, def_last = _split_full_name(raw_defendant_name)
+        _display_first, _display_last, name_is_ambiguous = _first_and_last_from_raw(raw_defendant_name)
         ind_first, ind_middle, ind_last = _split_full_name(indemnitor_name)
-        if not def_.get("name_parts_synthesized"):
-            def_first = _person_text(def_, "first_name", "firstName", "First_Name") or def_first
-            def_middle = _person_text(def_, "middle_name", "middleName", "Middle_Name") or def_middle
-            def_last = _person_text(def_, "last_name", "lastName", "Last_Name") or def_last
+        if def_.get("name_parts_synthesized") and name_is_ambiguous:
+            def_first, def_middle, def_last = "", "", ""
+        elif not def_.get("name_parts_synthesized"):
+            stored_first = _person_text(def_, "first_name", "firstName", "First_Name")
+            stored_middle = _person_text(def_, "middle_name", "middleName", "Middle_Name")
+            stored_last = _person_text(def_, "last_name", "lastName", "Last_Name")
+            if stored_first and not def_.get("first_name_synthesized"):
+                def_first = stored_first
+            elif name_is_ambiguous or def_.get("first_name_synthesized"):
+                def_first = "" if name_is_ambiguous else def_first
+            if stored_middle and not def_.get("middle_name_synthesized"):
+                def_middle = stored_middle
+            elif name_is_ambiguous:
+                def_middle = ""
+            if stored_last and not def_.get("last_name_synthesized"):
+                def_last = stored_last
+                if _name_token(_display_last) != _name_token(stored_last):
+                    if not (stored_first and not def_.get("first_name_synthesized")):
+                        def_first = ""
+                    if not (stored_middle and not def_.get("middle_name_synthesized")):
+                        def_middle = ""
+            elif name_is_ambiguous or def_.get("last_name_synthesized"):
+                def_last = "" if name_is_ambiguous else def_last
         ind_first = _person_text(ind, "first_name", "firstName", "First_Name") or ind_first
         ind_middle = _person_text(ind, "middle_name", "middleName", "Middle_Name") or ind_middle
         ind_last = _person_text(ind, "last_name", "lastName", "Last_Name") or ind_last

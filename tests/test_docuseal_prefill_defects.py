@@ -210,6 +210,28 @@ def test_all_caps_names_keep_hyphens_apostrophes_and_mc():
     assert mixed["defendant_name"] == "TEST-McDonald, John"
 
 
+def test_verified_last_name_survives_a_stale_raw_name():
+    values = _prefill({
+        "defendant_name": "JANE Q TEST-OTHER",
+        "surety_id": "osi",
+        "defendant": {"last_name": "TEST-SMITH"},
+    })
+    assert values["defendant_name"] == "TEST-Smith"
+    assert values["DefLastName"] == "TEST-SMITH"
+    assert not values.get("DefFirstName")
+
+
+def test_ambiguous_raw_name_does_not_fill_component_fields():
+    values = _prefill({
+        "defendant_name": "JUAN DE LOS TEST-SANTOS",
+        "surety_id": "osi",
+    })
+    assert values["defendant_name"] == "Juan De Los TEST-Santos"
+    assert not values.get("DefFirstName")
+    assert not values.get("DefMiddleName")
+    assert not values.get("DefLastName")
+
+
 def test_compound_surname_is_not_cut_to_the_last_word():
     values = _prefill({
         "defendant_name": "JUAN DE LOS TEST-SANTOS",
