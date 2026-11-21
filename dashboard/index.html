@@ -5469,7 +5469,7 @@
               </div>
               <div>
                 <label style="font-size:10px;color:#94a3b8">Surety</label>
-                <select id="pwApSurety" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
+                <select id="pwApSurety" onchange="SLPaperwork.onSuretyPicked(this.value)" style="width:100%;background:#0f172a;border:1px solid #334155;color:#fff;padding:6px 8px;border-radius:6px;font-size:12px">
                   <option value="osi">OSI</option>
                   <option value="palmetto">Palmetto</option>
                 </select>
