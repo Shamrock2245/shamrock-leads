@@ -269,6 +269,23 @@ def _strip_html_text(raw_html: str) -> str:
 
 BASE_URL = "https://www.courtlistener.com/api/rest/v4"
 
+
+def _search_page_left_window(results: list, until_entry_before: Optional[str]) -> bool:
+    """True when every dated hit on the page is older than the filing window."""
+    if not until_entry_before:
+        return False
+    dates = []
+    for hit in results or []:
+        if not isinstance(hit, dict):
+            continue
+        raw = hit.get("entry_date_filed") or hit.get("entryDateFiled") or ""
+        day = str(raw).strip()[:10]
+        if len(day) == 10 and day[4] == "-" and day[7] == "-":
+            dates.append(day)
+    if not dates:
+        return False
+    return all(day < until_entry_before for day in dates)
+
 # Florida federal district courts. Criminal bond-risk scans stay inside this set.
 FL_FEDERAL_COURT_IDS = ("flmd", "flsd", "flnd")
 
@@ -607,15 +624,17 @@ class CourtListenerClient:
         filed_after: Optional[str] = None,
         entry_date_filed_after: Optional[str] = None,
         page_size: int = 20,
-        max_pages: int = 3,
+        max_pages: int = 50,
         pause_s: float = 0.0,
+        until_entry_before: Optional[str] = None,
     ) -> dict:
         """Recent ``/search/`` hits inside a caller-supplied window.
 
         ``entry_date_filed_after`` is the docket-entry date. ``filed_after`` is
         the case-initiation date and is not used for bond-risk scans. Follows
-        ``next`` at most ``max_pages`` times (hard cap 3). 429 backoff is
-        ``_request_with_retry``.
+        ``next`` until the cursor ends, a page is entirely older than
+        ``until_entry_before``, or ``max_pages`` (safety ceiling 50) is hit.
+        429 backoff is ``_request_with_retry``.
         """
         stype = (search_type or "").strip().lower()
         if stype not in {"o", "r", "rd", "d", "p", "oa"}:
@@ -627,7 +646,7 @@ class CourtListenerClient:
                 "data": None,
                 "pages_fetched": 0,
             }
-        page_cap = max(1, min(int(max_pages or 1), 3))
+        page_cap = max(1, min(int(max_pages or 1), 50))
         params: Optional[dict] = {
             "type": stype,
             "q": (query or "").strip(),
@@ -652,9 +671,19 @@ class CourtListenerClient:
                 last["results"] = combined
                 last["pages_fetched"] = pages if not combined else pages - 1
                 return last
-            combined.extend(last.get("results") or [])
+            page_rows = list(last.get("results") or [])
+            combined.extend(page_rows)
             data = last.get("data") if isinstance(last.get("data"), dict) else {}
             next_url = str((data or {}).get("next") or "").strip()
+            if _search_page_left_window(page_rows, until_entry_before):
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": False,
+                }
             if not next_url or pages >= page_cap:
                 return {
                     "success": True,

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-21 (Federal bond-risk party, window, and Slack claim)
+
+### Fixed
+- **A filing is tied to the party it names.** Text such as "warrant issued as to Jane Roe" is not auto-linked to another defendant on the same docket who matched separately.
+- **Every active bond is considered.** Active, monitoring, and alert bonds are read in `_id` order, one page after another, instead of stopping at the first 200.
+- **Search walks the whole 45-day filing window.** Pages continue until the cursor ends or a page is entirely older than the window. Fifty pages is only a safety ceiling.
+- **Slack delivery is claimed before a retry.** Overlapping scheduled and manual scans cannot both post the same undelivered alert. Pending `slack_delivered: false` rows are retried on their own, even when that filing is no longer in the search window.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a named-party filing, bond paging past 200, search pages through the window, and a Slack retry that is claimed once outside the search results.
+
 ## [Unreleased] — 2026-11-21 (Federal bond-risk filing identity)
 
 ### Fixed

@@ -70,6 +70,14 @@ def _match(doc: dict, filt: dict | None) -> bool:
             if doc.get(key) not in expected["$in"]:
                 return False
             continue
+        if isinstance(expected, dict) and "$gt" in expected:
+            if doc.get(key) is None or not doc.get(key) > expected["$gt"]:
+                return False
+            continue
+        if isinstance(expected, dict) and "$ne" in expected:
+            if doc.get(key) == expected["$ne"]:
+                return False
+            continue
         if doc.get(key) != expected:
             return False
     return True
@@ -180,7 +188,7 @@ class _CourtListener:
 
     async def search_recent(self, **kwargs):
         self.calls.append(("search_recent", kwargs))
-        assert int(kwargs.get("max_pages") or 1) <= 3
+        assert int(kwargs.get("max_pages") or 1) <= 50
         assert kwargs.get("entry_date_filed_after")
         assert not kwargs.get("filed_after")
         assert int(kwargs.get("page_size") or 20) <= 20
@@ -836,7 +844,7 @@ async def test_recent_search_walks_a_bounded_number_of_pages(monkeypatch):
         courts=["flmd", "flsd", "flnd"],
         entry_date_filed_after="2026-10-06",
         page_size=50,
-        max_pages=MAX_SEARCH_PAGES,
+        max_pages=3,
         pause_s=0,
     )
     assert found["pages_fetched"] == 3
@@ -1062,3 +1070,127 @@ async def test_slack_cap_does_not_mark_the_unsent_alert_complete(monkeypatch):
     assert second["slack_sent"] == 1
     assert len(db.notifications.docs) == 2
     assert all(row["alert_complete"] and row["slack_delivered"] for row in db.docket_events.docs)
+
+
+def test_filing_as_to_one_defendant_does_not_link_the_other():
+    from dashboard.services.federal_bond_risk import decide_matches
+
+    docket = _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        DocketParty("Roe, Jane", frozenset({"1990-02-02"})),
+        events=[DocketEvent("warrant", "Warrant", "entry:90", ("Jane Roe",))],
+    )
+    clients = [
+        _client(name="John Smith", dobs=["1985-01-15"], bond="bond-j", defendant="def-j"),
+        _client(name="Jane Roe", dobs=["1990-02-02"], bond="bond-r", defendant="def-r"),
+    ]
+    decisions = decide_matches(clients, docket)
+    assert [row.client.bond_case_id for row in decisions] == ["bond-r"]
+    assert decisions[0].status == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_active_bonds_page_past_the_first_batch():
+    db = _DB()
+    for index in range(201):
+        db.active_bonds.docs.append({
+            "_id": f"{index:04d}",
+            "status": "active",
+            "Bond_Case_ID": f"bond-{index:04d}",
+            "defendant_name": "Last Person" if index == 200 else "Other Person",
+        })
+    clients = await load_active_clients(db, page_size=200)
+    assert len(clients) == 201
+    assert clients[-1].bond_case_id == "bond-0200"
+
+
+@pytest.mark.asyncio
+async def test_search_pages_through_the_filing_window(monkeypatch):
+    calls = []
+
+    class _Response:
+        def __init__(self, payload):
+            self.status_code = 200
+            self._payload = payload
+            self.headers = {}
+
+        def json(self):
+            return self._payload
+
+    class _HTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls.append(url)
+            page = len(calls) - 1
+            if page >= 5:
+                raise AssertionError("paged past the filing window")
+            filed = "2026-11-18" if page < 4 else "2001-01-01"
+            nxt = "stop" if page >= 4 else f"p{page + 1}"
+            return _Response({
+                "results": [{"id": page + 1, "entry_date_filed": filed}],
+                "next": f"https://www.courtlistener.com/api/rest/v4/search/?cursor={nxt}",
+            })
+
+    client = CourtListenerClient(api_token="test-token")
+    client._in_maintenance_window = lambda: False
+    client._client = _HTTP()
+    found = await client.search_recent(
+        search_type="rd",
+        query="warrant",
+        courts=["flmd"],
+        entry_date_filed_after="2026-10-06",
+        until_entry_before="2026-10-06",
+        page_size=20,
+        max_pages=50,
+        pause_s=0,
+    )
+    assert found["pages_fetched"] == 5
+    assert found["truncated"] is False
+    assert len(calls) == 5
+    assert not any("cursor=stop" in url for url in calls)
+
+
+@pytest.mark.asyncio
+async def test_pending_slack_retries_outside_the_search_and_claims_once(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, _claim_slack_delivery
+
+    db = _DB()
+    db.docket_events.docs.append({
+        "_id": "pending-1",
+        "source": SOURCE,
+        "source_id": "fl-federal:9:warrant:entry:1:bond-9",
+        "slack_delivered": False,
+        "alert_complete": False,
+        "slack_claim": False,
+        "title": "Federal bond risk linked — Warrant",
+        "description": "Confirmed for Pat Sample.",
+        "court_name": "M.D. Florida",
+        "docket_number": "9:20-cr-00001",
+        "event_type": "warrant",
+        "filing_id": "entry:1",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "bond_case_id": "bond-9",
+        "slack_attempts": 1,
+    })
+    court = _CourtListener(hits=[])
+    notifier = _Notifier()
+    result = await _scan(db, court, [_client()], notifier)
+    assert result["rows_written"] == 0
+    assert result["slack_sent"] == 1
+    assert len(db.notifications.docs) == 0
+    assert len(notifier.calls) == 1
+    assert db.docket_events.docs[0]["alert_complete"] is True
+    assert db.docket_events.docs[0]["slack_delivered"] is True
+
+    db.docket_events.docs.append({
+        "_id": "pending-2",
+        "source": SOURCE,
+        "source_id": "fl-federal:9:warrant:entry:2:bond-9",
+        "slack_delivered": False,
+        "slack_claim": False,
+    })
+    assert await _claim_slack_delivery(db, "fl-federal:9:warrant:entry:2:bond-9") is True
+    assert await _claim_slack_delivery(db, "fl-federal:9:warrant:entry:2:bond-9") is False

@@ -45,12 +45,13 @@ SOURCE = "courtlistener_federal_bond_risk"
 _ON = {"1", "true", "yes", "on"}
 ACTIVE_STATUSES = ("active", "monitoring", "alert")
 FL_FEDERAL_COURTS = frozenset(FL_FEDERAL_COURT_IDS)
-MAX_BONDS = 200
-MAX_DOCKETS = 30
+BOND_PAGE = 200
+MAX_DOCKETS = 500
 MAX_ROWS = 30
 MAX_SLACK = 10
 LOOKBACK_DAYS = 45
-MAX_SEARCH_PAGES = 3
+# Safety ceiling only. Paging stops when the entry dates leave the window.
+MAX_SEARCH_PAGES = 50
 MAX_ENTRY_PAGES = 2
 
 BOND_RISK_QUERY = (
@@ -365,6 +366,7 @@ class DocketEvent:
     event_type: str
     label: str
     filing_id: str
+    affected_names: tuple[str, ...] = ()
 
 
 @dataclass
@@ -447,12 +449,48 @@ def match_client(client: ClientIdentity, docket: DocketView) -> tuple[Optional[s
     return "possible", ()
 
 
+_AS_TO = re.compile(
+    r"\bas to\b(?:\s+the)?(?:\s+defendant)?\s+([^.;\n]+)",
+    re.I,
+)
+
+
+def parties_named_in_filing(text: str) -> tuple[str, ...]:
+    """People a filing names, such as ``as to Jane Roe``. Empty when it names nobody."""
+    found: list[str] = []
+    for match in _AS_TO.finditer(text or ""):
+        chunk = re.split(
+            r"\b(?:entered|issued|filed|ordered|granted)\b",
+            match.group(1),
+            maxsplit=1,
+            flags=re.I,
+        )[0]
+        for part in re.split(r"\s+(?:and|&)\s+|;\s*", chunk):
+            part = re.sub(r"\([^)]*\)", "", part).strip(" ,.-")
+            if name_parts(part):
+                found.append(part)
+    return tuple(dict.fromkeys(found))
+
+
+def _filing_affects_client(event: DocketEvent, client: ClientIdentity) -> bool:
+    """A filing that names someone else does not attach to this client."""
+    if not event.affected_names:
+        return True
+    return any(
+        full_name_equal(named, held)
+        for named in event.affected_names
+        for held in client.names
+    )
+
+
 def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[MatchDecision]:
     """One decision per client per event. Two confirmed hits on one event are not linked."""
     decisions: list[MatchDecision] = []
     for event in docket.events:
         group: list[MatchDecision] = []
         for client in clients:
+            if not _filing_affects_client(event, client):
+                continue
             status, confirmations = match_client(client, docket)
             if not status:
                 continue
@@ -559,14 +597,46 @@ async def _to_list(cursor, limit: int) -> list:
     return list(rows or [])
 
 
-async def load_active_clients(db, limit: int = MAX_BONDS) -> list[ClientIdentity]:
+async def _page_bonds(db, page_size: int) -> list[dict]:
+    """Every active, monitoring, and alert bond, in ``_id`` order."""
+    bonds: list[dict] = []
+    last_id = None
+    while True:
+        query: dict = {"status": {"$in": list(ACTIVE_STATUSES)}}
+        if last_id is not None:
+            query["_id"] = {"$gt": last_id}
+        cursor = db.active_bonds.find(query)
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("_id", 1)
+        page = await _to_list(cursor, page_size)
+        if not page:
+            break
+        bonds.extend(page)
+        tail = page[-1].get("_id")
+        if tail is None or len(page) < page_size:
+            break
+        last_id = tail
+    return bonds
+
+
+async def _related_by_ids(collection, ids: list[str]) -> list[dict]:
+    found: list[dict] = []
+    for start in range(0, len(ids), BOND_PAGE):
+        chunk = ids[start:start + BOND_PAGE]
+        rows = await _to_list(
+            collection.find({"$or": [
+                {"Defendant_ID": {"$in": chunk}},
+                {"defendant_id": {"$in": chunk}},
+            ]}),
+            max(len(chunk) * 4, 1),
+        )
+        found.extend(rows)
+    return found
+
+
+async def load_active_clients(db, page_size: int = BOND_PAGE) -> list[ClientIdentity]:
     """Active, monitoring, and alert bonds, plus defendant and arrest identifiers."""
-    bonds = await _to_list(
-        db.active_bonds.find(
-            {"status": {"$in": list(ACTIVE_STATUSES)}},
-        ),
-        limit,
-    )
+    bonds = await _page_bonds(db, page_size)
     defendant_ids = []
     for bond in bonds:
         for key in ("Defendant_ID", "defendant_id"):
@@ -577,20 +647,8 @@ async def load_active_clients(db, limit: int = MAX_BONDS) -> list[ClientIdentity
     arrests: list[dict] = []
     if defendant_ids:
         unique_ids = list(dict.fromkeys(defendant_ids))
-        defendants = await _to_list(
-            db.defendants.find({"$or": [
-                {"Defendant_ID": {"$in": unique_ids}},
-                {"defendant_id": {"$in": unique_ids}},
-            ]}),
-            limit,
-        )
-        arrests = await _to_list(
-            db.arrests.find({"$or": [
-                {"Defendant_ID": {"$in": unique_ids}},
-                {"defendant_id": {"$in": unique_ids}},
-            ]}),
-            limit,
-        )
+        defendants = await _related_by_ids(db.defendants, unique_ids)
+        arrests = await _related_by_ids(db.arrests, unique_ids)
     by_defendant: dict[str, list[dict]] = {}
     for doc in defendants:
         for key in ("Defendant_ID", "defendant_id"):
@@ -671,8 +729,9 @@ def _stop_if_blocked(result: dict) -> None:
 
 
 def _events_from_text(text: str, filing_id: str) -> list[DocketEvent]:
+    named = parties_named_in_filing(text)
     return [
-        DocketEvent(event_type, label, filing_id)
+        DocketEvent(event_type, label, filing_id, named)
         for event_type, label in classify_bond_risk(text)
     ]
 
@@ -760,6 +819,7 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
             page_size=20,
             max_pages=MAX_SEARCH_PAGES,
             pause_s=pause_s,
+            until_entry_before=window,
         )
         _stop_if_blocked(result)
         if not result.get("success"):
@@ -791,10 +851,6 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
                 continue
             seed = seeds.setdefault(key, {"id": docket_id, "hits": []})
             seed["hits"].append(hit)
-            if len(seeds) >= MAX_DOCKETS:
-                break
-        if len(seeds) >= MAX_DOCKETS:
-            break
 
     views: list[DocketView] = []
     for seed in list(seeds.values())[:MAX_DOCKETS]:
@@ -1087,6 +1143,7 @@ async def _record_slack(db, source_id: str, delivered: bool, attempts: int) -> N
         "alert_complete": delivered,
         "slack_attempts": attempts,
         "slack_last_attempt_at": now,
+        "slack_claim": False,
     }
     if delivered:
         fields["slack_delivered_at"] = now
@@ -1094,6 +1151,73 @@ async def _record_slack(db, source_id: str, delivered: bool, attempts: int) -> N
         {"source": SOURCE, "source_id": source_id},
         {"$set": fields},
     )
+
+
+async def _claim_slack_delivery(db, source_id: str) -> bool:
+    """One scan owns this undelivered post. The other overlapping scan does not send."""
+    result = await db.docket_events.update_one(
+        {
+            "source": SOURCE,
+            "source_id": source_id,
+            "slack_delivered": {"$ne": True},
+            "slack_claim": {"$ne": True},
+        },
+        {"$set": {"slack_claim": True, "slack_claim_at": _now()}},
+    )
+    return getattr(result, "matched_count", 0) == 1
+
+
+def _alert_stored(row: dict, notifier) -> bool:
+    """Repost a stored alert. The filing does not have to still be in search results."""
+    title = str(row.get("title") or "Federal bond risk")
+    message = str(row.get("description") or "")
+    confirmed = bool(row.get("auto_linked"))
+    try:
+        return bool(notifier.notify_alert(
+            title=title[:140],
+            message=message,
+            level="critical" if confirmed else "warning",
+            details={
+                "court": row.get("court_name") or "",
+                "docket": row.get("docket_number") or "",
+                "event": row.get("event_type") or "",
+                "filing_id": row.get("filing_id") or "",
+                "match_status": row.get("match_status") or "",
+                "auto_linked": confirmed,
+                "bond_case_id": row.get("bond_case_id") or row.get("candidate_bond_case_id") or "",
+            },
+            source="FederalBondRisk",
+            bridge=False,
+        ))
+    except Exception as exc:
+        log.warning("Federal bond-risk Slack retry failed: %s", type(exc).__name__)
+        return False
+
+
+async def retry_pending_slack(db, notifier, limit: int = 200) -> tuple[int, int]:
+    """Retry alerts whose Slack post never succeeded, independent of this search."""
+    cursor = db.docket_events.find({"source": SOURCE, "slack_delivered": False})
+    if hasattr(cursor, "sort"):
+        cursor = cursor.sort("_id", 1)
+    rows = await _to_list(cursor, limit)
+    sent = 0
+    pending = 0
+    for row in rows:
+        if sent >= MAX_SLACK:
+            pending += 1
+            continue
+        source_id = str(row.get("source_id") or "")
+        if not source_id or not await _claim_slack_delivery(db, source_id):
+            pending += 1
+            continue
+        delivered = _alert_stored(row, notifier)
+        attempts = int(row.get("slack_attempts") or 0) + 1
+        await _record_slack(db, source_id, delivered, attempts)
+        if delivered:
+            sent += 1
+        else:
+            pending += 1
+    return sent, pending
 
 
 def _alert_slack(decision: MatchDecision, docket: DocketView, notifier) -> bool:
@@ -1170,10 +1294,21 @@ async def run_federal_bond_risk_scan(
         client = CourtListenerClient(api_token=os.getenv("COURTLISTENER_API_TOKEN", "").strip())
     try:
         await ensure_federal_bond_alert_index(db)
+        if notifier is None:
+            from writers.slack_notifier import SlackNotifier
+
+            notifier = SlackNotifier()
+        slack_sent, slack_pending = await retry_pending_slack(db, notifier)
         if clients is None:
             clients = await load_active_clients(db)
         if not clients:
-            return {**base, "skipped": "no_active_clients", "bonds_considered": 0}
+            return {
+                **base,
+                "skipped": "no_active_clients",
+                "bonds_considered": 0,
+                "slack_sent": slack_sent,
+                "slack_pending": slack_pending,
+            }
         try:
             dockets = await _collect_dockets(client, clients, pause_s)
         except _ScanStop as stop:
@@ -1184,16 +1319,9 @@ async def run_federal_bond_risk_scan(
             for decision in decide_matches(clients, docket):
                 decisions.append((decision, docket))
 
-        if notifier is None:
-            from writers.slack_notifier import SlackNotifier
-
-            notifier = SlackNotifier()
-
         written = 0
         confirmed = 0
         possible = 0
-        slack_sent = 0
-        slack_pending = 0
 
         async def _deliver(decision: MatchDecision, docket: DocketView) -> None:
             nonlocal slack_sent, slack_pending
@@ -1201,6 +1329,9 @@ async def run_federal_bond_risk_scan(
                 slack_pending += 1
                 return
             source_id = _source_id(docket, decision)
+            if not await _claim_slack_delivery(db, source_id):
+                slack_pending += 1
+                return
             existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
             attempts = int((existing or {}).get("slack_attempts") or 0) + 1
             delivered = _alert_slack(decision, docket, notifier)
