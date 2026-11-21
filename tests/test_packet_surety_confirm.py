@@ -334,3 +334,199 @@ def test_finalize_hook_ignores_non_agent_packets(env):
     assert ctx == {"surety_id": "osi"} and body["surety_id"] == "palmetto"
     assert env.db["paperwork_packets"].docs[0]["surety_id"] == "osi"
     assert _events(env) == []
+
+
+# ── Codex P1: send state in the compare-and-set; surety + audit atomic ───────
+
+
+def _race_find_one(coll, mutate):
+    """find_one returns the pre-race packet, then ``mutate`` lands before the update."""
+    real_find_one = coll.find_one
+    calls = {"n": 0}
+
+    async def racing_find_one(*a, **k):
+        doc = await real_find_one(*a, **k)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            mutate(coll.docs[0])
+        return doc
+
+    coll.find_one = racing_find_one
+
+
+@pytest.mark.parametrize("mutation", [
+    {"status": "sent", "docuseal_submission_id": "sub_race", "docuseal_status": "sent"},
+    {"docuseal_submission_id": "sub_race"},
+    {"docuseal_status": "sent"},
+    {"status": "sent"},
+    {"status": "Signed"},
+    {"status": "completed"},
+    {"status": "partially_signed"},
+    {"status": "delivered"},
+    {"voided": True, "status": "voided"},
+    {"status": "cancelled"},
+])
+@pytest.mark.parametrize("make", [_agent_packet, _walkin_packet])
+def test_send_or_void_between_read_and_update_is_409_locked(env, mutation, make):
+    _seed(env, make())
+    coll = env.db["paperwork_packets"]
+    before_surety = coll.docs[0]["surety_id"]
+    _race_find_one(coll, lambda d: d.update(mutation))
+    resp = _confirm(env, coll.docs[0]["packet_id"], {"surety_id": "palmetto"})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["code"] == "surety_locked"
+    pkt = coll.docs[0]
+    assert pkt["surety_id"] == before_surety and pkt["template"] == make()["template"]
+    assert "surety_confirmed_by" not in pkt and "surety_audit" not in pkt
+    assert _events(env) == []
+
+
+def test_cas_filter_carries_send_state():
+    from dashboard.services.packet_surety_confirm import _editable_filter
+    from tests.bb_fake_mongo import matches
+
+    flt = _editable_filter()
+    assert matches(_agent_packet(), flt)
+    assert matches(_walkin_packet(), flt)
+    assert matches({"packet_id": "x"}, flt)  # fields unset
+    for locked in ({"voided": True}, {"docuseal_submission_id": "s"}, {"docuseal_status": "pending"},
+                   {"status": "sent"}, {"status": "SENT"}, {"status": "voided"}, {"status": "signnow_pending"}):
+        assert not matches(_agent_packet(**locked), flt), locked
+
+
+def test_audit_is_embedded_in_the_same_packet_update(env):
+    _seed(env, _agent_packet())
+    coll = env.db["paperwork_packets"]
+    updates = []
+    real_update = coll.update_one
+
+    async def spy(flt, update, **k):
+        updates.append(update)
+        return await real_update(flt, update, **k)
+
+    coll.update_one = spy
+    assert _confirm(env, "PKT-AGENTTEST1", {"surety_id": "palmetto"}).status_code == 200
+    (update,) = updates  # one write carries both the surety and its audit
+    assert update["$set"]["surety_id"] == "palmetto"
+    entry = update["$push"]["surety_audit"]
+    assert entry["event_type"] == "packet_surety_confirmed" and entry["surety_id"] == "palmetto"
+    (stored,) = coll.docs[0]["surety_audit"]
+    (ev,) = _events(env)
+    assert stored["Event_ID"] == ev["Event_ID"] and ev["packet_id"] == "PKT-AGENTTEST1"
+    assert stored["previous_surety_id"] is None and stored["actor"] and stored["timestamp"]
+
+
+def test_no_transactions_audit_copy_failure_still_leaves_embedded_audit(env):
+    _seed(env, _walkin_packet())
+
+    async def boom(*a, **k):
+        raise RuntimeError("audit down")
+
+    env.db["audit_events"].insert_one = boom
+    resp = _confirm(env, "PKT-WALKIN1", {"surety_id": "palmetto"})
+    assert resp.status_code == 200
+    pkt = env.db["paperwork_packets"].docs[0]
+    assert pkt["surety_id"] == "palmetto"
+    (entry,) = pkt["surety_audit"]  # the change is never without its audit
+    assert entry["previous_surety_id"] == "osi" and entry["surety_id"] == "palmetto"
+
+
+def test_packet_update_failure_is_503_and_writes_nothing(env):
+    _seed(env, _walkin_packet())
+
+    async def boom(*a, **k):
+        raise RuntimeError("mongo down")
+
+    env.db["paperwork_packets"].update_one = boom
+    resp = _confirm(env, "PKT-WALKIN1", {"surety_id": "palmetto"})
+    assert resp.status_code == 503 and resp.json()["code"] == "surety_confirm_failed"
+    assert env.db["paperwork_packets"].docs[0]["surety_id"] == "osi"
+    assert _events(env) == []
+
+
+class _FakeTxnSession:
+    """Snapshot/restore transaction over FakeDB (all-or-nothing)."""
+
+    def __init__(self, db, log):
+        self.db, self.log = db, log
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def with_transaction(self, callback):
+        import copy
+
+        snap = {n: copy.deepcopy(c.docs) for n, c in self.db.collections.items()}
+        self.log.append("start")
+        try:
+            result = await callback(self)
+        except BaseException:
+            for n, c in self.db.collections.items():
+                c.docs[:] = snap.get(n, [])
+            self.log.append("abort")
+            raise
+        self.log.append("commit")
+        return result
+
+
+@pytest.fixture
+def txn(env, monkeypatch):
+    log, seen = [], []
+    client = SimpleNamespace(start_session=lambda: _FakeTxnSession(env.db, log))
+    packets = env.db["paperwork_packets"]
+    packets.database = SimpleNamespace(client=client)
+    monkeypatch.setattr(
+        "dashboard.services.packet_surety_confirm._supports_transactions", AsyncMock(return_value=True),
+    )
+    for name in ("paperwork_packets", "audit_events"):
+        coll = env.db[name]
+        for meth in ("update_one", "insert_one"):
+            real = getattr(coll, meth)
+
+            def wrap(real=real, name=name, meth=meth):
+                async def inner(*a, session=None, **k):
+                    seen.append((name, meth, session is not None))
+                    return await real(*a, session=session, **k)
+                return inner
+
+            setattr(coll, meth, wrap())
+    return SimpleNamespace(log=log, seen=seen)
+
+
+def test_transaction_writes_packet_and_audit_together(env, txn):
+    _seed(env, _agent_packet())
+    resp = _confirm(env, "PKT-AGENTTEST1", {"surety_id": "osi"})
+    assert resp.status_code == 200, resp.text
+    assert txn.log == ["start", "commit"]
+    assert ("paperwork_packets", "update_one", True) in txn.seen
+    assert ("audit_events", "insert_one", True) in txn.seen
+    (ev,) = _events(env)
+    assert env.db["paperwork_packets"].docs[0]["surety_audit"][0]["Event_ID"] == ev["Event_ID"]
+
+
+def test_transaction_audit_failure_rolls_back_surety(env, txn):
+    _seed(env, _agent_packet())
+    coll = env.db["audit_events"]
+
+    async def boom(*a, **k):
+        raise RuntimeError("audit down")
+
+    coll.insert_one = boom
+    resp = _confirm(env, "PKT-AGENTTEST1", {"surety_id": "palmetto"})
+    assert resp.status_code == 503 and resp.json()["code"] == "surety_confirm_failed"
+    assert txn.log == ["start", "abort"]
+    pkt = env.db["paperwork_packets"].docs[0]
+    assert pkt["surety_id"] is None and "surety_audit" not in pkt and "surety_confirmed_by" not in pkt
+
+
+def test_transaction_send_race_is_409_locked_and_aborts(env, txn):
+    _seed(env, _agent_packet())
+    coll = env.db["paperwork_packets"]
+    _race_find_one(coll, lambda d: d.update({"status": "sent", "docuseal_submission_id": "sub_race"}))
+    resp = _confirm(env, "PKT-AGENTTEST1", {"surety_id": "palmetto"})
+    assert resp.status_code == 409 and resp.json()["code"] == "surety_locked"
+    assert txn.log == ["start", "abort"]
+    assert coll.docs[0]["surety_id"] is None and _events(env) == []

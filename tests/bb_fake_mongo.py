@@ -3,7 +3,8 @@
 Supports just the query surface those modules use: equality (dotted paths with
 list fan-out), $or/$and, $in/$nin, $regex, $exists, $gte, $ne; find_one(sort=),
 find().sort().limit().to_list(), async iteration, insert_one, update_one
-($set/$setOnInsert, upsert), update_many.  No network, no real database.
+($set/$setOnInsert/$push, upsert), update_many. A ``session=`` keyword is
+accepted and ignored.  No network, no real database.
 """
 from __future__ import annotations
 
@@ -130,7 +131,7 @@ class FakeCollection:
     def find(self, flt=None, projection=None):
         return _Cursor([self._project(d, projection) for d in self.docs if matches(d, flt)])
 
-    async def insert_one(self, doc):
+    async def insert_one(self, doc, session=None):
         doc.setdefault("_id", f"oid{next(_ids)}")
         self.docs.append(copy.deepcopy(doc))
         return SimpleNamespace(inserted_id=doc["_id"])
@@ -138,8 +139,10 @@ class FakeCollection:
     def _apply(self, doc, update):
         for k, v in (update.get("$set") or {}).items():
             doc[k] = copy.deepcopy(v)
+        for k, v in (update.get("$push") or {}).items():
+            doc.setdefault(k, []).append(copy.deepcopy(v))
 
-    async def update_one(self, flt, update, upsert=False):
+    async def update_one(self, flt, update, upsert=False, session=None):
         for d in self.docs:
             if matches(d, flt):
                 self._apply(d, update)

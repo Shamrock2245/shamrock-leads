@@ -3002,10 +3002,13 @@ async def paperwork_confirm_surety(packet_id: str, request: Request):
     """Staff confirm (or change, while unsent) a packet's surety from the Super CRM picker.
 
     Body: ``{"surety_id": "osi" | "palmetto"}``. 422 ``surety_required`` /
-    ``surety_unsupported``; 409 ``surety_locked`` / ``surety_poa_mismatch`` /
-    ``surety_conflict``; 404 ``packet_not_found``. Persists ``surety_id`` and
-    ``template`` with ``surety_confirmed_by`` / ``_at`` and an
-    ``audit_events`` row. Confirming the current surety writes nothing.
+    ``surety_unsupported``; 409 ``surety_locked`` (also when a send or void
+    lands mid-request) / ``surety_poa_mismatch`` / ``surety_conflict``; 404
+    ``packet_not_found``; 503 ``surety_confirm_failed`` (nothing saved).
+    Persists ``surety_id`` and ``template`` with ``surety_confirmed_by`` /
+    ``_at`` and a ``surety_audit`` entry in the same update, plus an
+    ``audit_events`` row (same transaction where Mongo supports it).
+    Confirming the current surety writes nothing.
     """
     from dashboard.services.packet_surety_confirm import SuretyConfirmError, confirm_packet_surety
 

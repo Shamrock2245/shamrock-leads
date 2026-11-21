@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-21 (Surety confirm: send-state CAS, atomic audit; SSRF redirect tests)
+
+### Fixed
+- **A surety confirmation can no longer change a packet that was sent or voided mid-request.** The compare-and-set in `packet_surety_confirm.confirm_packet_surety` now matches on the packet still being editable as well as the previous `surety_id`. The filter requires `voided` not true, no `docuseal_submission_id`, no `docuseal_status`, and a `status` outside sent, delivered, pending_signature, partially_signed, signed, completed, voided, cancelled/canceled, signnow_pending and filed. The read-time check uses the same set. When a DocuSeal send or a void lands between the read and the write, the update matches nothing, the packet is re-read, and the answer is 409 `surety_locked`. A surety race still answers 409 `surety_conflict`. The packet is not changed in either case.
+- **A surety change is never written without its audit.** The same `update_one` that sets `surety_id` / `template` now `$push`es the `packet_surety_confirmed` entry (Event_ID, previous and new surety, actor, source, timestamp) onto the packet's `surety_audit` array, so the change and its audit are one atomic single-document write on any MongoDB. When the client supports transactions (replica set / Atlas, checked with `payment_plans._supports_transactions`), the packet update and the `audit_events` row run in one `with_transaction`; if either fails, nothing is saved and the caller gets 503 `surety_confirm_failed`. Without transactions, `audit_events` gets a copy with the same `Event_ID`, and a failed copy is logged. The packet's embedded entry still records the change. The old behavior of succeeding with a warning and no audit is gone. A failed packet update answers 503 `surety_confirm_failed` with nothing written. No new collections, indexes or schema migrations; walk-in auto-OSI (no-op confirm) is unchanged.
+
+### Tests
+- `tests/test_packet_surety_confirm.py`: a send, submission, DocuSeal status, sign, completion, delivery, cancel or void that lands between the read and the update answers 409 `surety_locked` and leaves the packet and `audit_events` untouched (agent and walk-in packets); the CAS filter carries the send state; the surety and its audit entry go in one update and share the `audit_events` Event_ID; without transactions, a failed `audit_events` copy still leaves the embedded audit; a failed packet update is 503 with nothing written; with a (fake) transaction client, both writes use the session and commit together, an audit failure rolls back the surety (503), and a send race aborts with 409. `tests/bb_fake_mongo.py` supports `$push` and ignores `session=`.
+- `tests/test_agent_packet.py`: a redirect to `127.0.0.1`, `169.254.169.254`, `[::ffff:127.0.0.1]`, `[::1]`, decimal or hex IPv4, a host with mixed public and private answers, or a host whose pin lookup answers private is refused without a request to it; IPv6 addresses are pinned with the original `Host` and SNI.
+
 ## [Unreleased] — 2026-11-19 (Chat-agent packet staging hardening)
 
 ### Fixed

@@ -1067,3 +1067,70 @@ def test_retake_requires_matching_fingerprint(monkeypatch):
     assert resp.status_code == 409 and resp.json()["code"] == "idempotency_key_conflict"
     assert cols["paperwork_packets"].docs == []
     assert cols["intake_queue"].docs[0]["idempotency_state"] == "failed"
+
+
+@pytest.mark.parametrize("location", [
+    "http://127.0.0.1/x",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://[::ffff:127.0.0.1]/x",
+    "http://[::1]/x",
+    "http://2130706433/x",
+    "http://0x7f000001/x",
+    "http://mixed.example.net/x",
+    "http://rebind.example.net/x",
+])
+def test_redirect_to_internal_or_rebinding_target_never_connects(monkeypatch, location):
+    """Codex DNS-rebinding P1: every redirect hop is resolved once by the
+    transport, must be all-public, and connects to that checked IP only."""
+    import asyncio
+
+    import httpx
+
+    from dashboard.services.public_url_guard import UnsafeURLError
+
+    rebind_lookups = []
+    base = _fake_resolve({
+        "start.example.com": ["93.184.216.34"],
+        "mixed.example.net": ["93.184.216.35", "10.0.0.7"],
+    })
+
+    def resolve(host, port):
+        if host == "rebind.example.net":
+            rebind_lookups.append(host)
+            # The pin lookup already sees the internal answer; there is no later lookup.
+            return ["127.0.0.1"] if len(rebind_lookups) == 1 else ["93.184.216.36"]
+        return base(host, port)
+
+    monkeypatch.setattr("dashboard.services.public_url_guard._resolve", resolve)
+    rec = _Recorder({"start.example.com": lambda r: httpx.Response(302, headers={"Location": location})})
+
+    async def run():
+        async with _pinned_client(rec) as client:
+            return await client.get("https://start.example.com/booking")
+
+    with pytest.raises(UnsafeURLError):
+        asyncio.run(run())
+    assert [r.extensions["sni_hostname"] for r in rec.requests] == ["start.example.com"]
+    assert all(r.url.host == "93.184.216.34" for r in rec.requests)
+    assert len(rebind_lookups) <= 1
+
+
+def test_pinned_transport_pins_ipv6_with_original_host(monkeypatch):
+    import asyncio
+
+    import httpx
+
+    monkeypatch.setattr(
+        "dashboard.services.public_url_guard._resolve",
+        _fake_resolve({"v6.example.com": ["2606:4700:4700::1111"]}),
+    )
+    rec = _Recorder({"v6.example.com": lambda r: httpx.Response(200, text="ok")})
+
+    async def run():
+        async with _pinned_client(rec) as client:
+            return await client.get("https://v6.example.com/b")
+
+    assert asyncio.run(run()).text == "ok"
+    (req,) = rec.requests
+    assert req.url.host == "2606:4700:4700::1111"
+    assert req.headers["Host"] == "v6.example.com" and req.extensions["sni_hostname"] == "v6.example.com"
