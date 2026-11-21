@@ -3238,8 +3238,13 @@ def build_bond_data_from_dashboard(
     )
 
     # POA identity is a surety-controlled case binding, never a UI override.
+    # poa_numbers is the bonded case's full list when resolve_case_context
+    # copied it. The singular poa_number is only the fallback.
     poa = ctx.get("poa_number") or ""
-    poa_numbers = ctx.get("poa_numbers") or poa
+    listed = ctx.get("poa_numbers")
+    if listed is None:
+        listed = ctx.get("POA_Numbers")
+    poa_numbers = listed if isinstance(listed, list) and any(str(item).strip() for item in listed) else poa
 
     bondsman_name, bondsman_license = resolve_writing_agent(
         body, ctx, intake_doc, session=session,

@@ -82,6 +82,17 @@ SELF_INDEMNITOR_PIN = os.getenv("SELF_INDEMNITOR_PIN", "")
 SMALL_BOND_MAX = float(os.getenv("SMALL_BOND_MAX", "10000"))
 
 
+def _bond_poa_numbers(bond: Any) -> List[str]:
+    """Powers stored on the bonded case. Not intake, a packet, or the request."""
+    if not isinstance(bond, dict):
+        return []
+    for key in ("poa_numbers", "POA_Numbers"):
+        raw = bond.get(key)
+        if isinstance(raw, list):
+            return [str(item).strip() for item in raw if str(item).strip()]
+    return []
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -711,6 +722,9 @@ async def resolve_case_context(
             bond.get("POA_Number"), bond.get("poa_number"),
             intake.get("poa_number"), packet.get("poa_number"),
         ),
+        # The bonded case's full power list. The singular field above is only
+        # the first power. Intake and the finalize body are not a source.
+        "poa_numbers": _bond_poa_numbers(bond),
         "case_number": _first(
             bond.get("Case_Number"), bond.get("case_number"),
             def_nested.get("caseNumber"), intake.get("case_number"),

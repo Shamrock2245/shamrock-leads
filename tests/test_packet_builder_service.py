@@ -329,6 +329,72 @@ async def test_resolve_case_context_keeps_bonded_coindemnitor():
     assert [row.get("name") for row in built["indemnitors"]] == names
 
 
+@pytest.mark.asyncio
+async def test_resolve_case_context_keeps_every_case_power():
+    """The bonded case's power list reaches prefill. A request row cannot add one."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.docuseal_service import (
+        DocuSealService,
+        build_bond_data_from_dashboard,
+    )
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    bond = {
+        "bond_case_id": "BC-POA",
+        "booking_number": "TEST-BK-POA",
+        "surety_id": "palmetto",
+        "poa_number": "TEST-POA-1",
+        "POA_Numbers": ["TEST-POA-1", "TEST-POA-2"],
+        "defendant_name": "TEST-Doe, John",
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+        "match_status": "validated",
+        "Bond_Amount": 1000,
+    }
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def to_list(self, length=3):
+            return list(self._rows)[:length]
+
+    bonds = MagicMock()
+    bonds.find_one = AsyncMock(return_value=bond)
+    bonds.find = MagicMock(return_value=_Cursor([bond]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor([]))
+
+    def _get(name):
+        if name in ("active_bonds", "bond_cases"):
+            return bonds
+        return empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(bond_case_id="BC-POA")
+
+    assert ctx["poa_number"] == "TEST-POA-1"
+    assert ctx["poa_numbers"] == ["TEST-POA-1", "TEST-POA-2"]
+    built = build_bond_data_from_dashboard(
+        ctx=ctx,
+        body={
+            "charge_details": [
+                {"charge": "TEST CHARGE", "poa_number": "TEST-STALE", "bond_amount": 1000},
+                {"charge": "TEST CHARGE TWO", "poa_number": "TEST-POA-2", "bond_amount": 1000},
+            ],
+        },
+        surety_id="palmetto",
+    )
+    assert built["poa_numbers"] == ["TEST-POA-1", "TEST-POA-2"]
+    values = DocuSealService.prefill_values_from_bond(built)
+    assert values["all_poa_numbers"] == "TEST-POA-1, TEST-POA-2"
+    assert values["bond_numbers"] == "TEST-POA-1, TEST-POA-2"
+    assert "TEST-STALE" not in values["all_poa_numbers"]
+
+
 def _bond_cursor(docs):
     class _Cursor:
         def __init__(self, rows):
