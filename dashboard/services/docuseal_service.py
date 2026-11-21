@@ -800,6 +800,12 @@ def _ordered_poa_numbers(bond_data: Dict[str, Any], defendant: Any) -> List[str]
         primary = bond_data.get("POA_Number")
     listed_tokens = _poa_tokens(listed)
     primary_tokens = _poa_tokens(primary)
+    if listed_tokens and primary_tokens:
+        listed_set = set(listed_tokens)
+        if any(token not in listed_set for token in primary_tokens):
+            raise DocuSealPacketValidationError(
+                "DocuSeal packet blocked: poa_number is not in the case poa_numbers list."
+            )
     bound = set(listed_tokens + primary_tokens)
     charge_tokens = _charge_poa_tokens(bond_data, defendant)
     if bound:

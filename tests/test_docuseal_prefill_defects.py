@@ -30,6 +30,18 @@ def test_second_poa_is_kept_when_poa_number_is_also_set():
     assert values["BondNumbers"] == "A, B"
 
 
+def test_conflicting_poa_number_fails_closed():
+    from dashboard.services.docuseal_service import DocuSealPacketValidationError
+
+    with pytest.raises(DocuSealPacketValidationError, match="poa_number is not in the case poa_numbers list"):
+        _prefill({
+            "defendant_name": "TEST-Doe, John",
+            "surety_id": "osi",
+            "poa_number": "TEST-C",
+            "poa_numbers": ["TEST-A", "TEST-B"],
+        })
+
+
 def test_stale_charge_list_does_not_add_a_poa():
     """The printed charge source wins. A leftover charge_list is not a power."""
     values = _prefill({
@@ -85,8 +97,8 @@ def test_poa_list_order_is_list_then_charge_rows_then_singular():
     values = _prefill({
         "defendant_name": "TEST-Doe, John",
         "surety_id": "osi",
-        "poa_numbers": ["TEST-A"],
-        "poa_number": "TEST-B",
+        "poa_numbers": ["TEST-A", "TEST-B"],
+        "poa_number": "TEST-A",
         "charge_details": [
             {"charge": "TEST CHARGE", "poa_number": "TEST-C", "bond_amount": 1000},
             {"charge": "TEST CHARGE TWO", "poa_number": "TEST-A", "bond_amount": 1000},
