@@ -79,6 +79,8 @@ def test_request_charge_row_cannot_add_an_unbound_poa():
     assert values["bond_numbers"] == "TEST-PRIMARY, TEST-SECOND"
     assert values["poa_numbers"] == "TEST-PRIMARY, TEST-SECOND"
     assert "TEST-STALE" not in values["all_poa_numbers"]
+    assert values["poa_number_1"] == "TEST-PRIMARY"
+    assert values["poa_number_2"] == "TEST-SECOND"
 
 
 def test_empty_charge_details_uses_charge_list_poas():

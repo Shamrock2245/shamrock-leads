@@ -792,13 +792,10 @@ def _ordered_poa_numbers(bond_data: Dict[str, Any], defendant: Any) -> List[str]
     powers, or when the case has no poa_numbers and no poa_number. A request
     charge row cannot add a different power to the legal line.
     """
-    listed = bond_data.get("poa_numbers")
-    if listed is None:
-        listed = bond_data.get("POA_Numbers")
     primary = bond_data.get("poa_number")
     if primary is None or (isinstance(primary, str) and not primary.strip()):
         primary = bond_data.get("POA_Number")
-    listed_tokens = _poa_tokens(listed)
+    listed_tokens = _listed_case_poas(bond_data)
     primary_tokens = _poa_tokens(primary)
     if listed_tokens and primary_tokens:
         listed_set = set(listed_tokens)
@@ -811,6 +808,36 @@ def _ordered_poa_numbers(bond_data: Dict[str, Any], defendant: Any) -> List[str]
     if bound:
         charge_tokens = [token for token in charge_tokens if token in bound]
     return _dedupe_keep_order(listed_tokens + charge_tokens + primary_tokens)
+
+
+def _listed_case_poas(bond_data: Dict[str, Any]) -> List[str]:
+    listed = bond_data.get("poa_numbers")
+    if listed is None:
+        listed = bond_data.get("POA_Numbers")
+    return _poa_tokens(listed)
+
+
+def _row_poa(
+    candidate: Any,
+    poa_list: List[str],
+    idx: int,
+    fallback: str,
+    case_poas: List[str],
+) -> str:
+    """Charge-line power. A request POA outside a real case list is not printed.
+
+    A list that is only the singular power does not replace per-charge powers.
+    """
+    text = str(candidate or "").strip()
+    case_set = set(case_poas)
+    restricts = bool(case_set) and not case_set <= {str(fallback or "").strip()}
+    if text and (not restricts or text in case_set):
+        return text
+    if idx < len(poa_list) and poa_list[idx] and (not restricts or poa_list[idx] in case_set):
+        return poa_list[idx]
+    if fallback and (not restricts or fallback in case_set):
+        return fallback
+    return ""
 
 
 class DocuSealPacketValidationError(ValueError):
@@ -1627,6 +1654,7 @@ class DocuSealService:
         # poa_numbers. Prefer the list, then each charge row, then the singular
         # number, so the second power is not dropped.
         poa_list = _ordered_poa_numbers(bond_data, def_)
+        case_poas = _listed_case_poas(bond_data)
         primary_poa = bond_data.get("poa_number")
         if primary_poa is None or (isinstance(primary_poa, str) and not primary_poa.strip()):
             primary_poa = bond_data.get("POA_Number")
@@ -1781,7 +1809,7 @@ class DocuSealService:
                 charge_obj = companion.raw
                 c_desc = companion.charge
                 c_case = companion.case_number or case_number
-                c_poa = companion.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_poa = _row_poa(companion.poa_number, poa_list, idx, poa, case_poas)
                 c_amt_float = _safe_money(
                     charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
                 )
@@ -1789,7 +1817,7 @@ class DocuSealService:
             elif isinstance(charge_obj, dict):
                 c_desc = charge_obj.get("charge") or charge_obj.get("description") or charge_obj.get("name") or ""
                 c_case = charge_obj.get("case_number") or case_number
-                c_poa = charge_obj.get("poa_number") or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_poa = _row_poa(charge_obj.get("poa_number"), poa_list, idx, poa, case_poas)
                 c_amt_float = _safe_money(
                     charge_obj.get("bond_amount") or charge_obj.get("amount") or charge_obj.get("bond") or 0
                 )
@@ -1797,7 +1825,7 @@ class DocuSealService:
             elif companion is not None:
                 c_desc = companion.charge
                 c_case = companion.case_number or case_number
-                c_poa = companion.poa_number or (poa_list[idx] if idx < len(poa_list) else poa)
+                c_poa = _row_poa(companion.poa_number, poa_list, idx, poa, case_poas)
                 c_amt_str = bond_formatted if idx == 0 else ""
             elif isinstance(charge_obj, str) and charge_obj.strip():
                 c_desc = charge_obj.strip()
