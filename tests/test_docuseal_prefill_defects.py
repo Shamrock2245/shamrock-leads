@@ -137,6 +137,9 @@ def test_synthesized_suffix_split_does_not_become_the_last_name():
     })
     assert values["defendant_name"] == "TEST-Doe, John"
     assert values["DefName"] == "TEST-Doe, John"
+    assert values["DefFirstName"] == "JOHN"
+    assert values["DefLastName"] == "TEST-DOE"
+    assert not values.get("DefMiddleName")
 
 
 def test_id_scan_name_replaces_stale_structured_parts():

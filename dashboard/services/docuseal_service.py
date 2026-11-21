@@ -558,17 +558,23 @@ def _person_text(person: Any, *keys: str) -> str:
 
 
 def _split_full_name(name: str) -> tuple[str, str, str]:
-    """Return (first, middle, last) from 'DOE, JOHN A' or 'John A Doe'."""
+    """Return (first, middle, last) from 'DOE, JOHN A' or 'John A Doe'.
+
+    A trailing Jr/Sr/II/III/IV/V is not the last name.
+    """
     raw = (name or "").strip()
     if not raw:
         return "", "", ""
     if "," in raw:
         last, rest = [part.strip() for part in raw.split(",", 1)]
-        parts = rest.split()
+        last_parts = _strip_name_suffix(last.split())
+        parts = _strip_name_suffix(rest.split())
         first = parts[0] if parts else ""
         middle = " ".join(parts[1:]) if len(parts) > 1 else ""
-        return first, middle, last
-    parts = raw.split()
+        return first, middle, " ".join(last_parts)
+    parts = _strip_name_suffix(raw.split())
+    if not parts:
+        return "", "", ""
     if len(parts) == 1:
         return parts[0], "", ""
     if len(parts) == 2:
@@ -2032,9 +2038,10 @@ class DocuSealService:
 
         def_first, def_middle, def_last = _split_full_name(raw_defendant_name)
         ind_first, ind_middle, ind_last = _split_full_name(indemnitor_name)
-        def_first = _person_text(def_, "first_name", "firstName", "First_Name") or def_first
-        def_middle = _person_text(def_, "middle_name", "middleName", "Middle_Name") or def_middle
-        def_last = _person_text(def_, "last_name", "lastName", "Last_Name") or def_last
+        if not def_.get("name_parts_synthesized"):
+            def_first = _person_text(def_, "first_name", "firstName", "First_Name") or def_first
+            def_middle = _person_text(def_, "middle_name", "middleName", "Middle_Name") or def_middle
+            def_last = _person_text(def_, "last_name", "lastName", "Last_Name") or def_last
         ind_first = _person_text(ind, "first_name", "firstName", "First_Name") or ind_first
         ind_middle = _person_text(ind, "middle_name", "middleName", "Middle_Name") or ind_middle
         ind_last = _person_text(ind, "last_name", "lastName", "Last_Name") or ind_last
