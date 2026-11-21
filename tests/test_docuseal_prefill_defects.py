@@ -118,10 +118,26 @@ def test_synthesized_suffix_split_does_not_become_the_last_name():
             "first_name": "JOHN",
             "middle_name": "TEST-DOE",
             "last_name": "JR",
+            "name_parts_synthesized": True,
         },
     })
     assert values["defendant_name"] == "TEST-Doe, John"
     assert values["DefName"] == "TEST-Doe, John"
+
+
+def test_stored_first_and_last_win_when_the_raw_name_has_a_middle():
+    values = _prefill({
+        "defendant_name": "JOHN MICHAEL TEST-SMITH",
+        "surety_id": "osi",
+        "defendant": {
+            "name": "JOHN MICHAEL TEST-SMITH",
+            "first_name": "JOHN",
+            "middle_name": "MICHAEL",
+            "last_name": "TEST-SMITH",
+        },
+    })
+    assert values["defendant_name"] == "TEST-Smith, John"
+    assert values["DefName"] == "TEST-Smith, John"
 
 
 def test_structured_first_and_last_win_over_the_roster_string():

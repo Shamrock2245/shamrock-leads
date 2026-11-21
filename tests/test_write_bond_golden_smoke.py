@@ -530,6 +530,7 @@ from tests.test_docuseal_prefill_defects import (  # noqa: E402,F401
     test_request_charge_row_cannot_add_an_unbound_poa,
     test_second_poa_is_kept_when_poa_number_is_also_set,
     test_stale_charge_list_does_not_add_a_poa,
+    test_stored_first_and_last_win_when_the_raw_name_has_a_middle,
     test_structured_first_and_last_win_over_the_roster_string,
     test_synthesized_suffix_split_does_not_become_the_last_name,
 )

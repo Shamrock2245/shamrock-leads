@@ -83,14 +83,46 @@ SMALL_BOND_MAX = float(os.getenv("SMALL_BOND_MAX", "10000"))
 
 
 def _bond_poa_numbers(bond: Any) -> List[str]:
-    """Powers stored on the bonded case. Not intake, a packet, or the request."""
+    """Powers stored on the bonded case. Not intake, a packet, or the request.
+
+    An empty ``poa_numbers`` list does not hide a populated ``POA_Numbers``.
+    """
     if not isinstance(bond, dict):
         return []
     for key in ("poa_numbers", "POA_Numbers"):
         raw = bond.get(key)
-        if isinstance(raw, list):
-            return [str(item).strip() for item in raw if str(item).strip()]
+        if not isinstance(raw, list):
+            continue
+        cleaned = [str(item).strip() for item in raw if str(item).strip()]
+        if cleaned:
+            return cleaned
     return []
+
+
+def _defendant_name_fields(
+    full_name: str,
+    *,
+    independent_first: str,
+    independent_middle: str,
+    independent_last: str,
+) -> Dict[str, Any]:
+    """Name parts for the packet defendant.
+
+    ``name_parts_synthesized`` is true only when first and last were filled
+    from the raw name because the case had no separate parts. Callers that
+    already stored first and last do not get that mark.
+    """
+    synthesized = not (independent_first and independent_last)
+    split_first, split_middle, split_last = _split_name(full_name)
+    fields: Dict[str, Any] = {
+        "name": full_name,
+        "first_name": independent_first or split_first,
+        "middle_name": independent_middle or (split_middle if synthesized else ""),
+        "last_name": independent_last or split_last,
+    }
+    if synthesized:
+        fields["name_parts_synthesized"] = True
+    return fields
 
 
 def _now_iso() -> str:
@@ -784,20 +816,20 @@ async def resolve_case_context(
         "is_small_bond": bond_amount > 0 and bond_amount <= SMALL_BOND_MAX,
         "small_bond_max": SMALL_BOND_MAX,
         "defendant": {
-            "name": def_name,
-            "first_name": _first(
-                defendant.get("First_Name"), defendant.get("first_name"),
-                def_nested.get("firstName"), arrest.get("first_name"),
-                _split_name(def_name)[0],
-            ),
-            "middle_name": _first(
-                defendant.get("Middle_Name"), defendant.get("middle_name"),
-                arrest.get("middle_name"), _split_name(def_name)[1],
-            ),
-            "last_name": _first(
-                defendant.get("Last_Name"), defendant.get("last_name"),
-                def_nested.get("lastName"), arrest.get("last_name"),
-                _split_name(def_name)[2],
+            **_defendant_name_fields(
+                def_name,
+                independent_first=_first(
+                    defendant.get("First_Name"), defendant.get("first_name"),
+                    def_nested.get("firstName"), arrest.get("first_name"),
+                ),
+                independent_middle=_first(
+                    defendant.get("Middle_Name"), defendant.get("middle_name"),
+                    arrest.get("middle_name"),
+                ),
+                independent_last=_first(
+                    defendant.get("Last_Name"), defendant.get("last_name"),
+                    def_nested.get("lastName"), arrest.get("last_name"),
+                ),
             ),
             "dob": _first(
                 defendant.get("DOB"), defendant.get("dob"), def_nested.get("dob"),

@@ -398,6 +398,48 @@ async def test_resolve_case_context_keeps_every_case_power():
 
 
 @pytest.mark.asyncio
+async def test_empty_poa_numbers_does_not_hide_poa_numbers_alias():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    bond = {
+        "bond_case_id": "BC-POA-ALIAS",
+        "booking_number": "TEST-BK-ALIAS",
+        "surety_id": "palmetto",
+        "poa_number": "TEST-POA-1",
+        "poa_numbers": [],
+        "POA_Numbers": ["TEST-POA-1", "TEST-POA-2"],
+        "defendant_name": "TEST-Doe, John",
+        "county": "Lee",
+        "state": "FL",
+    }
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def to_list(self, length=3):
+            return list(self._rows)[:length]
+
+    bonds = MagicMock()
+    bonds.find = MagicMock(return_value=_Cursor([bond]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor([]))
+
+    def _get(name):
+        if name in ("active_bonds", "bond_cases"):
+            return bonds
+        return empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(bond_case_id="BC-POA-ALIAS")
+
+    assert ctx["poa_numbers"] == ["TEST-POA-1", "TEST-POA-2"]
+
+
+@pytest.mark.asyncio
 async def test_raw_suffix_name_is_not_printed_as_the_last_name():
     """A name with no separate parts must not print Jr as the surname."""
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -443,6 +485,7 @@ async def test_raw_suffix_name_is_not_printed_as_the_last_name():
 
     assert ctx["defendant"]["last_name"] == "TEST-DOE"
     assert ctx["defendant"]["first_name"] == "JOHN"
+    assert ctx["defendant"]["name_parts_synthesized"] is True
     built = build_bond_data_from_dashboard(ctx=ctx, surety_id="osi")
     values = DocuSealService.prefill_values_from_bond(built)
     assert values["defendant_name"] == "TEST-Doe, John"

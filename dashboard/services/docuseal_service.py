@@ -685,30 +685,17 @@ def _first_and_last_from_raw(raw: str) -> tuple[str, str, bool]:
     return parts[0], parts[-1], False
 
 
-def _name_letters(value: str) -> str:
-    return "".join(ch for ch in str(value or "").lower() if ch.isalpha())
-
-
-def _structured_name_matches_raw_split(raw: str, first: str, last: str) -> bool:
-    """True when first/last are only a fresh split of this same raw string.
-
-    resolve_case_context fills those fields from _split_name when the case
-    has no separate name parts. That split is not an independent source.
-    """
-    naive_first, _middle, naive_last = _split_full_name(raw)
-    if not naive_first or not naive_last:
-        return False
-    return (
-        _name_letters(first) == _name_letters(naive_first)
-        and _name_letters(last) == _name_letters(naive_last)
-    )
-
-
-def _format_defendant_display_name(raw: str, first: str = "", last: str = "") -> str:
+def _format_defendant_display_name(
+    raw: str,
+    first: str = "",
+    last: str = "",
+    *,
+    synthesized: bool = False,
+) -> str:
     """Owner rule for the printed defendant line: 'Last, First', no middle name.
 
-    Structured first and last win when both are present and they are not
-    just a split of this same raw string. An all-caps roster string is
+    Structured first and last win when both are present, unless this context
+    marked them as a split of the raw name. An all-caps roster string is
     title-cased. A mixed-case string keeps the letters it arrived with.
     A space-delimited name that is not first name, initials, and one last
     token is kept in its original order.
@@ -716,7 +703,6 @@ def _format_defendant_display_name(raw: str, first: str = "", last: str = "") ->
     structured_first = " ".join(str(first or "").split())
     structured_last = " ".join(str(last or "").split())
     text = " ".join(str(raw or "").split())
-    synthesized = _structured_name_matches_raw_split(text, structured_first, structured_last)
     if (
         structured_first
         and structured_last
@@ -1542,6 +1528,7 @@ class DocuSealService:
             raw_defendant_name,
             first=structured_first,
             last=structured_last,
+            synthesized=bool(def_.get("name_parts_synthesized")),
         ) or raw_defendant_name
         indemnitor_name = (
             bond_data.get("indemnitor_name")
