@@ -299,7 +299,10 @@ def test_header_values_still_come_from_packet_data():
         base_url="https://sign.example.invalid",
         api_key="test",
     ).prefill_values_from_bond(packet)
-    assert prefill["defendant_name"] == packet["defendant_name"]
+    # Printed line is Last, First with the middle dropped. The source is still
+    # this packet's defendant_name, not the case or power.
+    assert prefill["defendant_name"] == "Sample, Not"
+    assert prefill["DefName"] == "Sample, Not"
     assert prefill["poa_number"] == packet["poa_number"]
     assert prefill["case_number"] == packet["case_number"]
 
