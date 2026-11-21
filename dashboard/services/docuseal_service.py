@@ -578,13 +578,6 @@ def _split_full_name(name: str) -> tuple[str, str, str]:
 
 # Printed defendant line is "Last, First". Suffixes are not a last name.
 _DEFENDANT_NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v"})
-# A two-word particle surname stays together ("Van Dyke"). A longer
-# space-delimited name is not split with this list: an unknown word such as
-# "los" is left in the original name instead of being dropped.
-_SURNAME_PARTICLES = frozenset({
-    "al", "bin", "da", "das", "de", "del", "della", "den", "der", "di",
-    "dos", "du", "la", "le", "ten", "ter", "van", "von",
-})
 _APOSTROPHE_CHARS = dict.fromkeys("`'´’‘ʻʼ", "'")
 
 
@@ -657,11 +650,11 @@ def _first_and_last_from_raw(raw: str) -> tuple[str, str, bool]:
     """Return (first, last, preserve).
 
     Comma form is Last, First: the left side is the surname and only the
-    first given name is kept. A space-delimited name is reordered only when
-    it is first name, optional single-letter initials, and one last token.
-    Any other space-delimited name is preserved, so a compound surname is
-    not cut down to its final word. A two-word particle surname such as
-    Van Dyke stays the surname and is not given a first name.
+    first given name is kept. A two-token space-delimited name is also
+    Last, First. A first token that is sometimes a surname particle, such
+    as Al or Van, does not by itself stop that reorder. A longer
+    space-delimited name is preserved, so a compound surname is not cut
+    down to its final word.
     """
     text = " ".join(str(raw or "").split())
     if not text:
@@ -677,8 +670,6 @@ def _first_and_last_from_raw(raw: str) -> tuple[str, str, bool]:
         return "", "", False
     if len(parts) == 1:
         return "", parts[0], False
-    if len(parts) == 2 and parts[0].rstrip(".").lower() in _SURNAME_PARTICLES:
-        return "", " ".join(parts), False
     interiors = parts[1:-1]
     if interiors and any(len(tok.rstrip(".")) > 1 for tok in interiors):
         return "", " ".join(parts), True

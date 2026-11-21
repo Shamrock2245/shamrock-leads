@@ -175,8 +175,9 @@ def test_compound_surname_is_not_cut_to_the_last_word():
     })
     assert values["defendant_name"] == "Juan De Los TEST-Santos"
     assert values["DefName"] == "Juan De Los TEST-Santos"
-    van = _prefill({"defendant_name": "VAN TEST-DYKE", "surety_id": "osi"})
-    assert van["defendant_name"] == "Van TEST-Dyke"
+    two = _prefill({"defendant_name": "AL TEST-GREEN", "surety_id": "osi"})
+    assert two["defendant_name"] == "TEST-Green, Al"
+    assert two["DefName"] == "TEST-Green, Al"
 
 
 @pytest.mark.parametrize("raw, expected", [
