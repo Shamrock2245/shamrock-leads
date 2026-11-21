@@ -523,6 +523,7 @@ from tests.test_docuseal_prefill_defects import (  # noqa: E402,F401
     test_compound_surname_is_not_cut_to_the_last_word,
     test_court_type_drops_a_trailing_court_word,
     test_defendant_name_is_last_first_without_middle,
+    test_id_scan_name_replaces_stale_structured_parts,
     test_packet_submission_sets_send_email_and_send_sms_false,
     test_poa_list_order_is_list_then_charge_rows_then_singular,
     test_empty_charge_details_uses_charge_list_poas,

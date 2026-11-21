@@ -125,6 +125,31 @@ def test_synthesized_suffix_split_does_not_become_the_last_name():
     assert values["DefName"] == "TEST-Doe, John"
 
 
+def test_id_scan_name_replaces_stale_structured_parts():
+    from dashboard.services.docuseal_service import replace_defendant_name_from_id_scan
+
+    bond = {
+        "defendant_name": "JOHN TEST-SMITH",
+        "defendant_first_name": "JOHN",
+        "defendant_last_name": "TEST-SMITH",
+        "surety_id": "osi",
+        "defendant": {
+            "name": "JOHN TEST-SMITH",
+            "first_name": "JOHN",
+            "last_name": "TEST-SMITH",
+            "middle_name": "Q",
+        },
+    }
+    replace_defendant_name_from_id_scan(bond["defendant"], "JANE Q TEST-DOE")
+    bond["defendant_name"] = "JANE Q TEST-DOE"
+    bond.pop("defendant_first_name", None)
+    bond.pop("defendant_last_name", None)
+    values = _prefill(bond)
+    assert values["defendant_name"] == "TEST-Doe, Jane"
+    assert values["DefName"] == "TEST-Doe, Jane"
+    assert "name_parts_synthesized" not in values
+
+
 def test_stored_first_and_last_win_when_the_raw_name_has_a_middle():
     values = _prefill({
         "defendant_name": "JOHN MICHAEL TEST-SMITH",

@@ -676,6 +676,25 @@ def _first_and_last_from_raw(raw: str) -> tuple[str, str, bool]:
     return parts[0], parts[-1], False
 
 
+def replace_defendant_name_from_id_scan(target: Dict[str, Any], corrected_name: str) -> None:
+    """An ID scan replaced the full name. Drop the stale structured parts.
+
+    Voice intake can store first and last before the scan. Those parts must
+    not outrank the corrected name on the printed packet.
+    """
+    name = " ".join(str(corrected_name or "").split())
+    if not name or not isinstance(target, dict):
+        return
+    target["name"] = name
+    for key in (
+        "first_name", "last_name", "middle_name",
+        "firstName", "lastName", "middleName",
+        "First_Name", "Last_Name", "Middle_Name",
+    ):
+        target.pop(key, None)
+    target["name_parts_synthesized"] = True
+
+
 def _format_defendant_display_name(
     raw: str,
     first: str = "",
