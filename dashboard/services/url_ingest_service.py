@@ -113,8 +113,19 @@ def _title_case_name(name_str: str) -> str:
     return " ".join(res)
 
 
-async def ingest_url(url: str, county: Optional[str] = None, state: Optional[str] = None) -> dict:
+async def ingest_url(
+    url: str,
+    county: Optional[str] = None,
+    state: Optional[str] = None,
+    *,
+    public_only: bool = False,
+) -> dict:
     """Fetch a URL and extract structured arrest data.
+
+    ``public_only=True`` (chat-agent callers) sends the generic and PBSO fetches
+    through ``public_url_guard.PinnedPublicTransport``: each request, redirect
+    hops included, is resolved once, must resolve only to public addresses, and
+    connects to that checked IP (no second DNS lookup).
 
     ``county`` / ``state`` (optional) name the record the URL belongs to. No
     request is made when that county, or the county the URL host maps to, is
@@ -163,12 +174,17 @@ async def ingest_url(url: str, county: Optional[str] = None, state: Optional[str
                 }
 
     # ── Fast path: PBSO blotter (Palm Beach) ─────────────────────────────────
+    transport = _public_only_transport() if public_only else None
+
     if "pbso.org" in url.lower():
-        return await _ingest_pbso(url)
+        return await _ingest_pbso(url, transport=transport)
 
     try:
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True,
-                                      headers={"User-Agent": UA}, verify=False) as client:
+                                      headers={"User-Agent": UA}, verify=False,
+                                      transport=transport,
+                                      # Env proxies would bypass the pinned transport.
+                                      trust_env=transport is None) as client:
             resp = await client.get(url)
             resp.raise_for_status()
         html = resp.text
@@ -201,8 +217,20 @@ async def ingest_url(url: str, county: Optional[str] = None, state: Optional[str
     except httpx.HTTPStatusError as e:
         return {"success": False, "error": f"HTTP {e.response.status_code}"}
     except Exception as e:
+        from dashboard.services.public_url_guard import UnsafeURLError
+
+        if isinstance(e, UnsafeURLError):
+            log.info("url-ingest: refused non-public fetch (%s)", e)
+            return {"success": False, "error": "URL or a redirect target is not a public address."}
         log.exception(f"URL ingestion error: {e}")
         return {"success": False, "error": str(e)}
+
+
+def _public_only_transport():
+    from dashboard.services.public_url_guard import PinnedPublicTransport
+
+    # Same TLS setting as the unpinned clients in this module.
+    return PinnedPublicTransport(verify=False)
 
 
 def published_custody_status(b_data: dict) -> str:
@@ -513,7 +541,7 @@ async def _ingest_lee_from_mongo(booking_id: str, source_url: str) -> Optional[d
         return None
 
 
-async def _ingest_pbso(url: str) -> dict:
+async def _ingest_pbso(url: str, transport=None) -> dict:
     """Ingest a PBSO blotter URL. Fail closed unless one named booking card is identified.
 
     Does not launch a browser or probe unpublished endpoints. Prefers a
@@ -546,6 +574,8 @@ async def _ingest_pbso(url: str) -> dict:
         async with httpx.AsyncClient(
             timeout=30.0, follow_redirects=True,
             headers={"User-Agent": UA}, verify=False,
+            transport=transport,
+            trust_env=transport is None,  # env proxies would bypass the pin
         ) as client:
             resp = await client.get(url)
             resp.raise_for_status()

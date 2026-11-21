@@ -1383,6 +1383,9 @@ async def packet_builder_finalize(request: Request):
                 packet_id=body.get("packet_id"),
             )
             _copy_session_agent(ctx, user)
+            agent_surety_err = await _confirm_agent_packet_surety_for_finalize(request, body, ctx)
+            if agent_surety_err is not None:
+                return agent_surety_err
 
         # Office finalize binds the packet. Shannon's create/email route is the
         # only skip_bond_binding + pending_staff_match path; this handler does
@@ -2960,6 +2963,71 @@ class BindDefendantRequest(BaseModel):
     charges: Optional[str] = None
 
 
+async def _confirm_agent_packet_surety_for_finalize(request: Request, body: dict, ctx: dict):
+    """Chat-agent packets only: persist + audit the picked surety before finalize uses it.
+
+    Returns an error response, or None to continue. Other packets are untouched.
+    """
+    packet_id = str(body.get("packet_id") or ctx.get("packet_id") or "").strip()
+    if not packet_id:
+        return None
+    packet = await _load_packet(packet_id)
+    if not packet or not packet.get("staged_by_agent"):
+        return None
+    from dashboard.services.packet_surety_confirm import (
+        SuretyConfirmError,
+        confirm_packet_surety,
+        validate_surety_choice,
+    )
+
+    try:
+        if body.get("surety_id"):
+            confirmed = await confirm_packet_surety(
+                packet_id, body.get("surety_id"),
+                actor=_actor_label(request), source="packet_finalize",
+            )
+            ctx["surety_id"] = confirmed["surety_id"]
+            body["surety_id"] = confirmed["surety_id"]
+        else:
+            ctx["surety_id"] = validate_surety_choice(
+                packet.get("surety_id") or packet.get("template")
+            )
+    except SuretyConfirmError as exc:
+        return JSONResponse(exc.body(), status_code=exc.status_code)
+    return None
+
+
+@paperwork_bp.post("/paperwork/packets/{packet_id}/confirm-surety")
+async def paperwork_confirm_surety(packet_id: str, request: Request):
+    """Staff confirm (or change, while unsent) a packet's surety from the Super CRM picker.
+
+    Body: ``{"surety_id": "osi" | "palmetto"}``. 422 ``surety_required`` /
+    ``surety_unsupported``; 409 ``surety_locked`` (also when a send or void
+    lands mid-request) / ``surety_poa_mismatch`` / ``surety_conflict``; 404
+    ``packet_not_found``; 503 ``surety_confirm_failed`` (nothing saved).
+    Persists ``surety_id`` and ``template`` with ``surety_confirmed_by`` /
+    ``_at`` and a ``surety_audit`` entry in the same update, plus an
+    ``audit_events`` row (same transaction where Mongo supports it).
+    Confirming the current surety writes nothing.
+    """
+    from dashboard.services.packet_surety_confirm import SuretyConfirmError, confirm_packet_surety
+
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        result = await confirm_packet_surety(
+            packet_id, body.get("surety_id"),
+            actor=_actor_label(request), source="crm_packet_picker",
+        )
+    except SuretyConfirmError as exc:
+        return JSONResponse(exc.body(), status_code=exc.status_code)
+    return {"success": True, "packet_id": packet_id, **result}
+
+
 @paperwork_bp.post("/paperwork/packets/{packet_id}/bind-defendant")
 async def bind_defendant_to_packet(request: Request, packet_id: str, req: BindDefendantRequest):
     """
@@ -3508,6 +3576,27 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
     except Exception:
         body = {}
 
+    if packet.get("staged_by_agent"):
+        # Chat-agent packets never default to OSI. A surety picked by staff is
+        # validated, persisted and audited before it is used; with none picked
+        # and none stored this is 422 surety_required.
+        from dashboard.services.packet_surety_confirm import (
+            SuretyConfirmError,
+            confirm_packet_surety,
+            validate_surety_choice,
+        )
+
+        try:
+            if body.get("surety_id"):
+                confirmed = await confirm_packet_surety(
+                    packet_id, body.get("surety_id"),
+                    actor=_actor_label(request), source="docuseal_push",
+                )
+                packet["surety_id"] = packet["template"] = confirmed["surety_id"]
+            else:
+                validate_surety_choice(packet.get("surety_id") or packet.get("template"))
+        except SuretyConfirmError as exc:
+            return JSONResponse(exc.body(), status_code=exc.status_code)
     surety_for_template = (packet.get("surety_id") or packet.get("template") or body.get("surety_id") or "osi").lower()
     from dashboard.services.surety_entitlements import entitlement_denial
 
