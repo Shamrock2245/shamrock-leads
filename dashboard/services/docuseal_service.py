@@ -578,6 +578,11 @@ def _split_full_name(name: str) -> tuple[str, str, str]:
 
 # Printed defendant line is "Last, First". Suffixes are not a last name.
 _DEFENDANT_NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "v"})
+# Particles stay with the surname. "JUAN DE LA CRUZ" is not "Cruz, Juan".
+_SURNAME_PARTICLES = frozenset({
+    "al", "bin", "da", "das", "de", "del", "della", "den", "der", "di",
+    "dos", "du", "la", "le", "ten", "ter", "van", "von",
+})
 _APOSTROPHE_CHARS = dict.fromkeys("`'´’‘ʻʼ", "'")
 
 
@@ -596,8 +601,9 @@ def _title_case_name_token(token: str) -> str:
     """Title-case one all-caps token. Mixed-case input never reaches here.
 
     A leading TEST- marker stays uppercase so the synthetic namespace is
-    still TEST-. Mc/Mac and apostrophes are capped on the following letter
-    (McDonald, O'Neal), and each hyphen segment is capped on its own.
+    still TEST-. Mc and apostrophes are capped on the following letter
+    (McDonald, O'Neal). A surname that only begins with Mac, such as
+    Macias, is capitalized normally. Each hyphen segment is capped on its own.
     """
     if not token:
         return ""
@@ -615,10 +621,14 @@ def _title_case_name_token(token: str) -> str:
         left, right = normalized.split("'", 1)
         return _title_case_name_token(left) + "'" + _title_case_name_token(right)
     low = normalized.lower()
-    if low.startswith("mc") and len(normalized) > 3 and normalized[2].isalpha():
+    # McDonald, not Macias. A Mac- surname stays one normally capped word.
+    if (
+        low.startswith("mc")
+        and not low.startswith("mac")
+        and len(normalized) > 3
+        and normalized[2].isalpha()
+    ):
         return "Mc" + _simple_name_cap(normalized[2:])
-    if low.startswith("mac") and len(normalized) > 4 and normalized[3].isalpha():
-        return "Mac" + _simple_name_cap(normalized[3:])
     return _simple_name_cap(normalized)
 
 
@@ -657,7 +667,14 @@ def _first_and_last_from_raw(raw: str) -> tuple[str, str]:
         return "", ""
     if len(parts) == 1:
         return "", parts[0]
-    return parts[0], parts[-1]
+    surname = [parts[-1]]
+    index = len(parts) - 2
+    while index >= 0 and parts[index].rstrip(".").lower() in _SURNAME_PARTICLES:
+        surname.insert(0, parts[index])
+        index -= 1
+    given = parts[: index + 1]
+    first = given[0] if given else ""
+    return first, " ".join(surname)
 
 
 def _format_defendant_display_name(raw: str, first: str = "", last: str = "") -> str:
@@ -739,16 +756,25 @@ def _charge_poa_tokens(bond_data: Dict[str, Any], _defendant: Any) -> List[str]:
 
 
 def _ordered_poa_numbers(bond_data: Dict[str, Any], defendant: Any) -> List[str]:
-    """poa_numbers, then printed charge-row POAs, then poa_number. First spelling wins."""
+    """poa_numbers, then printed charge-row POAs, then poa_number. First spelling wins.
+
+    A charge-row power is included only when it is already one of the case
+    powers, or when the case has no poa_numbers and no poa_number. A request
+    charge row cannot add a different power to the legal line.
+    """
     listed = bond_data.get("poa_numbers")
     if listed is None:
         listed = bond_data.get("POA_Numbers")
     primary = bond_data.get("poa_number")
     if primary is None or (isinstance(primary, str) and not primary.strip()):
         primary = bond_data.get("POA_Number")
-    return _dedupe_keep_order(
-        _poa_tokens(listed) + _charge_poa_tokens(bond_data, defendant) + _poa_tokens(primary)
-    )
+    listed_tokens = _poa_tokens(listed)
+    primary_tokens = _poa_tokens(primary)
+    bound = set(listed_tokens + primary_tokens)
+    charge_tokens = _charge_poa_tokens(bond_data, defendant)
+    if bound:
+        charge_tokens = [token for token in charge_tokens if token in bound]
+    return _dedupe_keep_order(listed_tokens + charge_tokens + primary_tokens)
 
 
 class DocuSealPacketValidationError(ValueError):

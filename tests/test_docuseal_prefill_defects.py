@@ -35,7 +35,6 @@ def test_stale_charge_list_does_not_add_a_poa():
     values = _prefill({
         "defendant_name": "TEST-Doe, John",
         "surety_id": "osi",
-        "poa_number": "TEST-PRIMARY",
         "charge_details": [
             {"charge": "TEST CHARGE", "poa_number": "TEST-LIVE", "bond_amount": 1000},
         ],
@@ -48,11 +47,26 @@ def test_stale_charge_list_does_not_add_a_poa():
             ],
         },
     })
-    assert values["all_poa_numbers"] == "TEST-LIVE, TEST-PRIMARY"
-    assert values["bond_numbers"] == "TEST-LIVE, TEST-PRIMARY"
-    assert values["poa_numbers"] == "TEST-LIVE, TEST-PRIMARY"
+    assert values["all_poa_numbers"] == "TEST-LIVE"
     assert "TEST-STALE" not in values["all_poa_numbers"]
     assert "TEST-NESTED" not in values["all_poa_numbers"]
+
+
+def test_request_charge_row_cannot_add_an_unbound_poa():
+    values = _prefill({
+        "defendant_name": "TEST-Doe, John",
+        "surety_id": "osi",
+        "poa_number": "TEST-PRIMARY",
+        "poa_numbers": ["TEST-PRIMARY", "TEST-SECOND"],
+        "charge_details": [
+            {"charge": "TEST CHARGE", "poa_number": "TEST-STALE", "bond_amount": 1000},
+            {"charge": "TEST CHARGE TWO", "poa_number": "TEST-SECOND", "bond_amount": 1000},
+        ],
+    })
+    assert values["all_poa_numbers"] == "TEST-PRIMARY, TEST-SECOND"
+    assert values["bond_numbers"] == "TEST-PRIMARY, TEST-SECOND"
+    assert values["poa_numbers"] == "TEST-PRIMARY, TEST-SECOND"
+    assert "TEST-STALE" not in values["all_poa_numbers"]
 
 
 def test_empty_charge_details_uses_charge_list_poas():
@@ -78,9 +92,10 @@ def test_poa_list_order_is_list_then_charge_rows_then_singular():
             {"charge": "TEST CHARGE TWO", "poa_number": "TEST-A", "bond_amount": 1000},
         ],
     })
-    assert values["all_poa_numbers"] == "TEST-A, TEST-C, TEST-B"
-    assert values["bond_numbers"] == "TEST-A, TEST-C, TEST-B"
-    assert values["poa_numbers"] == "TEST-A, TEST-C, TEST-B"
+    assert values["all_poa_numbers"] == "TEST-A, TEST-B"
+    assert values["bond_numbers"] == "TEST-A, TEST-B"
+    assert values["poa_numbers"] == "TEST-A, TEST-B"
+    assert "TEST-C" not in values["all_poa_numbers"]
 
 
 @pytest.mark.parametrize("raw", [
@@ -115,8 +130,22 @@ def test_all_caps_names_keep_hyphens_apostrophes_and_mc():
     oneal = _prefill({"defendant_name": "TEST-O'NEAL, JOHN Q", "surety_id": "osi"})
     assert oneal["defendant_name"] == "TEST-O'Neal, John"
     assert oneal["DefName"] == "TEST-O'Neal, John"
+    macias = _prefill({"defendant_name": "TEST-MACIAS, JOHN Q", "surety_id": "osi"})
+    assert macias["defendant_name"] == "TEST-Macias, John"
+    assert macias["DefName"] == "TEST-Macias, John"
     mixed = _prefill({"defendant_name": "TEST-McDonald, John Quincy", "surety_id": "osi"})
     assert mixed["defendant_name"] == "TEST-McDonald, John"
+
+
+def test_compound_surname_stays_with_the_last_name():
+    values = _prefill({
+        "defendant_name": "JUAN DE LA TEST-CRUZ",
+        "surety_id": "osi",
+    })
+    assert values["defendant_name"] == "De La TEST-Cruz, Juan"
+    assert values["DefName"] == "De La TEST-Cruz, Juan"
+    van = _prefill({"defendant_name": "VAN TEST-DYKE", "surety_id": "osi"})
+    assert van["defendant_name"] == "Van TEST-Dyke"
 
 
 @pytest.mark.parametrize("raw, expected", [

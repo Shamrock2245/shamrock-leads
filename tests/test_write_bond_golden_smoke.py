@@ -520,12 +520,14 @@ def test_unverified_indemnitor_refuses_before_payload(monkeypatch, surety_id, in
 # Importing the cases here runs them on that list without a workflow edit.
 from tests.test_docuseal_prefill_defects import (  # noqa: E402,F401
     test_all_caps_names_keep_hyphens_apostrophes_and_mc,
+    test_compound_surname_stays_with_the_last_name,
     test_court_type_drops_a_trailing_court_word,
     test_defendant_name_is_last_first_without_middle,
     test_packet_submission_sets_send_email_and_send_sms_false,
     test_poa_list_order_is_list_then_charge_rows_then_singular,
     test_empty_charge_details_uses_charge_list_poas,
     test_printed_dates_use_america_new_york,
+    test_request_charge_row_cannot_add_an_unbound_poa,
     test_second_poa_is_kept_when_poa_number_is_also_set,
     test_stale_charge_list_does_not_add_a_poa,
     test_structured_first_and_last_win_over_the_roster_string,
