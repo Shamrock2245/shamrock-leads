@@ -984,6 +984,16 @@ async def _ensure_all_indexes():
         await _idx("defendants", [("total_arrests", -1)], name="idx_total_arrests", background=True)
         await _idx("defendants", [("active", 1)], name="idx_active", background=True)
         await _idx("arrests", [("defendant_id", 1)], name="idx_defendant_id", background=True, sparse=True)
+        # Federal bond-risk alerts claim on (source, source_id). Other docket
+        # events are outside the partial filter, so their source_ids can repeat.
+        await _idx(
+            "docket_events",
+            [("source", 1), ("source_id", 1)],
+            unique=True,
+            name="idx_federal_bond_risk_source",
+            partialFilterExpression={"source": "courtlistener_federal_bond_risk"},
+            background=True,
+        )
         # Co-signer candidates. TTL deletes a contacts doc only while
         # unreviewed_expire_at is set (every candidate still unreviewed).
         # Mixed docs are trimmed by purge_unreviewed_candidates instead.

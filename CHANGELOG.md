@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-21 (Federal bond-risk filing identity)
+
+### Fixed
+- **New filings on older federal cases are kept.** The scan filters RECAP hits on `entry_date_filed`, the docket-entry date, and no longer drops a docket because `dateFiled` (the day the case was opened) is outside the window. Search asks CourtListener for `entry_date_filed_after`, not the case-initiation `filed_after`. Docket entries are still kept or dropped by their own `date_filed`.
+- **A RECAP document and its docket entry are one filing.** The document's docket-entry id, or the entry's nested document id, is the canonical filing id. The same risk phrase no longer creates two CRM rows or two Slack posts.
+- **Each alert is claimed with one upsert.** A unique partial index on `(source, source_id)` for `courtlistener_federal_bond_risk` makes a concurrent cron run and manual scan insert one row. The loser does not add a second notification. Slack delivery is still recorded separately: `alert_complete` stays false until Slack accepts the post, and a later cycle retries that post without another CRM row. A full Slack batch no longer skips those retries.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers an old case with a new entry, one alert for a document and its entry, the atomic claim, and a Slack retry after the per-cycle cap.
+
 ## [Unreleased] — 2026-11-20 (Federal bond-risk review fixes)
 
 ### Fixed

@@ -677,6 +677,52 @@ def _events_from_text(text: str, filing_id: str) -> list[DocketEvent]:
     ]
 
 
+def _hit_entry_date(hit: dict) -> str:
+    """Docket-entry date on a search hit. Case initiation (``dateFiled``) is ignored."""
+    direct = _first_text(hit, "entry_date_filed", "entryDateFiled")
+    if direct:
+        return direct
+    for doc in hit.get("recap_documents") or []:
+        if isinstance(doc, dict):
+            found = _first_text(doc, "entry_date_filed", "entryDateFiled")
+            if found:
+                return found
+    return ""
+
+
+def _norm_filing_text(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+
+def _linked_entry_id(doc: dict) -> str:
+    for key in ("docket_entry_id", "docketEntryId", "entry_id"):
+        if doc.get(key):
+            return str(doc[key])
+    nested = doc.get("docket_entry")
+    if isinstance(nested, dict) and nested.get("id"):
+        return str(nested["id"])
+    if isinstance(nested, str):
+        tail = nested.rstrip("/").split("/")[-1]
+        if tail.isdigit():
+            return tail
+    return ""
+
+
+def _entry_document_ids(entry: dict) -> list[str]:
+    raw = entry.get("recap_documents")
+    if raw is None:
+        raw = entry.get("recap_document")
+    if isinstance(raw, dict):
+        raw = [raw]
+    found = []
+    for doc in raw or []:
+        if isinstance(doc, dict) and doc.get("id"):
+            found.append(str(doc["id"]))
+        elif str(doc).isdigit():
+            found.append(str(doc))
+    return found
+
+
 def _hit_docket_id(hit: dict, search_type: str) -> str:
     for key in ("docket_id", "docketId"):
         if hit.get(key):
@@ -710,7 +756,7 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
             search_type=search_type,
             query=BOND_RISK_QUERY,
             courts=list(FL_FEDERAL_COURT_IDS),
-            filed_after=window,
+            entry_date_filed_after=window,
             page_size=20,
             max_pages=MAX_SEARCH_PAGES,
             pause_s=pause_s,
@@ -722,8 +768,11 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
         for hit in result.get("results") or []:
             if not isinstance(hit, dict):
                 continue
-            filed = _first_text(hit, "dateFiled", "date_filed", "dateArgued")
-            if filed and not filing_in_window(filed, window):
+            # dateFiled is the day the case was opened. A new warrant on an
+            # older case is entry_date_filed. Only an entry date outside the
+            # window drops the hit. A case date never does.
+            entry_day = _hit_entry_date(hit)
+            if entry_day and not filing_in_window(entry_day, window):
                 continue
             docket_id = _hit_docket_id(hit, search_type)
             if not str(docket_id).isdigit():
@@ -826,26 +875,42 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> Optional[DocketV
         ident = canonical_identifier(value)
         if ident:
             view.numbers.add(ident)
-    for hit in hits:
-        hit_filing = f"hit:{hit.get('id') or docket_id}"
-        _extend_events(view, _first_text(hit, "description", "short_description"), hit_filing)
-        snippet = str(hit.get("snippet") or "")
-        _extend_events(view, snippet, f"{hit_filing}:snippet")
-        for doc in hit.get("recap_documents") or []:
-            if isinstance(doc, dict):
-                blob = " ".join(str(doc.get(key) or "") for key in ("description", "short_description", "snippet"))
-                doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
-                _extend_events(view, blob, f"doc:{doc_id}" if doc_id else hit_filing)
+    doc_to_entry: dict[str, str] = {}
+    text_to_entry: dict[str, str] = {}
     for entry in entries:
         description = str(entry.get("description") or "")
-        entry_id = entry.get("id") or entry.get("entry_number") or ""
-        if entry_id:
-            filing = f"entry:{entry_id}"
+        entry_token = entry.get("id") or entry.get("entry_number") or ""
+        if entry_token:
+            filing = f"entry:{entry_token}"
         elif description:
             filing = "entry:" + hashlib.sha256(description.encode()).hexdigest()[:12]
         else:
             filing = ""
+        for doc_id in _entry_document_ids(entry):
+            if entry_token:
+                doc_to_entry[doc_id] = str(entry_token)
+        if description and filing.startswith("entry:"):
+            text_to_entry.setdefault(_norm_filing_text(description), filing)
         _extend_events(view, description, filing)
+    for hit in hits:
+        for doc in hit.get("recap_documents") or []:
+            if not isinstance(doc, dict):
+                continue
+            blob = " ".join(
+                str(doc.get(key) or "") for key in ("description", "short_description", "snippet")
+            )
+            linked = _linked_entry_id(doc) or doc_to_entry.get(str(doc.get("id") or ""))
+            if not linked:
+                linked_filing = text_to_entry.get(_norm_filing_text(blob), "")
+            else:
+                linked_filing = f"entry:{linked}"
+            if linked_filing:
+                _extend_events(view, blob, linked_filing)
+                continue
+            doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
+            if not doc_id and blob.strip():
+                doc_id = hashlib.sha256(_norm_filing_text(blob).encode()).hexdigest()[:12]
+            _extend_events(view, blob, f"doc:{doc_id}" if doc_id else "")
     return view
 
 
@@ -922,39 +987,96 @@ def _notification(decision: MatchDecision, docket: DocketView, source_id: str) -
     })
 
 
+def _duplicate_key(exc: Exception) -> bool:
+    if getattr(exc, "code", None) == 11000:
+        return True
+    return "duplicate key" in str(exc).lower() or "E11000" in str(exc)
+
+
+async def ensure_federal_bond_alert_index(db) -> None:
+    """Unique claim key for federal bond-risk alerts. Other docket events are excluded."""
+    collection = getattr(db, "docket_events", None)
+    create = getattr(collection, "create_index", None)
+    if create is None:
+        return
+    try:
+        await create(
+            [("source", 1), ("source_id", 1)],
+            unique=True,
+            name="idx_federal_bond_risk_source",
+            partialFilterExpression={"source": SOURCE},
+            background=True,
+        )
+    except Exception as exc:
+        log.warning("Federal bond-risk index was not created: %s", type(exc).__name__)
+
+
+async def _claim_insert(db, document: dict) -> str:
+    """Insert the alert once. Returns ``inserted`` or ``exists``.
+
+    One upsert plus the unique ``(source, source_id)`` index is the claim.
+    A concurrent scan that loses the race does not insert a second row.
+    """
+    try:
+        result = await db.docket_events.update_one(
+            {"source": SOURCE, "source_id": document["source_id"]},
+            {"$setOnInsert": document},
+            upsert=True,
+        )
+    except Exception as exc:
+        if _duplicate_key(exc):
+            return "exists"
+        raise
+    if getattr(result, "upserted_id", None):
+        return "inserted"
+    return "exists"
+
+
 async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> str:
     """Insert or upgrade one staff row.
 
     Returns ``new``, ``upgraded``, ``retry_slack``, or ``duplicate``.
-    A Slack retry does not write another CRM notification.
+    A Slack retry does not write another CRM notification. The row is not
+    complete until Slack delivery is recorded.
     """
     source_id = _source_id(docket, decision)
     existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+    document = _event_document(decision, docket, source_id)
+    note = _notification(decision, docket, source_id)
     upgrade = bool(
         existing
         and existing.get("match_status") == "possible"
         and decision.status == "confirmed"
     )
-    if existing and not upgrade:
-        if not existing.get("slack_delivered"):
-            return "retry_slack"
-        return "duplicate"
-    document = _event_document(decision, docket, source_id)
-    note = _notification(decision, docket, source_id)
-    if existing:
+    if upgrade:
         document["detected_at"] = existing.get("detected_at") or document["detected_at"]
         document["upgraded_at"] = _now()
         document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
-        await db.docket_events.update_one({"_id": existing.get("_id")}, {"$set": document})
-    else:
-        await db.docket_events.insert_one(document)
+        result = await db.docket_events.update_one(
+            {"_id": existing.get("_id"), "match_status": "possible"},
+            {"$set": document},
+        )
+        if not getattr(result, "matched_count", 0):
+            return "duplicate"
+        await db.notifications.insert_one(note)
+        return "upgraded"
+    if existing:
+        if not existing.get("slack_delivered"):
+            return "retry_slack"
+        return "duplicate"
+    claimed = await _claim_insert(db, document)
+    if claimed != "inserted":
+        winner = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+        if winner and not winner.get("slack_delivered"):
+            return "retry_slack"
+        return "duplicate"
     await db.notifications.insert_one(note)
     log.info(
         "Federal bond-risk %s court=%s event=%s filing=%s auto_linked=%s",
         decision.status, docket.court_id, decision.event_type, decision.filing_id,
         decision.status == "confirmed",
     )
-    return "upgraded" if existing else "new"
+    return "new"
 
 
 async def _record_slack(db, source_id: str, delivered: bool, attempts: int) -> None:
@@ -1047,6 +1169,7 @@ async def run_federal_bond_risk_scan(
 
         client = CourtListenerClient(api_token=os.getenv("COURTLISTENER_API_TOKEN", "").strip())
     try:
+        await ensure_federal_bond_alert_index(db)
         if clients is None:
             clients = await load_active_clients(db)
         if not clients:
@@ -1071,23 +1194,13 @@ async def run_federal_bond_risk_scan(
         possible = 0
         slack_sent = 0
         slack_pending = 0
-        for decision, docket in decisions:
-            source_id = _source_id(docket, decision)
-            if written >= MAX_ROWS:
-                base["truncated"] = True
-                break
-            outcome = await _store_decision(db, decision, docket)
-            if outcome == "duplicate":
-                continue
-            if outcome != "retry_slack":
-                written += 1
-                if decision.status == "confirmed":
-                    confirmed += 1
-                else:
-                    possible += 1
+
+        async def _deliver(decision: MatchDecision, docket: DocketView) -> None:
+            nonlocal slack_sent, slack_pending
             if slack_sent >= MAX_SLACK:
                 slack_pending += 1
-                continue
+                return
+            source_id = _source_id(docket, decision)
             existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
             attempts = int((existing or {}).get("slack_attempts") or 0) + 1
             delivered = _alert_slack(decision, docket, notifier)
@@ -1096,6 +1209,32 @@ async def run_federal_bond_risk_scan(
                 slack_sent += 1
             else:
                 slack_pending += 1
+
+        retries: list[tuple[MatchDecision, DocketView]] = []
+        fresh: list[tuple[MatchDecision, DocketView, str]] = []
+        for decision, docket in decisions:
+            source_id = _source_id(docket, decision)
+            existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+            if not existing and written >= MAX_ROWS:
+                base["truncated"] = True
+                continue
+            outcome = await _store_decision(db, decision, docket)
+            if outcome == "duplicate":
+                continue
+            if outcome == "retry_slack":
+                retries.append((decision, docket))
+                continue
+            written += 1
+            if decision.status == "confirmed":
+                confirmed += 1
+            else:
+                possible += 1
+            fresh.append((decision, docket, outcome))
+        # Undelivered Slack posts are retried before new alerts fill the cap.
+        for decision, docket in retries:
+            await _deliver(decision, docket)
+        for decision, docket, _outcome in fresh:
+            await _deliver(decision, docket)
         return {
             **base,
             "skipped": None,

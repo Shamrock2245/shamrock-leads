@@ -284,7 +284,7 @@ DOCKET_BRIEF_FIELDS = (
     "id,court_id,docket_number,case_name,case_name_full,date_filed,"
     "date_last_filing,cause,nature_of_suit,pacer_case_id,assigned_to_str"
 )
-DOCKET_ENTRY_FIELDS = "id,date_filed,description,entry_number"
+DOCKET_ENTRY_FIELDS = "id,date_filed,description,entry_number,recap_documents__id"
 DOCKET_PARTY_FIELDS = "id,name,extra_info"
 
 
@@ -605,14 +605,17 @@ class CourtListenerClient:
         query: str,
         courts: Optional[list] = None,
         filed_after: Optional[str] = None,
+        entry_date_filed_after: Optional[str] = None,
         page_size: int = 20,
         max_pages: int = 3,
         pause_s: float = 0.0,
     ) -> dict:
         """Recent ``/search/`` hits inside a caller-supplied window.
 
-        Follows ``next`` at most ``max_pages`` times (hard cap 3). Field
-        filters stay on the first request. 429 backoff is ``_request_with_retry``.
+        ``entry_date_filed_after`` is the docket-entry date. ``filed_after`` is
+        the case-initiation date and is not used for bond-risk scans. Follows
+        ``next`` at most ``max_pages`` times (hard cap 3). 429 backoff is
+        ``_request_with_retry``.
         """
         stype = (search_type or "").strip().lower()
         if stype not in {"o", "r", "rd", "d", "p", "oa"}:
@@ -629,8 +632,10 @@ class CourtListenerClient:
             "type": stype,
             "q": (query or "").strip(),
             "page_size": max(1, min(int(page_size or 20), 20)),
-            "order_by": "dateFiled desc",
+            "order_by": "entry_date_filed desc",
         }
+        if entry_date_filed_after:
+            params["entry_date_filed_after"] = entry_date_filed_after
         if filed_after:
             params["filed_after"] = filed_after
         if courts:
