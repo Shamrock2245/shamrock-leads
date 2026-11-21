@@ -151,19 +151,24 @@ def _digits_phone(p: str) -> str:
 
 
 def _split_name(full: str) -> Tuple[str, str, str]:
-    """Split FIRST MIDDLE LAST or LAST, FIRST MIDDLE (jail roster style)."""
+    """Split FIRST MIDDLE LAST or LAST, FIRST MIDDLE (jail roster style).
+
+    A trailing Jr/Sr/II/III/IV/V is not the last name.
+    """
     raw = (full or "").strip()
     if not raw:
         return "", "", ""
     if "," in raw:
         last, rest = [p.strip() for p in raw.split(",", 1)]
-        parts = [p for p in rest.split() if p]
+        last_parts = _drop_name_suffix([p for p in last.split() if p])
+        parts = _drop_name_suffix([p for p in rest.split() if p])
+        last = " ".join(last_parts)
         if not parts:
             return "", "", last
         if len(parts) == 1:
             return parts[0], "", last
         return parts[0], " ".join(parts[1:]), last
-    parts = [p for p in raw.split() if p]
+    parts = _drop_name_suffix([p for p in raw.split() if p])
     if not parts:
         return "", "", ""
     if len(parts) == 1:
@@ -171,6 +176,14 @@ def _split_name(full: str) -> Tuple[str, str, str]:
     if len(parts) == 2:
         return parts[0], "", parts[1]
     return parts[0], " ".join(parts[1:-1]), parts[-1]
+
+
+def _drop_name_suffix(parts: List[str]) -> List[str]:
+    suffixes = {"jr", "sr", "ii", "iii", "iv", "v"}
+    kept = list(parts)
+    while kept and kept[-1].rstrip(".").lower() in suffixes:
+        kept.pop()
+    return kept
 
 
 def is_lee_county(county: Any, state: Any = "") -> bool:

@@ -145,6 +145,8 @@ def test_split_name_handles_jail_roster_comma_form():
     assert first2 == "Jane"
     assert mid2 == "Ann"
     assert last2 == "Doe"
+    suffixed = _split_name("JOHN TEST-DOE JR")
+    assert suffixed == ("JOHN", "", "TEST-DOE")
 
 
 def test_adaptive_field_map_includes_write_bond_date_and_words_keys():
@@ -393,6 +395,58 @@ async def test_resolve_case_context_keeps_every_case_power():
     assert values["all_poa_numbers"] == "TEST-POA-1, TEST-POA-2"
     assert values["bond_numbers"] == "TEST-POA-1, TEST-POA-2"
     assert "TEST-STALE" not in values["all_poa_numbers"]
+
+
+@pytest.mark.asyncio
+async def test_raw_suffix_name_is_not_printed_as_the_last_name():
+    """A name with no separate parts must not print Jr as the surname."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.docuseal_service import (
+        DocuSealService,
+        build_bond_data_from_dashboard,
+    )
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    bond = {
+        "bond_case_id": "BC-NAME",
+        "booking_number": "TEST-BK-NAME",
+        "surety_id": "osi",
+        "poa_number": "TEST-POA-1",
+        "defendant_name": "JOHN TEST-DOE JR",
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+        "match_status": "validated",
+    }
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def to_list(self, length=3):
+            return list(self._rows)[:length]
+
+    bonds = MagicMock()
+    bonds.find = MagicMock(return_value=_Cursor([bond]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor([]))
+
+    def _get(name):
+        if name in ("active_bonds", "bond_cases"):
+            return bonds
+        return empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(bond_case_id="BC-NAME")
+
+    assert ctx["defendant"]["last_name"] == "TEST-DOE"
+    assert ctx["defendant"]["first_name"] == "JOHN"
+    built = build_bond_data_from_dashboard(ctx=ctx, surety_id="osi")
+    values = DocuSealService.prefill_values_from_bond(built)
+    assert values["defendant_name"] == "TEST-Doe, John"
+    assert values["DefName"] == "TEST-Doe, John"
 
 
 def _bond_cursor(docs):

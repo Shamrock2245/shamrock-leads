@@ -109,6 +109,21 @@ def test_defendant_name_is_last_first_without_middle(raw):
     assert values["DefName"] == "TEST-Doe, John"
 
 
+def test_synthesized_suffix_split_does_not_become_the_last_name():
+    values = _prefill({
+        "defendant_name": "JOHN TEST-DOE JR",
+        "surety_id": "osi",
+        "defendant": {
+            "name": "JOHN TEST-DOE JR",
+            "first_name": "JOHN",
+            "middle_name": "TEST-DOE",
+            "last_name": "JR",
+        },
+    })
+    assert values["defendant_name"] == "TEST-Doe, John"
+    assert values["DefName"] == "TEST-Doe, John"
+
+
 def test_structured_first_and_last_win_over_the_roster_string():
     values = _prefill({
         "defendant_name": "Roster Name Ignored",

@@ -685,19 +685,42 @@ def _first_and_last_from_raw(raw: str) -> tuple[str, str, bool]:
     return parts[0], parts[-1], False
 
 
+def _name_letters(value: str) -> str:
+    return "".join(ch for ch in str(value or "").lower() if ch.isalpha())
+
+
+def _structured_name_matches_raw_split(raw: str, first: str, last: str) -> bool:
+    """True when first/last are only a fresh split of this same raw string.
+
+    resolve_case_context fills those fields from _split_name when the case
+    has no separate name parts. That split is not an independent source.
+    """
+    naive_first, _middle, naive_last = _split_full_name(raw)
+    if not naive_first or not naive_last:
+        return False
+    return (
+        _name_letters(first) == _name_letters(naive_first)
+        and _name_letters(last) == _name_letters(naive_last)
+    )
+
+
 def _format_defendant_display_name(raw: str, first: str = "", last: str = "") -> str:
     """Owner rule for the printed defendant line: 'Last, First', no middle name.
 
-    Structured first and last win when both are present. An all-caps roster
-    string is title-cased. A mixed-case string keeps the letters it arrived with.
+    Structured first and last win when both are present and they are not
+    just a split of this same raw string. An all-caps roster string is
+    title-cased. A mixed-case string keeps the letters it arrived with.
     A space-delimited name that is not first name, initials, and one last
     token is kept in its original order.
     """
     structured_first = " ".join(str(first or "").split())
     structured_last = " ".join(str(last or "").split())
+    text = " ".join(str(raw or "").split())
+    synthesized = _structured_name_matches_raw_split(text, structured_first, structured_last)
     if (
         structured_first
         and structured_last
+        and not synthesized
         and not _is_placeholder_party_name(structured_first)
         and not _is_placeholder_party_name(structured_last)
     ):
@@ -705,7 +728,6 @@ def _format_defendant_display_name(raw: str, first: str = "", last: str = "") ->
         shown_last = _case_name_text(structured_last)
         if shown_last and shown_first:
             return f"{shown_last}, {shown_first[0]}"
-    text = " ".join(str(raw or "").split())
     if not text or _is_placeholder_party_name(text):
         return text
     all_caps = _letters_are_all_caps(text)
