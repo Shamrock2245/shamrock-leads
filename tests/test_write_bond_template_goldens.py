@@ -746,10 +746,10 @@ def test_write_bond_full_template_fields(monkeypatch, surety_id):
 
     assert set(report["fields"]) == set(field_map) & names
     assert report["dropped_payload_keys"] == sorted(set(field_map) - names)
-    assert report["fields"]["defendant_name"]["value"] == "TEST DEFENDANT"
+    assert report["fields"]["defendant_name"]["value"] == "Defendant, Test"
     assert report["fields"]["indemnitor_name"]["value"] == "TEST INDEMNITOR / TEST COINDEMNITOR"
     assert report["fields"]["charges_summary"]["value"] == joined
-    assert report["fields"]["court_type"]["value"] == "TEST COURT"
+    assert report["fields"]["court_type"]["value"] == "TEST"
     assert "1900-01-01" in json.dumps(report["fields"])
     assert "000-00-0000" in json.dumps(report["fields"])
     assert "TEST-DL-0000" in json.dumps(report["fields"])

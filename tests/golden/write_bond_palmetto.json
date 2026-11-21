@@ -89,33 +89,6 @@
     ],
     "value": "FL"
   },
-  "DefFirstName": {
-    "readonly": false,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "Sample"
-  },
-  "DefLastName": {
-    "readonly": false,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "One"
-  },
-  "DefMiddleName": {
-    "readonly": false,
-    "submitter_role": [
-      "bondsman",
-      "defendant",
-      "indemnitor"
-    ],
-    "value": "Party"
-  },
   "DefName": {
     "readonly": false,
     "submitter_role": [

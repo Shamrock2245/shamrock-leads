@@ -3444,8 +3444,14 @@ async def shannon_email_indemnitor_paperwork(request: Request):
                 if ocr_fields.get(key):
                     bond_data[key] = ocr_fields[key]
             if ocr_fields.get("defendant_name"):
-                bond_data["defendant"]["name"] = ocr_fields["defendant_name"]
-                def_party["name"] = ocr_fields["defendant_name"]
+                from dashboard.services.docuseal_service import replace_defendant_name_from_id_scan
+
+                corrected = str(ocr_fields["defendant_name"])
+                bond_data["defendant_name"] = corrected
+                bond_data.pop("defendant_first_name", None)
+                bond_data.pop("defendant_last_name", None)
+                replace_defendant_name_from_id_scan(bond_data["defendant"], corrected)
+                replace_defendant_name_from_id_scan(def_party, corrected)
         else:
             ind = indemnitors[0] if indemnitors else {}
             if ocr_fields.get("indemnitor_name"):
