@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-22 (Federal bond-risk co-defendant, party DOB, notification claim)
+
+### Fixed
+- **Co-defendant captions are hydrated before a name filter.** "United States v. Lead Defendant et al." is no longer dropped because the caption surname is not one of ours. Parties are loaded first, then the client is matched.
+- **A matched party with more than one date of birth is not auto-confirmed.** One overlapping date, even with a case number, stays `possible` for staff review.
+- **CRM notifications are claimed with one upsert.** A unique `(type, claim_key)` index stops overlapping scans from inserting two Notification Center rows for the same alert and status.
+- **Failed Slack posts count toward the ten-post cap.** Both the pending-retry loop and the new-alert loop count a claimed attempt, whether Slack accepts it or not.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers an et al. caption, conflicting party dates of birth, one notification under a duplicate key, and a failed Slack attempt that blocks the next post in the same run.
+
 ## [Unreleased] — 2026-11-22 (Federal bond-risk name boundary, hydration, notification, index)
 
 ### Fixed

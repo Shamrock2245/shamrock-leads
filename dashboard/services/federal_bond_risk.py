@@ -42,6 +42,8 @@ log = logging.getLogger("shamrock.federal_bond_risk")
 
 FLAG = "FEDERAL_BOND_RISK_ALERTS"
 SOURCE = "courtlistener_federal_bond_risk"
+EVENT_INDEX = "idx_federal_bond_risk_source"
+NOTIFICATION_INDEX = "idx_federal_bond_risk_notification"
 _ON = {"1", "true", "yes", "on"}
 ACTIVE_STATUSES = ("active", "monitoring", "alert")
 FL_FEDERAL_COURTS = frozenset(FL_FEDERAL_COURT_IDS)
@@ -431,15 +433,22 @@ def match_client(client: ClientIdentity, docket: DocketView) -> tuple[Optional[s
     """Return (confirmed|possible|None, confirmation labels).
 
     A date of birth confirms the link only when it is on the party whose name
-    matched. A different party's date of birth does not confirm and does not
-    conflict. The matched party's own date of birth, when it differs, drops
-    the row even if a case number overlaps.
+    matched and that party has one date of birth. Several dates on that party
+    stay possible for staff review. A different party's date of birth does not
+    confirm and does not conflict. The matched party's own single date of
+    birth, when it differs, drops the row even if a case number overlaps.
     """
     if not any(full_name_equal(name, other) for name in client.names for other in docket.names):
         return None, ()
     party_dobs = party_dobs_for_client(client, docket)
     # Bond, defendant, and arrest dates that disagree are not a usable DOB.
     usable_dobs = set() if client.dob_conflict else set(client.dobs)
+    if party_dobs is not None and len(party_dobs) > 1:
+        # The matched party has more than one date of birth. One overlap does
+        # not confirm, and a case number does not paper over that conflict.
+        if usable_dobs and party_dobs and usable_dobs.isdisjoint(party_dobs):
+            return None, ()
+        return "possible", ()
     if party_dobs is not None and usable_dobs and party_dobs and usable_dobs.isdisjoint(party_dobs):
         return None, ()
     confirmations = []
@@ -781,21 +790,6 @@ async def load_active_clients(db, page_size: int = BOND_PAGE) -> list[ClientIden
     return clients
 
 
-def _surnames(clients: list[ClientIdentity]) -> set[str]:
-    found = set()
-    for client in clients:
-        for name in client.names:
-            parts = name_parts(name)
-            if parts:
-                found.add(parts[2])
-    return found
-
-
-def _might_be_ours(case_name: str, surnames: set[str]) -> bool:
-    blob = (case_name or "").upper()
-    return any(re.search(rf"\b{re.escape(surname)}\b", blob) for surname in surnames)
-
-
 class _ScanStop(Exception):
     def __init__(self, warning: str, skipped: str):
         self.warning = warning
@@ -952,11 +946,14 @@ async def _save_seed_offset(db, offset: int) -> None:
     )
 
 
-async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float, db=None) -> tuple[list[DocketView], bool]:
-    """Search recent RECAP and docket pages, then hydrate the seed batch."""
+async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[DocketView], bool]:
+    """Search recent RECAP and docket pages, then hydrate the seed batch.
+
+    Caption surnames are not a filter. A lead-defendant caption with "et al."
+    still has to be hydrated so co-defendant parties can be matched.
+    """
     import asyncio
 
-    surnames = _surnames(clients)
     window = filing_window_start()
     seeds: dict[str, dict] = {}
     failures: list[str] = []
@@ -997,9 +994,6 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
             number = _first_text(hit, "docketNumber", "docket_number")
             if number and _CIVIL_DOCKET.search(number) and not _CRIMINAL_DOCKET.search(number):
                 continue
-            case_name = _first_text(hit, "caseName", "case_name", "case_name_full")
-            if case_name and not _might_be_ours(case_name, surnames):
-                continue
             key = docket_id or canonical_identifier(number) or ""
             if not key:
                 continue
@@ -1021,8 +1015,6 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
         await _seed_offset(db) if db is not None else 0,
         HYDRATE_CEILING,
     )
-    if db is not None:
-        await _save_seed_offset(db, next_offset)
 
     views: list[DocketView] = []
     for seed in batch:
@@ -1031,6 +1023,8 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
         view = await _hydrate(client, seed, pause_s)
         if view and view.events and is_fl_federal_criminal(view.court_id, view.docket_number):
             views.append(view)
+    if db is not None:
+        await _save_seed_offset(db, next_offset)
     return views, truncated
 
 
@@ -1243,51 +1237,52 @@ def _duplicate_key(exc: Exception) -> bool:
     return "duplicate key" in str(exc).lower() or "E11000" in str(exc)
 
 
-async def _unique_claim_index_present(collection) -> bool:
+async def _index_present(collection, name: str) -> bool:
     listed = getattr(collection, "list_indexes", None)
     if listed is not None:
         cursor = listed()
         rows = await cursor.to_list(length=None) if hasattr(cursor, "to_list") else []
-        return any(
-            row.get("name") == "idx_federal_bond_risk_source" and row.get("unique")
-            for row in rows or []
-        )
+        return any(row.get("name") == name and row.get("unique") for row in rows or [])
     recorded = getattr(collection, "indexes", None)
     if not recorded:
         return False
-    return any(
-        kwargs.get("name") == "idx_federal_bond_risk_source" and kwargs.get("unique") is True
-        for _keys, kwargs in recorded
-    )
+    return any(kwargs.get("name") == name and kwargs.get("unique") is True for _keys, kwargs in recorded)
+
+
+async def _ensure_unique_index(collection, keys, name: str, partial: dict) -> bool:
+    create = getattr(collection, "create_index", None)
+    if collection is None or create is None:
+        return False
+    try:
+        await create(keys, unique=True, name=name, partialFilterExpression=partial, background=True)
+    except Exception as exc:
+        log.warning("Federal bond-risk index %s was not created: %s", name, type(exc).__name__)
+        return False
+    return await _index_present(collection, name)
 
 
 async def ensure_federal_bond_alert_index(db) -> None:
-    """Unique claim key for federal bond-risk alerts. Other docket events are excluded.
+    """Unique claim keys for the alert row and its CRM notification.
 
-    A scan that cannot create or see that unique index stops before any alert.
+    A scan that cannot create or see either index stops before any alert.
     """
-    collection = getattr(db, "docket_events", None)
-    create = getattr(collection, "create_index", None)
-    if collection is None or create is None or not await _claim_index_ready(collection, create):
+    events_ready = await _ensure_unique_index(
+        getattr(db, "docket_events", None),
+        [("source", 1), ("source_id", 1)],
+        EVENT_INDEX,
+        {"source": SOURCE},
+    )
+    notes_ready = await _ensure_unique_index(
+        getattr(db, "notifications", None),
+        [("type", 1), ("claim_key", 1)],
+        NOTIFICATION_INDEX,
+        {"type": "federal_bond_risk"},
+    )
+    if not events_ready or not notes_ready:
         raise _ScanStop(
             "Federal bond-risk unique index was not created. Scan stopped before any alert was written.",
             "index_unavailable",
         )
-
-
-async def _claim_index_ready(collection, create) -> bool:
-    try:
-        await create(
-            [("source", 1), ("source_id", 1)],
-            unique=True,
-            name="idx_federal_bond_risk_source",
-            partialFilterExpression={"source": SOURCE},
-            background=True,
-        )
-    except Exception as exc:
-        log.warning("Federal bond-risk index was not created: %s", type(exc).__name__)
-        return False
-    return await _unique_claim_index_present(collection)
 
 
 async def _claim_insert(db, document: dict) -> str:
@@ -1311,29 +1306,39 @@ async def _claim_insert(db, document: dict) -> str:
     return "exists"
 
 
-async def _ensure_notification(db, note: dict, source_id: str, status: str) -> bool:
-    """Write the CRM notification for this alert. A failed insert is retried later."""
-    prior = await db.notifications.find_one({
-        "type": "federal_bond_risk",
-        "metadata.source_id": source_id,
-        "metadata.match_status": status,
-    })
-    if prior:
-        await db.docket_events.update_one(
-            {"source": SOURCE, "source_id": source_id},
-            {"$set": {"notification_written": True, "notification_status": status}},
-        )
-        return True
-    try:
-        await db.notifications.insert_one(note)
-    except Exception as exc:
-        log.warning("Federal bond-risk notification was not written: %s", type(exc).__name__)
-        return False
+def _notification_claim_key(source_id: str, status: str) -> str:
+    return f"{source_id}:{status}"
+
+
+async def _mark_notification(db, source_id: str, status: str) -> None:
     await db.docket_events.update_one(
         {"source": SOURCE, "source_id": source_id},
         {"$set": {"notification_written": True, "notification_status": status}},
     )
-    return True
+
+
+async def _ensure_notification(db, note: dict, source_id: str, status: str) -> bool:
+    """Insert the CRM notification once. Overlapping scans share one row."""
+    claim_key = _notification_claim_key(source_id, status)
+    stored = dict(note)
+    stored["type"] = "federal_bond_risk"
+    stored["claim_key"] = claim_key
+    try:
+        result = await db.notifications.update_one(
+            {"type": "federal_bond_risk", "claim_key": claim_key},
+            {"$setOnInsert": stored},
+            upsert=True,
+        )
+    except Exception as exc:
+        if not _duplicate_key(exc):
+            log.warning("Federal bond-risk notification was not written: %s", type(exc).__name__)
+            return False
+        await _mark_notification(db, source_id, status)
+        return True
+    if getattr(result, "upserted_id", None) or getattr(result, "matched_count", 0):
+        await _mark_notification(db, source_id, status)
+        return True
+    return False
 
 
 async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> str:
@@ -1454,22 +1459,28 @@ def _alert_stored(row: dict, notifier) -> bool:
         return False
 
 
-async def retry_pending_slack(db, notifier, limit: int = 200) -> tuple[int, int]:
-    """Retry alerts whose Slack post never succeeded, independent of this search."""
+async def retry_pending_slack(db, notifier, limit: int = 200) -> tuple[int, int, int]:
+    """Retry alerts whose Slack post never succeeded, independent of this search.
+
+    Returns sent, still pending, and claimed attempts. A failed post counts
+    toward the per-run cap.
+    """
     cursor = db.docket_events.find({"source": SOURCE, "slack_delivered": False})
     if hasattr(cursor, "sort"):
         cursor = cursor.sort("_id", 1)
     rows = await _to_list(cursor, limit)
     sent = 0
     pending = 0
+    attempted = 0
     for row in rows:
-        if sent >= MAX_SLACK:
+        if attempted >= MAX_SLACK:
             pending += 1
             continue
         source_id = str(row.get("source_id") or "")
         if not source_id or not await _claim_slack_delivery(db, source_id):
             pending += 1
             continue
+        attempted += 1
         delivered = _alert_stored(row, notifier)
         attempts = int(row.get("slack_attempts") or 0) + 1
         await _record_slack(db, source_id, delivered, attempts)
@@ -1477,7 +1488,7 @@ async def retry_pending_slack(db, notifier, limit: int = 200) -> tuple[int, int]
             sent += 1
         else:
             pending += 1
-    return sent, pending
+    return sent, pending, attempted
 
 
 def _alert_slack(decision: MatchDecision, docket: DocketView, notifier) -> bool:
@@ -1561,7 +1572,7 @@ async def run_federal_bond_risk_scan(
             from writers.slack_notifier import SlackNotifier
 
             notifier = SlackNotifier()
-        slack_sent, slack_pending = await retry_pending_slack(db, notifier)
+        slack_sent, slack_pending, slack_attempts = await retry_pending_slack(db, notifier)
         if clients is None:
             clients = await load_active_clients(db)
         if not clients:
@@ -1573,7 +1584,7 @@ async def run_federal_bond_risk_scan(
                 "slack_pending": slack_pending,
             }
         try:
-            dockets, seeds_truncated = await _collect_dockets(client, clients, pause_s, db)
+            dockets, seeds_truncated = await _collect_dockets(client, pause_s, db)
         except _ScanStop as stop:
             return _scan_stopped(base, stop)
         if seeds_truncated:
@@ -1589,14 +1600,15 @@ async def run_federal_bond_risk_scan(
         possible = 0
 
         async def _deliver(decision: MatchDecision, docket: DocketView) -> None:
-            nonlocal slack_sent, slack_pending
-            if slack_sent >= MAX_SLACK:
+            nonlocal slack_sent, slack_pending, slack_attempts
+            if slack_attempts >= MAX_SLACK:
                 slack_pending += 1
                 return
             source_id = _source_id(docket, decision)
             if not await _claim_slack_delivery(db, source_id):
                 slack_pending += 1
                 return
+            slack_attempts += 1
             existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
             attempts = int((existing or {}).get("slack_attempts") or 0) + 1
             delivered = _alert_slack(decision, docket, notifier)

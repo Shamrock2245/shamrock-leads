@@ -1351,16 +1351,16 @@ async def test_failed_notification_is_written_on_the_next_scan(monkeypatch):
     _enable(monkeypatch)
     court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
     db = _DB()
-    real_insert = db.notifications.insert_one
+    real_update = db.notifications.update_one
     state = {"calls": 0}
 
-    async def fail_once(doc):
+    async def fail_once(filt, update, upsert=False):
         state["calls"] += 1
         if state["calls"] == 1:
             raise RuntimeError("notification down")
-        return await real_insert(doc)
+        return await real_update(filt, update, upsert=upsert)
 
-    db.notifications.insert_one = fail_once
+    db.notifications.update_one = fail_once
     first = await _scan(db, court, [_client()])
     assert first["rows_written"] == 1
     assert db.notifications.docs == []
@@ -1371,6 +1371,129 @@ async def test_failed_notification_is_written_on_the_next_scan(monkeypatch):
     assert len(db.notifications.docs) == 1
     assert db.notifications.docs[0]["metadata"]["source_id"] == db.docket_events.docs[0]["source_id"]
     assert db.docket_events.docs[0]["notification_written"] is True
+
+
+def test_conflicting_party_dobs_do_not_auto_confirm():
+    docket = _docket_for(DocketParty("Smith, John", frozenset({"1985-01-15", "1990-02-02"})))
+    client = _client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])
+    assert match_client(client, docket) == ("possible", ())
+    agreed = _docket_for(DocketParty("Smith, John", frozenset({"1985-01-15"})))
+    assert match_client(client, agreed)[0] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_et_al_caption_still_matches_a_loaded_codefendant(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit(
+            caseName="United States v. Lead Defendant et al.",
+            recap_documents=[{
+                "id": 9,
+                "description": "Order Setting Conditions of Release as to John Smith",
+            }],
+        )],
+        parties=[
+            {"name": "Defendant, Lead"},
+            {"name": "Smith, John", "extra_info": "DOB: 01/15/1985"},
+        ],
+    )
+    db = _DB()
+    result = await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert result["rows_written"] == 1
+    assert result["confirmed"] == 1
+    assert db.docket_events.docs[0]["auto_linked"] is True
+    assert db.docket_events.docs[0]["defendant_name"] == "John Smith"
+
+
+@pytest.mark.asyncio
+async def test_notification_claim_is_one_row_under_a_duplicate_key(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, _ensure_notification
+
+    db = _DB()
+    db.docket_events.docs.append({
+        "source": SOURCE,
+        "source_id": "src-1",
+        "slack_delivered": False,
+    })
+    note = {"title": "Federal bond risk", "metadata": {"source_id": "src-1", "match_status": "possible"}}
+    assert await _ensure_notification(db, note, "src-1", "possible") is True
+    assert await _ensure_notification(db, note, "src-1", "possible") is True
+    assert len(db.notifications.docs) == 1
+    assert db.docket_events.docs[0]["notification_written"] is True
+
+    class _DuplicateKey(Exception):
+        code = 11000
+
+    class _Racer(_Collection):
+        async def update_one(self, filt, update, upsert=False):
+            if upsert:
+                raise _DuplicateKey("E11000 duplicate key")
+            return await super().update_one(filt, update, upsert=upsert)
+
+    raced = _DB()
+    raced.notifications = _Racer()
+    raced.docket_events.docs.append({"source": SOURCE, "source_id": "src-2"})
+    assert await _ensure_notification(raced, note, "src-2", "possible") is True
+    assert raced.notifications.docs == []
+    assert raced.docket_events.docs[0]["notification_written"] is True
+
+
+class _FailNotifier:
+    def __init__(self):
+        self.calls = []
+
+    def notify_alert(self, **kwargs):
+        self.calls.append(kwargs)
+        return False
+
+
+@pytest.mark.asyncio
+async def test_failed_slack_attempts_count_against_the_cap(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.MAX_SLACK", 1)
+    today = datetime.now(timezone.utc).date().isoformat()
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[])],
+        brief={"id": 1001, "court_id": "flmd", "docket_number": "2:24-cr-00123", "case_name": "United States v. John Smith"},
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        entries=[
+            {"id": 21, "description": "Detention hearing", "date_filed": today},
+            {"id": 22, "description": "Failure to appear", "date_filed": today},
+        ],
+    )
+    notifier = _FailNotifier()
+    db = _DB()
+    result = await _scan(db, court, [_client(dobs=["1985-01-15"])], notifier)
+    assert result["slack_sent"] == 0
+    assert result["rows_written"] == 2
+    assert len(notifier.calls) == 1
+    assert sum(1 for row in db.docket_events.docs if row.get("slack_attempts")) == 1
+
+    pending_db = _DB()
+    from dashboard.services.federal_bond_risk import SOURCE
+    for source_id, event in (("pending-a", "warrant"), ("pending-b", "failure_to_appear")):
+        pending_db.docket_events.docs.append({
+            "_id": source_id,
+            "source": SOURCE,
+            "source_id": source_id,
+            "slack_delivered": False,
+            "slack_attempts": 0,
+            "title": "Federal bond risk",
+            "description": "Needs a retry.",
+            "court_name": "M.D. Florida",
+            "docket_number": "2:24-cr-00123",
+            "event_type": event,
+            "filing_id": source_id,
+            "match_status": "possible",
+            "auto_linked": False,
+        })
+    pending_notifier = _FailNotifier()
+    pending = await _scan(pending_db, _CourtListener(hits=[]), [_client()], pending_notifier)
+    assert pending["slack_sent"] == 0
+    assert len(pending_notifier.calls) == 1
+    attempted = [row for row in pending_db.docket_events.docs if row.get("slack_attempts")]
+    assert len(attempted) == 1
 
 
 @pytest.mark.asyncio
