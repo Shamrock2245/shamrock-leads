@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-22 (Federal bond-risk identity paging and search failures)
+
+### Fixed
+- **Every related arrest and defendant row is loaded before matching.** The identity query no longer stops at four rows per defendant or lets one prolific defendant consume a shared page. An arrest that was left off that page can no longer hide a conflicting date of birth and allow an auto-link.
+- **A CourtListener search that fails on every source is a failed scan.** HTTP 403, 5xx, and malformed JSON now return `success: false` with a warning. An empty successful search is unchanged.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a conflicting arrest past the old four-row cap, a scan where every search source fails, and a scan where one source fails and another still returns a filing.
+
 ## [Unreleased] — 2026-11-22 (Federal bond-risk remaining review findings)
 
 ### Fixed

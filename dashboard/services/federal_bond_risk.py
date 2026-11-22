@@ -641,18 +641,42 @@ async def _page_bonds(db, page_size: int) -> list[dict]:
     return bonds
 
 
-async def _related_by_ids(collection, ids: list[str]) -> list[dict]:
+async def _related_by_ids(collection, ids: list[str], page_size: int = BOND_PAGE) -> list[dict]:
+    """Every defendant or arrest row for these ids.
+
+    One prolific defendant must not use up the page and hide another person's
+    arrest. The cursor keeps going until that chunk is exhausted.
+    """
     found: list[dict] = []
-    for start in range(0, len(ids), BOND_PAGE):
-        chunk = ids[start:start + BOND_PAGE]
-        rows = await _to_list(
-            collection.find({"$or": [
+    seen: set = set()
+    step = max(int(page_size or BOND_PAGE), 1)
+    for start in range(0, len(ids), step):
+        chunk = ids[start:start + step]
+        last_id = None
+        while True:
+            query: dict = {"$or": [
                 {"Defendant_ID": {"$in": chunk}},
                 {"defendant_id": {"$in": chunk}},
-            ]}),
-            max(len(chunk) * 4, 1),
-        )
-        found.extend(rows)
+            ]}
+            if last_id is not None:
+                query["_id"] = {"$gt": last_id}
+            cursor = collection.find(query)
+            if hasattr(cursor, "sort"):
+                cursor = cursor.sort("_id", 1)
+            page = await _to_list(cursor, step)
+            if not page:
+                break
+            for row in page:
+                marker = row.get("_id")
+                if marker is not None and marker in seen:
+                    continue
+                if marker is not None:
+                    seen.add(marker)
+                found.append(row)
+            tail = page[-1].get("_id")
+            if tail is None or tail == last_id or len(page) < step:
+                break
+            last_id = tail
     return found
 
 
@@ -669,8 +693,8 @@ async def load_active_clients(db, page_size: int = BOND_PAGE) -> list[ClientIden
     arrests: list[dict] = []
     if defendant_ids:
         unique_ids = list(dict.fromkeys(defendant_ids))
-        defendants = await _related_by_ids(db.defendants, unique_ids)
-        arrests = await _related_by_ids(db.arrests, unique_ids)
+        defendants = await _related_by_ids(db.defendants, unique_ids, page_size)
+        arrests = await _related_by_ids(db.arrests, unique_ids, page_size)
     by_defendant: dict[str, list[dict]] = {}
     for doc in defendants:
         for key in ("Defendant_ID", "defendant_id"):
@@ -846,6 +870,8 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
     surnames = _surnames(clients)
     window = filing_window_start()
     seeds: dict[str, dict] = {}
+    failures: list[str] = []
+    successes = 0
     for search_type in ("r", "rd", "d"):
         result = await client.search_recent(
             search_type=search_type,
@@ -859,8 +885,11 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
         )
         _stop_if_blocked(result)
         if not result.get("success"):
-            log.warning("Federal bond-risk search %s skipped: %s", search_type, result.get("error"))
+            detail = result.get("error") or f"HTTP {result.get('status_code') or 'error'}"
+            failures.append(f"{search_type} {detail}")
+            log.warning("Federal bond-risk search %s failed: %s", search_type, detail)
             continue
+        successes += 1
         for hit in result.get("results") or []:
             if not isinstance(hit, dict):
                 continue
@@ -889,6 +918,14 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
             tagged = dict(hit)
             tagged["_search_type"] = search_type
             seed["hits"].append(tagged)
+
+    if successes == 0 and failures:
+        raise _ScanStop(
+            "CourtListener search failed for every source ("
+            + "; ".join(failures)
+            + "). No alerts were written.",
+            "search_failed",
+        )
 
     views: list[DocketView] = []
     for seed in list(seeds.values())[:MAX_DOCKETS]:
@@ -1376,7 +1413,10 @@ async def run_federal_bond_risk_scan(
         try:
             dockets = await _collect_dockets(client, clients, pause_s)
         except _ScanStop as stop:
-            return {**base, "skipped": stop.skipped, "warning": stop.warning, "rows_written": 0}
+            payload = {**base, "skipped": stop.skipped, "warning": stop.warning, "rows_written": 0}
+            if stop.skipped == "search_failed":
+                payload["success"] = False
+            return payload
 
         decisions: list[tuple[MatchDecision, DocketView]] = []
         for docket in dockets:

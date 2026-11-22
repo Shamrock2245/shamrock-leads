@@ -177,13 +177,14 @@ class _Notifier:
 
 
 class _CourtListener:
-    def __init__(self, hits=None, brief=None, parties=None, entries=None, search_result=None, rd_hits=None):
+    def __init__(self, hits=None, brief=None, parties=None, entries=None, search_result=None, rd_hits=None, search_errors=None):
         self.hits = hits or []
         self.brief = brief or {}
         self.parties = parties or []
         self.entries = entries or []
         self.search_result = search_result
         self.rd_hits = rd_hits
+        self.search_errors = search_errors or {}
         self.calls = []
 
     async def search_limited(self, **kwargs):
@@ -204,6 +205,8 @@ class _CourtListener:
         assert kwargs.get("entry_date_filed_after")
         assert not kwargs.get("filed_after")
         assert int(kwargs.get("page_size") or 20) <= 20
+        if kwargs["search_type"] in self.search_errors:
+            return self.search_errors[kwargs["search_type"]]
         return await self.search_limited(
             search_type=kwargs["search_type"],
             query=kwargs["query"],
@@ -1082,6 +1085,78 @@ async def test_slack_cap_does_not_mark_the_unsent_alert_complete(monkeypatch):
     assert second["slack_sent"] == 1
     assert len(db.notifications.docs) == 2
     assert all(row["alert_complete"] and row["slack_delivered"] for row in db.docket_events.docs)
+
+
+@pytest.mark.asyncio
+async def test_loader_pages_every_arrest_before_judging_dob_conflict():
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "status": "active",
+        "defendant_name": "John Smith",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    db.active_bonds.docs.append({
+        "_id": "bond-2",
+        "Bond_Case_ID": "bond-2",
+        "status": "active",
+        "defendant_name": "Jane Roe",
+        "Defendant_ID": "def-2",
+        "date_of_birth": "1970-01-01",
+    })
+    for index in range(9):
+        db.arrests.docs.append({
+            "_id": f"a{index:02d}",
+            "Defendant_ID": "def-1",
+            "defendant_name": "John Smith",
+            "date_of_birth": "1985-01-15",
+        })
+    db.arrests.docs.append({
+        "_id": "z-conflict",
+        "Defendant_ID": "def-2",
+        "defendant_name": "Jane Roe",
+        "date_of_birth": "1972-03-03",
+    })
+    clients = await load_active_clients(db, page_size=2)
+    by_bond = {client.bond_case_id: client for client in clients}
+    assert by_bond["bond-1"].dob_conflict is False
+    assert by_bond["bond-2"].dob_conflict is True
+    assert "1972-03-03" in by_bond["bond-2"].dobs
+
+
+@pytest.mark.asyncio
+async def test_every_search_source_failing_is_not_an_empty_success(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(search_errors={
+        "r": {"success": False, "error": "HTTP 403", "status_code": 403, "results": []},
+        "rd": {"success": False, "error": "HTTP 500", "status_code": 500, "results": []},
+        "d": {"success": False, "error": "bad_json", "status_code": 200, "results": []},
+    })
+    db = _DB()
+    result = await _scan(db, court, [_client()])
+    assert result["success"] is False
+    assert result["skipped"] == "search_failed"
+    assert "403" in result["warning"]
+    assert result["rows_written"] == 0
+    assert db.docket_events.docs == []
+    assert db.notifications.docs == []
+
+
+@pytest.mark.asyncio
+async def test_one_failed_search_source_does_not_hide_a_successful_one(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John"}],
+        search_errors={"rd": {"success": False, "error": "HTTP 403", "status_code": 403, "results": []}},
+    )
+    db = _DB()
+    result = await _scan(db, court, [_client()])
+    assert result["success"] is True
+    assert result["skipped"] is None
+    assert result["rows_written"] == 1
 
 
 def test_conflicting_client_dobs_do_not_auto_confirm():
