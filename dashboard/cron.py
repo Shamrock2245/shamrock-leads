@@ -451,6 +451,26 @@ async def _run_intake_recovery():
             logger.debug("[IntakeRecovery] digest: %s", e)
 
 
+async def _run_review_harvester():
+    from dashboard.services.review_harvester_service import ReviewHarvesterService
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = (await get_automation_config(db)).get("review_harvester") or {}
+    result = await ReviewHarvesterService(db).scan_and_harvest(cfg)
+    await db["automation_run_log"].insert_one({
+        "automation": "review_harvester",
+        "run_at": datetime.now(timezone.utc),
+        "result": result,
+    })
+    if result.get("sent") or result.get("review_queued"):
+        logger.info(
+            "[ReviewHarvester] mode=%s sent=%s review_queued=%s",
+            result.get("mode"), result.get("sent", 0), result.get("review_queued", 0),
+        )
+
+
 async def _run_poa_low_stock():
     """Alert when surety POA inventory prefixes fall below threshold.
 
@@ -927,6 +947,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("speed_to_contact",   "SpeedToContact",     1800,  90, _run_speed_to_contact, default_enabled=True),
     CronDef("paperwork_chase",    "PaperworkChase",     3600, 150, _run_paperwork_chase, default_enabled=True),
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=True),
+    CronDef("review_harvester",    "ReviewHarvester",   86400, 360, _run_review_harvester, default_enabled=True),
     CronDef("intake_fanout_retry", "IntakeFanout",       300,  75, _run_intake_fanout_retry, default_enabled=True),
     CronDef("lead_fanout_retry",  "LeadFanout",          300,  90, _run_lead_fanout_retry, default_enabled=True),
     CronDef("poa_low_stock",      "POALowStock",       21600, 240, _run_poa_low_stock, default_enabled=True),
