@@ -439,6 +439,7 @@ def _full_body(surety_id):
     )
     indemnitor = _person(
         last_name="INDEMNITOR",
+        dl="TEST-DL-0002",
         phone="555-0110",
         phone2="555-0111",
         work_phone="555-0112",
@@ -468,6 +469,7 @@ def _full_body(surety_id):
     )
     coindemnitor = _person(
         last_name="COINDEMNITOR",
+        dl="TEST-DL-0003",
         phone="555-0118",
         relationship="TEST CO RELATION",
     )

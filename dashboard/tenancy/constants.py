@@ -173,6 +173,7 @@ KNOWN_APP_COLLECTIONS = frozenset(
         "recovery_case_documents",
         "recovery_case_notes",
         "recovery_case_shares",
+        "review_requests_log",
         "scheduled_messages",
         "scraper_config",
         "scraper_run_log",

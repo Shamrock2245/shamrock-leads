@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-22 (Main CI: review log collection and distinct test DLs)
+
+### Fixed
+- **`review_requests_log` is a known tenant-owned collection.** The review harvester from main opened that collection without registering it.
+- **The full write-bond golden uses a different driver license for each party.** The paperwork preflight blocks an indemnitor license that matches the defendant. The synthetic packet now keeps those licenses distinct.
+
 ## [Unreleased] — 2026-11-22 (Federal bond-risk co-defendant, party DOB, notification claim)
 
 ### Fixed
