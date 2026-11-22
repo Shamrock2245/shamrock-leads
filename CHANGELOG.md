@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-22 (Federal bond-risk remaining review findings)
+
+### Fixed
+- **Conflicting dates of birth are not a confirmation.** If the bond, defendant, and arrest records do not agree on a date of birth, matching one of those dates to the docket no longer auto-links the client.
+- **A top-level RECAP document (`type=rd`) is classified.** The search hit itself is a filing, not only the nested `recap_documents` on a docket hit.
+- **Docket parties are paged.** `/parties/` follows `next` until the cursor ends, with a ceiling of 50 pages.
+- **An abandoned Slack claim expires after 30 minutes.** A process that dies after claiming a post does not leave `slack_claim` true forever. Pending undelivered rows are still retried on their own, and the claim is taken before that retry. New alerts are still inserted with one upsert on the unique `(source, source_id)` index.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a conflicting client date of birth, a top-level RECAP hit, a second party page, and a stale Slack claim.
+
 ## [Unreleased] — 2026-11-21 (Federal bond-risk party, window, and Slack claim)
 
 ### Fixed

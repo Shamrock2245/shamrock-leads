@@ -763,14 +763,53 @@ class CourtListenerClient:
             "truncated": True,
         }
 
-    async def list_docket_parties(self, docket_id: int, page_size: int = 20) -> dict:
-        """Party names for one docket. One page. ``extra_info`` may carry a DOB."""
-        params = {
+    async def list_docket_parties(
+        self,
+        docket_id: int,
+        page_size: int = 20,
+        max_pages: int = 1,
+        pause_s: float = 0.0,
+    ) -> dict:
+        """Party names for one docket. Follows ``next`` up to ``max_pages`` (ceiling 50)."""
+        page_cap = max(1, min(int(max_pages or 1), 50))
+        params: Optional[dict] = {
             "docket": int(docket_id),
             "fields": DOCKET_PARTY_FIELDS,
             "page_size": max(1, min(int(page_size or 20), 20)),
         }
-        return await self._read_v4("/parties/", params)
+        url = "/parties/"
+        combined: list = []
+        pages = 0
+        for _ in range(page_cap):
+            res = await self._read_v4(url, params)
+            pages += 1
+            if not res.get("success"):
+                res["results"] = combined or res.get("results") or []
+                res["pages_fetched"] = pages if not combined else pages - 1
+                return res
+            combined.extend(res.get("results") or [])
+            data = res.get("data") if isinstance(res.get("data"), dict) else {}
+            next_url = str((data or {}).get("next") or "").strip()
+            if not next_url or pages >= page_cap:
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": bool(next_url) and pages >= page_cap,
+                }
+            url = next_url
+            params = None
+            if pause_s:
+                await asyncio.sleep(pause_s)
+        return {
+            "success": True,
+            "status_code": 200,
+            "results": combined,
+            "pages_fetched": pages,
+            "truncated": True,
+        }
 
     async def get_opinion(self, opinion_id: int) -> dict:
         """Fetch opinion text and citations via /api/rest/v4/opinions/{id}/.

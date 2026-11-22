@@ -50,6 +50,7 @@ MAX_DOCKETS = 500
 MAX_ROWS = 30
 MAX_SLACK = 10
 LOOKBACK_DAYS = 45
+SLACK_CLAIM_TTL = timedelta(minutes=30)
 # Safety ceiling only. Paging stops when the entry dates leave the window.
 MAX_SEARCH_PAGES = 50
 MAX_ENTRY_PAGES = 2
@@ -351,6 +352,7 @@ class ClientIdentity:
     dobs: frozenset[str]
     numbers: frozenset[str]
     status: str
+    dob_conflict: bool = False
 
 
 @dataclass(frozen=True)
@@ -434,10 +436,12 @@ def match_client(client: ClientIdentity, docket: DocketView) -> tuple[Optional[s
     if not any(full_name_equal(name, other) for name in client.names for other in docket.names):
         return None, ()
     party_dobs = party_dobs_for_client(client, docket)
-    if party_dobs is not None and client.dobs and party_dobs and client.dobs.isdisjoint(party_dobs):
+    # Bond, defendant, and arrest dates that disagree are not a usable DOB.
+    usable_dobs = set() if client.dob_conflict else set(client.dobs)
+    if party_dobs is not None and usable_dobs and party_dobs and usable_dobs.isdisjoint(party_dobs):
         return None, ()
     confirmations = []
-    if party_dobs and client.dobs & party_dobs:
+    if party_dobs and usable_dobs & party_dobs:
         confirmations.append("dob")
     held_numbers = {
         ident for ident in (canonical_identifier(number) for number in client.numbers) if ident
@@ -449,27 +453,45 @@ def match_client(client: ClientIdentity, docket: DocketView) -> tuple[Optional[s
     return "possible", ()
 
 
-_AS_TO = re.compile(
-    r"\bas to\b(?:\s+the)?(?:\s+defendant)?\s+([^.;\n]+)",
-    re.I,
-)
-
-
 def parties_named_in_filing(text: str) -> tuple[str, ...]:
     """People a filing names, such as ``as to Jane Roe``. Empty when it names nobody."""
     found: list[str] = []
-    for match in _AS_TO.finditer(text or ""):
-        chunk = re.split(
-            r"\b(?:entered|issued|filed|ordered|granted)\b",
-            match.group(1),
-            maxsplit=1,
-            flags=re.I,
-        )[0]
-        for part in re.split(r"\s+(?:and|&)\s+|;\s*", chunk):
-            part = re.sub(r"\([^)]*\)", "", part).strip(" ,.-")
-            if name_parts(part):
-                found.append(part)
+    patterns = (
+        r"\bas to\b(?:\s+the)?(?:\s+defendant)?\s+([^.;\n]+)",
+        r"\bfor defendant\s+([^.;\n]+)",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, text or "", flags=re.I):
+            chunk = re.split(
+                r"\b(?:entered|issued|filed|ordered|granted)\b",
+                match.group(1),
+                maxsplit=1,
+                flags=re.I,
+            )[0]
+            for part in re.split(r"\s+(?:and|&)\s+|;\s*", chunk):
+                part = re.sub(r"\([^)]*\)", "", part).strip(" ,.-")
+                if name_parts(part):
+                    found.append(part)
     return tuple(dict.fromkeys(found))
+
+
+def _name_in_text(name: str, text: str) -> bool:
+    parts = name_parts(name)
+    if not parts:
+        return False
+    tokens = set(_tokens(text))
+    return parts[0] in tokens and parts[2] in tokens
+
+
+def parties_affected_by_text(text: str, party_names: list[str]) -> tuple[str, ...]:
+    """Who a filing is about. A single named party does not attach to the others."""
+    explicit = parties_named_in_filing(text)
+    if explicit:
+        return explicit
+    mentioned = [name for name in party_names if _name_in_text(name, text)]
+    if len(mentioned) == 1:
+        return (mentioned[0],)
+    return tuple(dict.fromkeys(mentioned))
 
 
 def _filing_affects_client(event: DocketEvent, client: ClientIdentity) -> bool:
@@ -668,12 +690,18 @@ async def load_active_clients(db, page_size: int = BOND_PAGE) -> list[ClientIden
         bond_case_id = str(bond.get("Bond_Case_ID") or bond.get("bond_case_id") or bond.get("_id") or "").strip()
         related = [bond, *by_defendant.get(defendant_id, []), *arrests_by_defendant.get(defendant_id, [])]
         names: list[str] = []
-        dobs: set[str] = set()
         numbers: set[str] = set()
+        source_sets = []
         for doc in related:
             names.extend(_collect_names(doc))
-            dobs |= _collect_dobs(doc)
+            found = _collect_dobs(doc)
+            if found:
+                source_sets.append(found)
             numbers |= _collect_numbers(doc)
+        dobs: set[str] = set()
+        for found in source_sets:
+            dobs |= found
+        dob_conflict = len(dobs) > 1
         deduped = tuple(dict.fromkeys(names))
         if not bond_case_id or not deduped:
             continue
@@ -684,6 +712,7 @@ async def load_active_clients(db, page_size: int = BOND_PAGE) -> list[ClientIden
             dobs=frozenset(dobs),
             numbers=frozenset(numbers),
             status=str(bond.get("status") or "active"),
+            dob_conflict=dob_conflict,
         ))
     return clients
 
@@ -728,8 +757,8 @@ def _stop_if_blocked(result: dict) -> None:
         )
 
 
-def _events_from_text(text: str, filing_id: str) -> list[DocketEvent]:
-    named = parties_named_in_filing(text)
+def _events_from_text(text: str, filing_id: str, party_names: list[str] | None = None) -> list[DocketEvent]:
+    named = parties_affected_by_text(text, list(party_names or []))
     return [
         DocketEvent(event_type, label, filing_id, named)
         for event_type, label in classify_bond_risk(text)
@@ -791,16 +820,23 @@ def _hit_docket_id(hit: dict, search_type: str) -> str:
     return ""
 
 
-def _extend_events(docket: DocketView, text: str, filing_id: str) -> None:
-    """Keep every filing. The same event type on a new entry or document stays."""
+def _extend_events(docket: DocketView, text: str, filing_id: str, party_names: list[str] | None = None) -> None:
+    """Keep every filing. A later copy of the same filing can add the party it names."""
     if not filing_id:
         return
-    have = {(event.event_type, event.filing_id) for event in docket.events}
-    for event in _events_from_text(text, filing_id):
+    named = parties_affected_by_text(text, list(party_names or [party.name for party in docket.parties]))
+    have = {(event.event_type, event.filing_id): event for event in docket.events}
+    for event in _events_from_text(text, filing_id, party_names or [party.name for party in docket.parties]):
         key = (event.event_type, event.filing_id)
-        if key not in have:
-            docket.events.append(event)
-            have.add(key)
+        existing = have.get(key)
+        if existing is not None:
+            if named:
+                existing.affected_names = tuple(dict.fromkeys((*existing.affected_names, *named)))
+            continue
+        if named:
+            event.affected_names = named
+        docket.events.append(event)
+        have[key] = event
 
 
 async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float) -> list[DocketView]:
@@ -850,7 +886,9 @@ async def _collect_dockets(client, clients: list[ClientIdentity], pause_s: float
             if not key:
                 continue
             seed = seeds.setdefault(key, {"id": docket_id, "hits": []})
-            seed["hits"].append(hit)
+            tagged = dict(hit)
+            tagged["_search_type"] = search_type
+            seed["hits"].append(tagged)
 
     views: list[DocketView] = []
     for seed in list(seeds.values())[:MAX_DOCKETS]:
@@ -878,7 +916,9 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> Optional[DocketV
     else:
         data = brief_res.get("data") or {}
         brief = data if isinstance(data, dict) else {}
-    party_res = await client.list_docket_parties(int(docket_id))
+    party_res = await client.list_docket_parties(
+        int(docket_id), page_size=20, max_pages=50, pause_s=pause_s,
+    )
     _stop_if_blocked(party_res)
     if not party_res.get("success"):
         # Without parties we cannot see a docket DOB, so we do not guess.
@@ -947,27 +987,46 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> Optional[DocketV
                 doc_to_entry[doc_id] = str(entry_token)
         if description and filing.startswith("entry:"):
             text_to_entry.setdefault(_norm_filing_text(description), filing)
-        _extend_events(view, description, filing)
+        _extend_events(view, description, filing, [party.name for party in view.parties])
     for hit in hits:
+        party_names = [party.name for party in view.parties]
+        if hit.get("_search_type") == "rd":
+            blob = " ".join(
+                str(hit.get(key) or "")
+                for key in ("description", "short_description", "snippet")
+            )
+            _attach_document(view, hit, blob, doc_to_entry, text_to_entry, party_names)
         for doc in hit.get("recap_documents") or []:
             if not isinstance(doc, dict):
                 continue
             blob = " ".join(
                 str(doc.get(key) or "") for key in ("description", "short_description", "snippet")
             )
-            linked = _linked_entry_id(doc) or doc_to_entry.get(str(doc.get("id") or ""))
-            if not linked:
-                linked_filing = text_to_entry.get(_norm_filing_text(blob), "")
-            else:
-                linked_filing = f"entry:{linked}"
-            if linked_filing:
-                _extend_events(view, blob, linked_filing)
-                continue
-            doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
-            if not doc_id and blob.strip():
-                doc_id = hashlib.sha256(_norm_filing_text(blob).encode()).hexdigest()[:12]
-            _extend_events(view, blob, f"doc:{doc_id}" if doc_id else "")
+            _attach_document(view, doc, blob, doc_to_entry, text_to_entry, party_names)
     return view
+
+
+def _attach_document(
+    view: DocketView,
+    doc: dict,
+    blob: str,
+    doc_to_entry: dict[str, str],
+    text_to_entry: dict[str, str],
+    party_names: list[str],
+) -> None:
+    """Classify one RECAP document, using its docket entry as the filing id when known."""
+    linked = _linked_entry_id(doc) or doc_to_entry.get(str(doc.get("id") or ""))
+    if not linked:
+        linked_filing = text_to_entry.get(_norm_filing_text(blob), "")
+    else:
+        linked_filing = f"entry:{linked}"
+    if linked_filing:
+        _extend_events(view, blob, linked_filing, party_names)
+        return
+    doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
+    if not doc_id and blob.strip():
+        doc_id = hashlib.sha256(_norm_filing_text(blob).encode()).hexdigest()[:12]
+    _extend_events(view, blob, f"doc:{doc_id}" if doc_id else "", party_names)
 
 
 def _event_document(decision: MatchDecision, docket: DocketView, source_id: str) -> dict:
@@ -1154,13 +1213,18 @@ async def _record_slack(db, source_id: str, delivered: bool, attempts: int) -> N
 
 
 async def _claim_slack_delivery(db, source_id: str) -> bool:
-    """One scan owns this undelivered post. The other overlapping scan does not send."""
+    """One scan owns this undelivered post. A claim older than 30 minutes can be taken again."""
+    cutoff = (datetime.now(timezone.utc) - SLACK_CLAIM_TTL).isoformat()
     result = await db.docket_events.update_one(
         {
             "source": SOURCE,
             "source_id": source_id,
             "slack_delivered": {"$ne": True},
-            "slack_claim": {"$ne": True},
+            "$or": [
+                {"slack_claim": {"$ne": True}},
+                {"slack_claim_at": {"$lt": cutoff}},
+                {"slack_claim_at": {"$exists": False}},
+            ],
         },
         {"$set": {"slack_claim": True, "slack_claim_at": _now()}},
     )
