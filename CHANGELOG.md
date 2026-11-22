@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-22 (Federal bond-risk surnames, tenant cursor, party outages)
+
+### Fixed
+- **Multi-part surnames match in either order.** `John De La Cruz` and `De La Cruz, John` share the surname. Particles such as de, la, del, van, and von stay on the surname.
+- **The hydration cursor is one document per tenant.** With multi-tenant mode on, the cursor id includes the tenant, so a second agency does not collide on `_id` `seed_cursor`. Alert and notification claim keys are tenant-qualified the same way while that mode is on.
+- **A party-list outage is not an empty success.** If every docket's party request fails, the scan returns `success: false` and `skipped: party_hydration_failed`. A partial outage stays successful and names the dockets that failed.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a particle surname, two tenant cursors, a total party-list failure, and one docket whose party list fails beside a docket that still alerts.
+
 ## [Unreleased] — 2026-11-22 (Main CI: review log collection and distinct test DLs)
 
 ### Fixed

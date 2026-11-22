@@ -145,10 +145,27 @@ def _tokens(value: str) -> list[str]:
     return out
 
 
+_SURNAME_PARTICLES = frozenset({
+    "ABU", "AL", "BIN", "DA", "DAS", "DE", "DEL", "DEN", "DER", "DI", "DO",
+    "DOS", "DU", "EL", "LA", "LAS", "LE", "LOS", "MAC", "MC", "SAN", "ST",
+    "TEN", "TER", "VAN", "VON", "Y",
+})
+
+
+def _split_natural_name(tokens: list[str]) -> tuple[str, tuple[str, ...], str]:
+    """Given name first. Surname particles stay on the surname, as in comma order."""
+    end = len(tokens) - 1
+    start = end
+    while start > 1 and tokens[start - 1] in _SURNAME_PARTICLES:
+        start -= 1
+    return tokens[0], tuple(tokens[1:start]), " ".join(tokens[start:])
+
+
 def name_parts(value: str) -> Optional[tuple[str, tuple[str, ...], str]]:
     """Return (first, middles, last) for a full name, or None.
 
     A single token or a one-letter given name is not a full name.
+    ``John De La Cruz`` and ``De La Cruz, John`` share the surname DE LA CRUZ.
     """
     raw = (value or "").strip()
     if not raw:
@@ -164,8 +181,7 @@ def name_parts(value: str) -> Optional[tuple[str, tuple[str, ...], str]]:
         tokens = _tokens(raw)
         if len(tokens) < 2:
             return None
-        first, surname = tokens[0], tokens[-1]
-        middles = tuple(tokens[1:-1])
+        first, middles, surname = _split_natural_name(tokens)
     if len(first) < 2 or len(surname.replace(" ", "")) < 2:
         return None
     return first, middles, surname
@@ -654,7 +670,9 @@ def filing_in_window(value: str, start: Optional[str] = None) -> bool:
 def _source_id(docket: DocketView, decision: MatchDecision) -> str:
     key = docket.docket_id or canonical_identifier(docket.docket_number) or docket.docket_number
     filing = decision.filing_id or "filing-unknown"
-    return f"fl-federal:{key}:{decision.event_type}:{filing}:{decision.client.bond_case_id}"
+    base = f"fl-federal:{key}:{decision.event_type}:{filing}:{decision.client.bond_case_id}"
+    token = _tenant_scope_token()
+    return f"{token}:{base}" if token else base
 
 
 def _now() -> str:
@@ -798,7 +816,7 @@ class _ScanStop(Exception):
 
 def _scan_stopped(base: dict, stop: _ScanStop) -> dict:
     payload = {**base, "skipped": stop.skipped, "warning": stop.warning, "rows_written": 0}
-    if stop.skipped in {"search_failed", "index_unavailable"}:
+    if stop.skipped in {"search_failed", "index_unavailable", "party_hydration_failed"}:
         payload["success"] = False
     return payload
 
@@ -924,11 +942,28 @@ def select_seed_batch(seeds: list[dict], offset: int, ceiling: int) -> tuple[lis
     return batch, next_offset, len(batch) < len(ordered)
 
 
+def _tenant_scope_token() -> str:
+    """Empty while multi-tenant is off, so existing single-tenant keys stay put."""
+    from dashboard.tenancy.context import current_tenant_id
+    from dashboard.tenancy.flag import multi_tenant_enabled
+
+    if not multi_tenant_enabled():
+        return ""
+    tenant = re.sub(r"[^a-z0-9_-]", "", (current_tenant_id() or "unscoped").strip().lower())
+    return tenant or "unscoped"
+
+
+def _seed_cursor_id() -> str:
+    """One cursor document per tenant. A shared ``_id`` collides when the proxy is on."""
+    token = _tenant_scope_token()
+    return "seed_cursor" if not token else f"seed_cursor:{token}"
+
+
 async def _seed_offset(db) -> int:
     collection = getattr(db, "federal_bond_risk_state", None)
     if collection is None:
         return 0
-    row = await collection.find_one({"_id": "seed_cursor"})
+    row = await collection.find_one({"_id": _seed_cursor_id()})
     try:
         return max(int((row or {}).get("offset") or 0), 0)
     except (TypeError, ValueError):
@@ -940,13 +975,13 @@ async def _save_seed_offset(db, offset: int) -> None:
     if collection is None:
         return
     await collection.update_one(
-        {"_id": "seed_cursor"},
+        {"_id": _seed_cursor_id()},
         {"$set": {"offset": int(offset), "updated_at": _now()}},
         upsert=True,
     )
 
 
-async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[DocketView], bool]:
+async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[DocketView], bool, list[str]]:
     """Search recent RECAP and docket pages, then hydrate the seed batch.
 
     Caption surnames are not a filter. A lead-defendant caption with "et al."
@@ -1017,18 +1052,29 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
     )
 
     views: list[DocketView] = []
+    party_failures: list[str] = []
     for seed in batch:
         if pause_s:
             await asyncio.sleep(pause_s)
-        view = await _hydrate(client, seed, pause_s)
+        view, party_error = await _hydrate(client, seed, pause_s)
+        if party_error:
+            party_failures.append(party_error)
+            continue
         if view and view.events and is_fl_federal_criminal(view.court_id, view.docket_number):
             views.append(view)
+    if batch and party_failures and len(party_failures) == len(batch):
+        raise _ScanStop(
+            "CourtListener party lists failed for every docket ("
+            + "; ".join(party_failures[:8])
+            + "). No alerts were written.",
+            "party_hydration_failed",
+        )
     if db is not None:
         await _save_seed_offset(db, next_offset)
-    return views, truncated
+    return views, truncated, party_failures
 
 
-async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> Optional[DocketView]:
+async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[DocketView], str]:
     hits = seed.get("hits") or []
     first = hits[0] if hits else {}
     docket_id = str(seed.get("id") or "")
@@ -1036,7 +1082,7 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> Optional[DocketV
     parties: list[dict] = []
     entries: list[dict] = []
     if not str(docket_id).isdigit():
-        return None
+        return None, ""
     brief_res = await client.get_docket_brief(int(docket_id))
     _stop_if_blocked(brief_res)
     if not brief_res.get("success"):
@@ -1050,8 +1096,9 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> Optional[DocketV
     _stop_if_blocked(party_res)
     if not party_res.get("success"):
         # Without parties we cannot see a docket DOB, so we do not guess.
-        log.warning("Docket %s parties unavailable: %s", docket_id, party_res.get("error"))
-        return None
+        detail = party_res.get("error") or f"HTTP {party_res.get('status_code') or 'error'}"
+        log.warning("Docket %s parties unavailable: %s", docket_id, detail)
+        return None, f"{docket_id} {detail}"
     parties = [row for row in (party_res.get("results") or []) if isinstance(row, dict)]
     entry_res = await client.list_docket_entries(
         int(docket_id), page_size=20, max_pages=MAX_ENTRY_PAGES, pause_s=pause_s,
@@ -1131,7 +1178,7 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> Optional[DocketV
                 str(doc.get(key) or "") for key in ("description", "short_description", "snippet")
             )
             _attach_document(view, doc, blob, doc_to_entry, text_to_entry, party_names)
-    return view
+    return view, ""
 
 
 def _attach_document(
@@ -1307,7 +1354,9 @@ async def _claim_insert(db, document: dict) -> str:
 
 
 def _notification_claim_key(source_id: str, status: str) -> str:
-    return f"{source_id}:{status}"
+    token = _tenant_scope_token()
+    prefix = f"{token}:" if token else ""
+    return f"{prefix}{source_id}:{status}"
 
 
 async def _mark_notification(db, source_id: str, status: str) -> None:
@@ -1584,7 +1633,7 @@ async def run_federal_bond_risk_scan(
                 "slack_pending": slack_pending,
             }
         try:
-            dockets, seeds_truncated = await _collect_dockets(client, pause_s, db)
+            dockets, seeds_truncated, party_failures = await _collect_dockets(client, pause_s, db)
         except _ScanStop as stop:
             return _scan_stopped(base, stop)
         if seeds_truncated:
@@ -1643,16 +1692,21 @@ async def run_federal_bond_risk_scan(
             await _deliver(decision, docket)
         for decision, docket, _outcome in fresh:
             await _deliver(decision, docket)
-        warning = None
+        warnings = []
         if seeds_truncated:
-            warning = (
+            warnings.append(
                 "Matching dockets remain after this hydration batch. "
                 "The next scan continues with the rest."
+            )
+        if party_failures:
+            warnings.append(
+                "CourtListener party list failed for "
+                f"{len(party_failures)} docket(s): " + "; ".join(party_failures[:8])
             )
         return {
             **base,
             "skipped": None,
-            "warning": warning,
+            "warning": " ".join(warnings) or None,
             "bonds_considered": len(clients),
             "dockets_reviewed": len(dockets),
             "rows_written": written,

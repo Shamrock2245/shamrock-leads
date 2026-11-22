@@ -189,7 +189,7 @@ class _Notifier:
 
 
 class _CourtListener:
-    def __init__(self, hits=None, brief=None, parties=None, entries=None, search_result=None, rd_hits=None, search_errors=None):
+    def __init__(self, hits=None, brief=None, parties=None, entries=None, search_result=None, rd_hits=None, search_errors=None, parties_error=None, parties_error_ids=None):
         self.hits = hits or []
         self.brief = brief or {}
         self.parties = parties or []
@@ -197,6 +197,8 @@ class _CourtListener:
         self.search_result = search_result
         self.rd_hits = rd_hits
         self.search_errors = search_errors or {}
+        self.parties_error = parties_error
+        self.parties_error_ids = parties_error_ids
         self.calls = []
 
     async def search_limited(self, **kwargs):
@@ -233,6 +235,10 @@ class _CourtListener:
 
     async def list_docket_parties(self, docket_id: int, **kwargs):
         self.calls.append(("parties", docket_id))
+        if self.parties_error and (
+            self.parties_error_ids is None or docket_id in self.parties_error_ids
+        ):
+            return self.parties_error
         return {"success": True, "status_code": 200, "results": self.parties}
 
     async def list_docket_entries(self, docket_id: int, **kwargs):
@@ -291,6 +297,9 @@ def test_full_name_and_event_rules():
     assert not full_name_equal("John Adam Smith", "John Brian Smith")
     assert not full_name_equal("J Smith", "Smith, J")
     assert not full_name_equal("Smith", "John Smith")
+    assert full_name_equal("John De La Cruz", "De La Cruz, John")
+    assert full_name_equal("John Adam van der Berg", "van der Berg, John Adam")
+    assert not full_name_equal("John De La Cruz", "John Cruz")
 
     assert [item[0] for item in classify_bond_risk("Order Setting Conditions of Release")] == ["bond_conditions_set"]
     assert [item[0] for item in classify_bond_risk("Order Modifying Conditions of Release")] == ["modification_of_release"]
@@ -1379,6 +1388,88 @@ def test_conflicting_party_dobs_do_not_auto_confirm():
     assert match_client(client, docket) == ("possible", ())
     agreed = _docket_for(DocketParty("Smith, John", frozenset({"1985-01-15"})))
     assert match_client(client, agreed)[0] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_seed_cursor_id_is_unique_per_tenant(monkeypatch):
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    from dashboard.services.federal_bond_risk import _save_seed_offset, _seed_offset
+    from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.tenancy.scope import TenantScopedDatabase
+
+    class _Ids:
+        def __init__(self):
+            self.docs = []
+
+        async def find_one(self, filt=None):
+            for doc in self.docs:
+                if all(doc.get(key) == value for key, value in (filt or {}).items()):
+                    return dict(doc)
+            return None
+
+        async def update_one(self, filt, update, upsert=False):
+            for doc in self.docs:
+                if all(doc.get(key) == value for key, value in (filt or {}).items()):
+                    doc.update((update or {}).get("$set") or {})
+                    return type("R", (), {"matched_count": 1, "upserted_id": None})()
+            if not upsert:
+                return type("R", (), {"matched_count": 0, "upserted_id": None})()
+            new_id = (filt or {}).get("_id")
+            if any(doc.get("_id") == new_id for doc in self.docs):
+                raise RuntimeError("E11000 duplicate key")
+            stored = dict(filt or {})
+            stored.update((update or {}).get("$set") or {})
+            self.docs.append(stored)
+            return type("R", (), {"matched_count": 0, "upserted_id": new_id})()
+
+    class _Raw:
+        def __init__(self):
+            self.federal_bond_risk_state = _Ids()
+
+    raw = _Raw()
+    db = TenantScopedDatabase(raw)
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        await _save_seed_offset(db, 3)
+    with bind_job_tenant("beta", "federal_bond_risk"):
+        await _save_seed_offset(db, 7)
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        assert await _seed_offset(db) == 3
+    with bind_job_tenant("beta", "federal_bond_risk"):
+        assert await _seed_offset(db) == 7
+    assert {doc["_id"] for doc in raw.federal_bond_risk_state.docs} == {
+        "seed_cursor:alpha",
+        "seed_cursor:beta",
+    }
+
+
+@pytest.mark.asyncio
+async def test_party_list_outage_is_not_an_empty_success(monkeypatch):
+    _enable(monkeypatch)
+    outage = {"success": False, "error": "HTTP 403", "status_code": 403, "results": []}
+    court = _CourtListener(hits=[_hit()], parties_error=outage)
+    db = _DB()
+    result = await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert result["success"] is False
+    assert result["skipped"] == "party_hydration_failed"
+    assert "403" in result["warning"]
+    assert result["rows_written"] == 0
+    assert db.docket_events.docs == []
+
+    partial = _CourtListener(
+        hits=[
+            _hit(id=1001, docket_id=1001),
+            _hit(id=1002, docket_id=1002, docketNumber="2:24-cr-00456"),
+        ],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties_error={"success": False, "error": "bad_json", "status_code": 200, "results": []},
+        parties_error_ids={1002},
+    )
+    partial_db = _DB()
+    kept = await _scan(partial_db, partial, [_client(dobs=["1985-01-15"])])
+    assert kept["success"] is True
+    assert kept["rows_written"] == 1
+    assert "1002" in kept["warning"]
+    assert partial_db.docket_events.docs[0]["docket_id"] == "1001"
 
 
 @pytest.mark.asyncio
