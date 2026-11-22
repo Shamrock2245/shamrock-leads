@@ -129,7 +129,7 @@ ALL_SERVICE_KEYS = {
     # Messaging / queue (must be toggleable — BB delivery depends on this)
     "outreach_queue",
     # Revenue Automation
-    "speed_to_contact", "paperwork_chase", "docuseal_initial_delivery", "intake_recovery", "auto_reply",
+    "speed_to_contact", "paperwork_chase", "docuseal_initial_delivery", "intake_recovery", "review_harvester", "auto_reply",
     "poa_low_stock", "surety_weekly_reports", "drip_scanner",
     # Lifecycle suite
     "forfeiture_scan", "docuseal_poller", "swipesimple_gmail_poll",
@@ -162,6 +162,7 @@ SERVICE_META = {
     "paperwork_chase":     {"name": "Paperwork Chase",     "icon": "📋", "category": "revenue",  "desc": "Unsigned DocuSeal packet chase via BB (review/staff/full_auto)"},
     "docuseal_initial_delivery": {"name": "Initial DocuSeal Notice", "icon": "✍️", "category": "revenue", "desc": "Disabled by default: one approved iMessage to each explicitly packet-bound signer"},
     "intake_recovery":     {"name": "Intake Recovery",     "icon": "🔄", "category": "revenue",  "desc": "Recover abandoned intakes (review by default)"},
+    "review_harvester":    {"name": "Review Harvester",    "icon": "⭐", "category": "revenue",  "desc": "Post-bond Google review invitations via BlueBubbles (review by default)"},
     "drip_scanner":        {"name": "Drip Scanner",        "icon": "💧", "category": "revenue",  "desc": "Advance outreach drip sequences (day 0/1/3/7)"},
     "poa_low_stock":       {"name": "POA Low Stock",       "icon": "📕", "category": "revenue",  "desc": "Slack when POA inventory tiers run low"},
     "surety_weekly_reports": {"name": "Surety Weekly Reports", "icon": "📊", "category": "revenue", "desc": "Official OSI/Palmetto weekly XLSX into Mongo"},
@@ -469,7 +470,7 @@ async def update_parameters(request: Request):
         if not key or not isinstance(params, dict):
             return JSONResponse({"success": False, "error": "key and params dict required"}, status_code=400)
         if key not in ALL_SERVICE_KEYS and key not in (
-            "speed_to_contact", "paperwork_chase", "intake_recovery", "auto_reply",
+            "speed_to_contact", "paperwork_chase", "intake_recovery", "review_harvester", "auto_reply",
             "outreach_queue", "docuseal_poller", "forfeiture_scan",
         ):
             return JSONResponse({"success": False, "error": f"unknown automation key: {key}"}, status_code=400)

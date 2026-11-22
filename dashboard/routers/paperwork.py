@@ -1822,6 +1822,47 @@ async def packet_builder_finalize(request: Request):
                 return JSONResponse(capacity_error_body(exc), status_code=422)
             bond_data["_charge_layout_notes"] = list(charge_placement.layout_notes)
 
+            from dashboard.services.paperwork_preflight import (
+                HARD_FINALIZE_BLOCK_CODES,
+                evaluate_paperwork_preflight,
+            )
+
+            arrest_doc_for_preflight = None
+            if staff_test is None and booking_for_chain:
+                try:
+                    arrest_doc_for_preflight = await get_collection("arrests").find_one(
+                        {"booking_number": booking_for_chain},
+                        {"_id": 0, "charges": 1, "charge_details": 1, "charge_list": 1, "extra": 1},
+                    )
+                except Exception:
+                    arrest_doc_for_preflight = None
+
+            preflight_report = evaluate_paperwork_preflight(
+                bond_data=bond_data,
+                arrest_doc=arrest_doc_for_preflight,
+                poa_doc=poa_doc,
+                surety_id=surety_id,
+                include_defendant=bool(body.get("include_defendant", True)),
+                self_indemnitor=bool(ctx.get("self_indemnitor")),
+                template="docuseal",
+            )
+            hard_blocks = [
+                issue for issue in preflight_report.get("blocking_issues", [])
+                if issue.get("code") in HARD_FINALIZE_BLOCK_CODES
+            ]
+            if hard_blocks:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "paperwork_preflight_failed",
+                        "message": hard_blocks[0]["message"],
+                        "preflight": preflight_report,
+                    },
+                    status_code=422,
+                )
+        else:
+            preflight_report = None
+
         # Fill + flatten via Adobe PDF Services (combine/compress) with local fallback.
         # DocuSeal uses its two live templates — skip heavy stitch/flatten unless staff
         # forces it (force_flatten) or uploaded extras require a preview archive.
@@ -2246,6 +2287,7 @@ async def packet_builder_finalize(request: Request):
             "esign_provider": provider,
             "flattened_preview_b64": flat_b64[:200] + "…" if flat_b64 and len(flat_b64) > 200 else flat_b64,
             "warnings": collateral_warnings,
+            "preflight": preflight_report,
             "context_summary": {
                 "defendant_name": def_.get("name"),
                 "indemnitor_name": ind.get("name"),
@@ -2647,6 +2689,102 @@ async def mark_clerk_bond_posted(request: Request):
         "poa_locked": posted,
         "updated": updated,
     }
+
+
+@paperwork_bp.post("/paperwork/preflight")
+async def paperwork_preflight_check(request: Request):
+    """Run the 5-point Paperwork Perfection Pre-Flight Gate without creating a submission."""
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+
+    from dashboard.services.packet_builder_service import (
+        resolve_case_context,
+        apply_self_indemnitor,
+    )
+    from dashboard.services.docuseal_service import build_bond_data_from_dashboard
+    from dashboard.services.paperwork_preflight import evaluate_paperwork_preflight
+    from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+    from dashboard.services.surety_entitlements import entitlement_denial
+
+    surety_id = normalize_surety(body.get("surety_id"))
+    if surety_id and not is_supported_surety(surety_id):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": f"Surety '{surety_id}' is not supported for paperwork",
+                "code": "unsupported_surety",
+            },
+            status_code=400,
+        )
+    if surety_id:
+        denied = await entitlement_denial(surety_id)
+        if denied:
+            return JSONResponse(denied, status_code=403)
+
+    ctx = await resolve_case_context(
+        intake_id=body.get("intake_id"),
+        match_id=body.get("match_id"),
+        defendant_id=body.get("defendant_id"),
+        booking_number=body.get("booking_number"),
+        county=body.get("county"),
+        bond_case_id=body.get("bond_case_id"),
+        packet_id=body.get("packet_id"),
+    )
+    if body.get("self_indemnitor"):
+        pin = body.get("authorization_pin") or body.get("pin") or ""
+        try:
+            ctx = apply_self_indemnitor(ctx, pin)
+        except PermissionError as pe:
+            return JSONResponse({"success": False, "error": str(pe)}, status_code=403)
+
+    user = _session_agent(request)
+    _copy_session_agent(ctx, user)
+    bond_data = build_bond_data_from_dashboard(
+        ctx=ctx,
+        field_overrides=body.get("field_overrides") if isinstance(body.get("field_overrides"), dict) else {},
+        body=body,
+        surety_id=surety_id or ctx.get("surety_id"),
+        session=user,
+    )
+    if not bond_data.get("facility") and ctx.get("facility"):
+        bond_data["facility"] = ctx.get("facility")
+
+    booking = str(bond_data.get("booking_number") or ctx.get("booking_number") or "").strip()
+    arrest_doc = None
+    if booking:
+        try:
+            arrest_doc = await get_collection("arrests").find_one({"booking_number": booking}, {"_id": 0})
+        except Exception:
+            arrest_doc = None
+
+    poa_doc = None
+    poa_number = str(bond_data.get("poa_number") or "").strip()
+    resolved_surety = str(bond_data.get("surety_id") or surety_id or "").strip().lower()
+    if poa_number and resolved_surety:
+        try:
+            poa_doc = await get_collection("poa_inventory").find_one(
+                {
+                    "poa_number": poa_number,
+                    "surety_id": resolved_surety,
+                    "status": {"$in": ["assigned", "used"]},
+                },
+                {"_id": 0, "max_bond_value": 1},
+            )
+        except Exception:
+            poa_doc = None
+
+    report = evaluate_paperwork_preflight(
+        bond_data=bond_data,
+        arrest_doc=arrest_doc,
+        poa_doc=poa_doc,
+        surety_id=resolved_surety,
+        include_defendant=bool(body.get("include_defendant", True)),
+        self_indemnitor=bool(ctx.get("self_indemnitor") or body.get("self_indemnitor")),
+        template="docuseal",
+    )
+    return {"success": True, "preflight": report}
 
 
 @paperwork_bp.post("/paperwork/docuseal/prefill-preview")
