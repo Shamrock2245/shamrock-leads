@@ -1071,6 +1071,7 @@ async def _ensure_all_indexes():
         await _idx("automation_run_log", [("run_at", 1)], name="idx_auto_run_ttl", background=True, expireAfterSeconds=2592000)
         await _idx("paperwork_chase_log", [("packet_id", 1), ("chase_type", 1)], name="idx_chase_dedup", background=True)
         await _idx("intake_recovery_log", [("intake_id", 1), ("created_at", -1)], name="idx_recovery_dedup", background=True)
+        await _idx("review_requests_log", [("phone_key", 1), ("status", 1), ("created_at", -1)], name="idx_review_req_dedup", background=True)
         # TTL
         await _idx("error_log", [("timestamp", 1)], name="idx_ttl_30d", background=True, expireAfterSeconds=2592000)
         await _idx("rearrest_alerts", [("detected_at", 1)], name="idx_rearrest_ttl_60d", background=True, expireAfterSeconds=5184000)

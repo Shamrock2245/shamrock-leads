@@ -1320,8 +1320,14 @@ async def review_harvester_sweep(request: Request, api_key: str = ""):
             body = {}
         db = get_db()
         cfg = dict((await get_automation_config(db)).get("review_harvester") or {})
-        if body.get("mode"):
-            cfg["mode"] = str(body["mode"]).strip().lower()
+        if body.get("mode") is not None:
+            requested_mode = str(body["mode"]).strip().lower()
+            if requested_mode not in ("review", "full_auto"):
+                return JSONResponse(
+                    {"ok": False, "error": "invalid_mode", "action": "review_harvester"},
+                    status_code=400,
+                )
+            cfg["mode"] = requested_mode
         if body.get("ignore_quiet_hours") is True:
             cfg["ignore_quiet_hours"] = True
         result = await ReviewHarvesterService(db).scan_and_harvest(cfg)

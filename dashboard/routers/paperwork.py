@@ -2732,6 +2732,15 @@ async def paperwork_preflight_check(request: Request):
         bond_case_id=body.get("bond_case_id"),
         packet_id=body.get("packet_id"),
     )
+    if "arrest_ambiguous" in (ctx.get("sources") or []):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Multiple arrest records match this booking — will not prefill",
+                "code": "ambiguous_identity",
+            },
+            status_code=409,
+        )
     if body.get("self_indemnitor"):
         pin = body.get("authorization_pin") or body.get("pin") or ""
         try:

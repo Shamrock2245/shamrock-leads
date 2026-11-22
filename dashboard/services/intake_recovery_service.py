@@ -17,6 +17,7 @@ Safety:
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 from urllib.parse import quote
@@ -57,6 +58,18 @@ def _is_opted_out(intake: Dict[str, Any]) -> bool:
         if val is True or str(val).strip().lower() in ("true", "1", "yes"):
             return True
     return False
+
+
+async def _consent_blocked(phone: str) -> bool:
+    try:
+        from dashboard.services.sms_consent_ledger import check_send_allowed
+        blocked = await check_send_allowed(phone, "intake_recovery")
+        return bool(blocked)
+    except Exception as exc:
+        logger.error("[intake-recovery] consent lookup failed: %s", type(exc).__name__)
+        if os.getenv("BB_OPTOUT_GATE_FAIL_CLOSED", "").lower() in ("1", "true", "yes"):
+            return True
+        return False
 
 
 class IntakeRecoveryService:
@@ -206,6 +219,10 @@ class IntakeRecoveryService:
                 results["skipped_no_phone"] += 1
                 continue
 
+            if await _consent_blocked(phone):
+                results["skipped_opt_out"] += 1
+                continue
+
             if await self._already_converted(intake, intake_id):
                 results["skipped_converted"] += 1
                 continue
@@ -314,7 +331,7 @@ class IntakeRecoveryService:
 
         message = self.build_recovery_message(intake, touch=touch, resume_url=resume_url)
         from dashboard.services.bb_client import send_message_universal
-        result = await send_message_universal(phone, message)
+        result = await send_message_universal(phone, message, purpose="intake_recovery")
         if result.get("success"):
             logger.info("[intake-recovery] %s sent for intake %s to ...%s",
                         touch, intake.get("intake_id", "?"), phone[-4:])
