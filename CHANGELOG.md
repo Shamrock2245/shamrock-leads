@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-22 (Federal bond-risk downgrade of stale confirmed links)
+
+### Fixed
+- **A confirmed link is replaced when later evidence no longer confirms it.** If a later scan finds conflicting court-party dates of birth, the stored row becomes `possible`, `auto_linked` is cleared, and the previous bond attachment is kept on `match_history`. A filing seen again that no longer matches at all is marked `withdrawn` the same way. Staff get a new notification for the downgrade.
+
+### Tests
+- `tests/test_federal_bond_risk.py` confirms a link, then downgrades it when the party gains a second date of birth, then withdraws it when that date no longer matches.
+
 ## [Unreleased] — 2026-11-22 (Federal bond-risk surnames, tenant cursor, party outages)
 
 ### Fixed

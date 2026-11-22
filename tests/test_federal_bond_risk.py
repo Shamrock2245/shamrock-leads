@@ -1473,6 +1473,50 @@ async def test_party_list_outage_is_not_an_empty_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_later_conflicting_party_dobs_downgrade_a_confirmed_link(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    db = _DB()
+    client = _client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])
+    first = await _scan(db, court, [client])
+    assert first["confirmed"] == 1
+    assert db.docket_events.docs[0]["auto_linked"] is True
+    assert db.docket_events.docs[0]["bond_case_id"] == "bond-1"
+
+    court.parties = [{
+        "name": "Smith, John",
+        "date_of_birth": "1985-01-15",
+        "extra_info": "DOB: 02/02/1990",
+    }]
+    second = await _scan(db, court, [client])
+    assert second["rows_written"] == 1
+    row = db.docket_events.docs[0]
+    assert len(db.docket_events.docs) == 1
+    assert row["match_status"] == "possible"
+    assert row["auto_linked"] is False
+    assert row["bond_case_id"] == ""
+    assert row["matched_defendant_id"] is None
+    assert row["downgraded_from"] == "confirmed"
+    assert row["downgrade_reason"] == "identity_no_longer_confirms"
+    assert row["prior_bond_case_id"] == "bond-1"
+    assert row["match_history"][-1]["from"] == "confirmed"
+    assert row["match_history"][-1]["to"] == "possible"
+    assert any(note["metadata"]["match_status"] == "possible" for note in db.notifications.docs)
+    assert any(note["metadata"].get("downgraded_from") == "confirmed" for note in db.notifications.docs)
+
+    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 02/02/1990"}]
+    await _scan(db, court, [client])
+    withdrawn = db.docket_events.docs[0]
+    assert withdrawn["match_status"] == "withdrawn"
+    assert withdrawn["auto_linked"] is False
+    assert withdrawn["downgrade_reason"] == "identity_no_longer_matches"
+    assert withdrawn["match_history"][-1]["to"] == "withdrawn"
+
+
+@pytest.mark.asyncio
 async def test_et_al_caption_still_matches_a_loaded_codefendant(monkeypatch):
     _enable(monkeypatch)
     court = _CourtListener(

@@ -1390,12 +1390,91 @@ async def _ensure_notification(db, note: dict, source_id: str, status: str) -> b
     return False
 
 
-async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> str:
-    """Insert or upgrade one staff row.
+def _downgrade_copy(name: str, event_label: str) -> tuple[str, str]:
+    title = f"Federal bond risk link withdrawn — {event_label}"
+    message = (
+        f"Previously linked for {name}. {event_label} no longer confirms. "
+        "Newer court identity evidence removed the bond link and left it for staff review."
+    )
+    return _redact_sensitive(title), _redact_sensitive(message)
 
-    Returns ``new``, ``upgraded``, ``retry_slack``, or ``duplicate``.
+
+def _with_downgrade_audit(existing: dict, document: dict, reason: str) -> dict:
+    """Replace a confirmed link and keep the previous bond attachment in history."""
+    now = _now()
+    updated = dict(document)
+    updated["detected_at"] = existing.get("detected_at") or updated.get("detected_at") or now
+    updated["downgraded_at"] = now
+    updated["downgraded_from"] = existing.get("match_status") or "confirmed"
+    updated["downgrade_reason"] = reason
+    updated["prior_bond_case_id"] = existing.get("bond_case_id") or ""
+    updated["prior_matched_defendant_id"] = existing.get("matched_defendant_id")
+    history = list(existing.get("match_history") or [])
+    history.append({
+        "at": now,
+        "from": existing.get("match_status") or "confirmed",
+        "to": updated.get("match_status"),
+        "reason": reason,
+        "auto_linked": bool(existing.get("auto_linked")),
+        "bond_case_id": existing.get("bond_case_id") or "",
+        "matched_defendant_id": existing.get("matched_defendant_id"),
+    })
+    updated["match_history"] = history
+    updated["slack_delivered"] = False
+    updated["alert_complete"] = False
+    updated["slack_claim"] = False
+    updated["slack_attempts"] = int(existing.get("slack_attempts") or 0)
+    updated["notification_written"] = False
+    updated["notification_status"] = ""
+    name = str(updated.get("defendant_name") or existing.get("defendant_name") or "the client")
+    label = str(existing.get("event_type") or updated.get("event_type") or "filing").replace("_", " ")
+    title, message = _downgrade_copy(name, label)
+    updated["title"] = title
+    updated["description"] = message
+    return updated
+
+
+def _downgrade_note(document: dict, source_id: str) -> dict:
+    status = str(document.get("match_status") or "possible")
+    return redact_internal_keys({
+        "notification_id": uuid.uuid4().hex[:12],
+        "type": "federal_bond_risk",
+        "icon": "⚖️",
+        "priority": "high",
+        "color": "#f59e0b",
+        "title": document.get("title") or "Federal bond risk link withdrawn",
+        "message": document.get("description") or "",
+        "entity_id": document.get("candidate_bond_case_id") or document.get("prior_bond_case_id") or "",
+        "entity_type": "federal_bond_risk",
+        "metadata": {
+            "match_status": status,
+            "auto_linked": False,
+            "downgraded_from": "confirmed",
+            "downgrade_reason": document.get("downgrade_reason") or "",
+            "court_id": document.get("court_id") or "",
+            "court_name": document.get("court_name") or "",
+            "docket_number": document.get("docket_number") or "",
+            "docket_id": document.get("docket_id") or "",
+            "event_type": document.get("event_type") or "",
+            "filing_id": document.get("filing_id") or "",
+            "source_id": source_id,
+            "absolute_url": document.get("absolute_url") or "",
+            "candidate_bond_case_id": document.get("candidate_bond_case_id") or document.get("prior_bond_case_id") or "",
+        },
+        "read": False,
+        "dismissed": False,
+        "created_at": _now(),
+    })
+
+
+async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> str:
+    """Insert, upgrade, or downgrade one staff row.
+
+    Returns ``new``, ``upgraded``, ``downgraded``, ``retry_slack``, or ``duplicate``.
     A Slack retry does not write another CRM notification. The row is not
-    complete until Slack delivery is recorded.
+    complete until Slack delivery is recorded. A confirmed link that later
+    evidence no longer supports is replaced and the previous attachment is kept
+    on ``match_history``.
     """
     source_id = _source_id(docket, decision)
     existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
@@ -1405,6 +1484,12 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         existing
         and existing.get("match_status") == "possible"
         and decision.status == "confirmed"
+    )
+    downgrade = bool(
+        existing
+        and existing.get("match_status") == "confirmed"
+        and existing.get("auto_linked")
+        and decision.status != "confirmed"
     )
     if upgrade:
         document["detected_at"] = existing.get("detected_at") or document["detected_at"]
@@ -1418,6 +1503,16 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
             return "duplicate"
         await _ensure_notification(db, note, source_id, decision.status)
         return "upgraded"
+    if downgrade:
+        document = _with_downgrade_audit(existing, document, "identity_no_longer_confirms")
+        result = await db.docket_events.update_one(
+            {"_id": existing.get("_id"), "match_status": "confirmed"},
+            {"$set": document},
+        )
+        if not getattr(result, "matched_count", 0):
+            return "duplicate"
+        await _ensure_notification(db, _downgrade_note(document, source_id), source_id, decision.status)
+        return "downgraded"
     if existing:
         if (
             not existing.get("notification_written")
@@ -1430,6 +1525,8 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
     claimed = await _claim_insert(db, document)
     if claimed != "inserted":
         winner = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+        if winner and winner.get("match_status") == "confirmed" and decision.status != "confirmed":
+            return await _store_decision(db, decision, docket)
         if winner and not winner.get("notification_written"):
             await _ensure_notification(db, note, source_id, decision.status)
         if winner and not winner.get("slack_delivered"):
@@ -1442,6 +1539,41 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         decision.status == "confirmed",
     )
     return "new"
+
+
+async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[MatchDecision]) -> list[str]:
+    """A filing seen again that no longer matches must not stay auto-linked."""
+    filing_ids = {event.filing_id for event in docket.events if event.filing_id}
+    if not filing_ids:
+        return []
+    still_open = {_source_id(docket, decision) for decision in decisions}
+    cursor = db.docket_events.find({"source": SOURCE, "docket_id": str(docket.docket_id)})
+    rows = await _to_list(cursor, 200)
+    withdrawn: list[str] = []
+    for row in rows:
+        source_id = str(row.get("source_id") or "")
+        if row.get("match_status") not in {"confirmed", "possible"}:
+            continue
+        if str(row.get("filing_id") or "") not in filing_ids or source_id in still_open:
+            continue
+        prior_status = row.get("match_status")
+        document = dict(row)
+        document["match_status"] = "withdrawn"
+        document["auto_linked"] = False
+        document["bond_case_id"] = ""
+        document["defendant_id"] = ""
+        document["matched_defendant_id"] = None
+        document["confirmations"] = []
+        document = _with_downgrade_audit(row, document, "identity_no_longer_matches")
+        result = await db.docket_events.update_one(
+            {"_id": row.get("_id"), "match_status": prior_status},
+            {"$set": document},
+        )
+        if not getattr(result, "matched_count", 0):
+            continue
+        await _ensure_notification(db, _downgrade_note(document, source_id), source_id, "withdrawn")
+        withdrawn.append(source_id)
+    return withdrawn
 
 
 async def _record_slack(db, source_id: str, delivered: bool, attempts: int) -> None:
@@ -1640,8 +1772,11 @@ async def run_federal_bond_risk_scan(
             base["truncated"] = True
 
         decisions: list[tuple[MatchDecision, DocketView]] = []
+        by_docket: dict[str, tuple[DocketView, list[MatchDecision]]] = {}
         for docket in dockets:
-            for decision in decide_matches(clients, docket):
+            group = decide_matches(clients, docket)
+            by_docket[str(docket.docket_id)] = (docket, group)
+            for decision in group:
                 decisions.append((decision, docket))
 
         written = 0
@@ -1682,16 +1817,37 @@ async def run_federal_bond_risk_scan(
                 retries.append((decision, docket))
                 continue
             written += 1
-            if decision.status == "confirmed":
-                confirmed += 1
-            else:
+            if outcome == "downgraded" or decision.status != "confirmed":
                 possible += 1
+            else:
+                confirmed += 1
             fresh.append((decision, docket, outcome))
+        withdrawn_ids: list[str] = []
+        for docket, group in by_docket.values():
+            withdrawn_ids.extend(await _withdraw_stale_confirmations(db, docket, group))
         # Undelivered Slack posts are retried before new alerts fill the cap.
         for decision, docket in retries:
             await _deliver(decision, docket)
         for decision, docket, _outcome in fresh:
             await _deliver(decision, docket)
+        for source_id in withdrawn_ids:
+            if slack_attempts >= MAX_SLACK:
+                slack_pending += 1
+                continue
+            row = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+            if not row or not await _claim_slack_delivery(db, source_id):
+                slack_pending += 1
+                continue
+            slack_attempts += 1
+            delivered = _alert_stored(row, notifier)
+            attempts = int(row.get("slack_attempts") or 0) + 1
+            await _record_slack(db, source_id, delivered, attempts)
+            written += 1
+            possible += 1
+            if delivered:
+                slack_sent += 1
+            else:
+                slack_pending += 1
         warnings = []
         if seeds_truncated:
             warnings.append(
