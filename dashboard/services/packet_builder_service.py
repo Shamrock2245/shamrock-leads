@@ -82,6 +82,83 @@ SELF_INDEMNITOR_PIN = os.getenv("SELF_INDEMNITOR_PIN", "")
 SMALL_BOND_MAX = float(os.getenv("SMALL_BOND_MAX", "10000"))
 
 
+def _bond_poa_numbers(bond: Any) -> List[str]:
+    """Powers stored on the bonded case. Not intake, a packet, or the request.
+
+    An empty ``poa_numbers`` list does not hide a populated ``POA_Numbers``.
+    """
+    if not isinstance(bond, dict):
+        return []
+    for key in ("poa_numbers", "POA_Numbers"):
+        raw = bond.get(key)
+        if not isinstance(raw, list):
+            continue
+        cleaned = [str(item).strip() for item in raw if str(item).strip()]
+        if cleaned:
+            return cleaned
+    return []
+
+
+def _case_poa_number(bond: Any, intake: Any, packet: Any) -> str:
+    """Singular power. A bonded-case list beats a stale intake or packet value."""
+    case_poas = _bond_poa_numbers(bond if isinstance(bond, dict) else {})
+    bond_singular = _first(
+        bond.get("POA_Number") if isinstance(bond, dict) else "",
+        bond.get("poa_number") if isinstance(bond, dict) else "",
+    )
+    if case_poas and not bond_singular:
+        return case_poas[0]
+    return _first(
+        bond_singular,
+        intake.get("poa_number") if isinstance(intake, dict) else "",
+        packet.get("poa_number") if isinstance(packet, dict) else "",
+    )
+
+
+def _defendant_name_fields(
+    full_name: str,
+    *,
+    independent_first: str,
+    independent_middle: str,
+    independent_last: str,
+) -> Dict[str, Any]:
+    """Name parts for the packet defendant.
+
+    ``name_parts_synthesized`` is true only when first and last were filled
+    from the raw name because the case had no separate parts. Callers that
+    already stored first and last do not get that mark.
+    """
+    synthesized_first = False
+    synthesized_last = False
+    split_first, split_middle, split_last = _split_name(full_name)
+    from dashboard.services.docuseal_service import _first_and_last_from_raw
+
+    _parsed_first, _parsed_last, preserve = _first_and_last_from_raw(full_name)
+    fields: Dict[str, Any] = {"name": full_name}
+    if independent_first:
+        fields["first_name"] = independent_first
+    elif not preserve and split_first:
+        fields["first_name"] = split_first
+        fields["first_name_synthesized"] = True
+        synthesized_first = True
+    if independent_last:
+        fields["last_name"] = independent_last
+    elif not preserve and split_last:
+        fields["last_name"] = split_last
+        fields["last_name_synthesized"] = True
+        synthesized_last = True
+    if independent_middle:
+        fields["middle_name"] = independent_middle
+    elif synthesized_first and synthesized_last and split_middle:
+        fields["middle_name"] = split_middle
+        fields["middle_name_synthesized"] = True
+    if synthesized_first and synthesized_last:
+        fields["name_parts_synthesized"] = True
+    elif preserve and not independent_first and not independent_last:
+        fields["name_parts_synthesized"] = True
+    return fields
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -140,19 +217,24 @@ def _digits_phone(p: str) -> str:
 
 
 def _split_name(full: str) -> Tuple[str, str, str]:
-    """Split FIRST MIDDLE LAST or LAST, FIRST MIDDLE (jail roster style)."""
+    """Split FIRST MIDDLE LAST or LAST, FIRST MIDDLE (jail roster style).
+
+    A trailing Jr/Sr/II/III/IV/V is not the last name.
+    """
     raw = (full or "").strip()
     if not raw:
         return "", "", ""
     if "," in raw:
         last, rest = [p.strip() for p in raw.split(",", 1)]
-        parts = [p for p in rest.split() if p]
+        last_parts = _drop_name_suffix([p for p in last.split() if p])
+        parts = _drop_name_suffix([p for p in rest.split() if p])
+        last = " ".join(last_parts)
         if not parts:
             return "", "", last
         if len(parts) == 1:
             return parts[0], "", last
         return parts[0], " ".join(parts[1:]), last
-    parts = [p for p in raw.split() if p]
+    parts = _drop_name_suffix([p for p in raw.split() if p])
     if not parts:
         return "", "", ""
     if len(parts) == 1:
@@ -160,6 +242,14 @@ def _split_name(full: str) -> Tuple[str, str, str]:
     if len(parts) == 2:
         return parts[0], "", parts[1]
     return parts[0], " ".join(parts[1:-1]), parts[-1]
+
+
+def _drop_name_suffix(parts: List[str]) -> List[str]:
+    suffixes = {"jr", "sr", "ii", "iii", "iv", "v"}
+    kept = list(parts)
+    while kept and kept[-1].rstrip(".").lower() in suffixes:
+        kept.pop()
+    return kept
 
 
 def is_lee_county(county: Any, state: Any = "") -> bool:
@@ -707,10 +797,11 @@ async def resolve_case_context(
         "bond_case_id": bond.get("Bond_Case_ID") or bond.get("bond_case_id") or bond_case_id,
         "packet_id": packet.get("packet_id") or packet_id,
         "surety_id": surety_id,
-        "poa_number": _first(
-            bond.get("POA_Number"), bond.get("poa_number"),
-            intake.get("poa_number"), packet.get("poa_number"),
-        ),
+        "poa_number": _case_poa_number(bond, intake, packet),
+        # The bonded case's full power list. The singular field above is the
+        # first case power when the case has no separate singular field.
+        # Intake and the finalize body are not a source for that list.
+        "poa_numbers": _bond_poa_numbers(bond),
         "case_number": _first(
             bond.get("Case_Number"), bond.get("case_number"),
             def_nested.get("caseNumber"), intake.get("case_number"),
@@ -757,20 +848,20 @@ async def resolve_case_context(
         "is_small_bond": bond_amount > 0 and bond_amount <= SMALL_BOND_MAX,
         "small_bond_max": SMALL_BOND_MAX,
         "defendant": {
-            "name": def_name,
-            "first_name": _first(
-                defendant.get("First_Name"), defendant.get("first_name"),
-                def_nested.get("firstName"), arrest.get("first_name"),
-                _split_name(def_name)[0],
-            ),
-            "middle_name": _first(
-                defendant.get("Middle_Name"), defendant.get("middle_name"),
-                arrest.get("middle_name"), _split_name(def_name)[1],
-            ),
-            "last_name": _first(
-                defendant.get("Last_Name"), defendant.get("last_name"),
-                def_nested.get("lastName"), arrest.get("last_name"),
-                _split_name(def_name)[2],
+            **_defendant_name_fields(
+                def_name,
+                independent_first=_first(
+                    defendant.get("First_Name"), defendant.get("first_name"),
+                    def_nested.get("firstName"), arrest.get("first_name"),
+                ),
+                independent_middle=_first(
+                    defendant.get("Middle_Name"), defendant.get("middle_name"),
+                    arrest.get("middle_name"),
+                ),
+                independent_last=_first(
+                    defendant.get("Last_Name"), defendant.get("last_name"),
+                    def_nested.get("lastName"), arrest.get("last_name"),
+                ),
             ),
             "dob": _first(
                 defendant.get("DOB"), defendant.get("dob"), def_nested.get("dob"),
@@ -963,7 +1054,9 @@ def build_adaptive_field_map(context: Dict[str, Any]) -> Dict[str, Any]:
     ind_csz = ", ".join(filter(None, [ind.get("city"), ind.get("state")]))
     if ind.get("zip"):
         ind_csz = f"{ind_csz} {ind['zip']}".strip()
-    now = datetime.now(timezone.utc)
+    from dashboard.services.docuseal_service import _office_now
+
+    now = _office_now()
     today = now.strftime("%m/%d/%Y")
     today_long = now.strftime("%B %d, %Y").replace(" 0", " ")
     today_day = str(now.day)

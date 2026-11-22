@@ -83,20 +83,6 @@
     ],
     "value": "County/Circuit"
   },
-  "DefFirstName": {
-    "readonly": false,
-    "submitter_role": [
-      "bondsman"
-    ],
-    "value": "Sample"
-  },
-  "DefLastName": {
-    "readonly": false,
-    "submitter_role": [
-      "bondsman"
-    ],
-    "value": "One"
-  },
   "IndNameandDefName": {
     "readonly": false,
     "submitter_role": [

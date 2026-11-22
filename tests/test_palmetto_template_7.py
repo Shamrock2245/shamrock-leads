@@ -235,7 +235,7 @@ def test_template_7_prefill_fills_block_poas_and_schedule_a():
     assert values["coindemnitor_block_label"] == "Co-Indemnitor"
     assert values["schedule_a_label_indemnitor"] == "TEST INDEMNITOR"
     assert values["schedule_a_label_coindemnitor"] == "TEST COINDEMNITOR"
-    assert values["schedule_a_label_defendant"] == "TEST DEFENDANT"
+    assert values["schedule_a_label_defendant"] == "Defendant, Test"
     for index, text in enumerate(CHARGE_TEXT[:7], start=1):
         assert values[f"poa_number_{index}"] == f"TEST-POA-{index}"
         assert text in values["schedule_a"]

@@ -109,13 +109,14 @@ const SLPaperwork = {
       const pid = p.packet_id || '—';
       const defName = p.defendant_name || p.booking_number || '—';
       const indName = p.indemnitor_name || '—';
-      const surety = (p.surety_id || 'osi').toUpperCase();
+      // Chat-agent packets with no surety are unconfirmed, not OSI.
+      const surety = (p.surety_id || (p.staged_by_agent ? 'unconfirmed' : 'osi')).toUpperCase();
       const status = p.status || p.signnow_status || 'draft';
       const dt = p.created_at ? p.created_at.slice(0, 10) : '—';
       const amt = p.premium_amount || p.bond_amount ? (p.premium_amount || (p.bond_amount * 0.1)) : 500.0;
 
-      const suretyChipCls = surety === 'OSI' ? 'inv-chip-osi' : 'inv-chip-palm';
-      const suretyIcon = surety === 'OSI' ? '🛡️ OSI' : '🌴 PSC';
+      const suretyChipCls = surety === 'OSI' ? 'inv-chip-osi' : (surety === 'UNCONFIRMED' ? '' : 'inv-chip-palm');
+      const suretyIcon = surety === 'OSI' ? '🛡️ OSI' : (surety === 'UNCONFIRMED' ? '⚠️ Surety?' : '🌴 PSC');
 
       let statusBadge = `<span class="badge bg-blue">${this._esc(status)}</span>`;
       if (['signed', 'completed'].includes(status)) {
@@ -170,7 +171,7 @@ const SLPaperwork = {
       else if (st === 'draft') matchSt = ['draft', 'created'].includes(pStatus);
       else if (st === 'voided') matchSt = pStatus === 'voided';
 
-      const pSurety = (p.surety_id || 'osi').toLowerCase();
+      const pSurety = (p.surety_id || (p.staged_by_agent ? 'unconfirmed' : 'osi')).toLowerCase();
       const matchSur = sur === 'all' || pSurety === sur.toLowerCase();
 
       return matchQ && matchSt && matchSur;
@@ -838,7 +839,69 @@ const SLPaperwork = {
       }
     });
     const surety = document.getElementById('pwApSurety');
-    if (surety) surety.disabled = !!locked;
+    // An unconfirmed surety (chat-agent packet) stays pickable while the rest is locked.
+    if (surety) surety.disabled = !!locked && !this._suretyNeedsConfirm();
+  },
+
+  /** True when the resolved case has no surety yet and staff must pick one. */
+  _suretyNeedsConfirm() {
+    return !!(this._adaptiveContext && !this._adaptiveContext.surety_id);
+  },
+
+  /**
+   * Picker state from the resolved context. A case with a surety is preselected
+   * exactly as before. A case without one gets a blank "Confirm surety" option,
+   * selected, so nothing is implied; Send stays disabled (readiness rail) until
+   * a real surety is confirmed.
+   */
+  _syncSuretyPicker(ctx = {}) {
+    const sel = document.getElementById('pwApSurety');
+    if (!sel) return;
+    const existing = Array.from(sel.options || []).find(o => o.value === '');
+    if (ctx.surety_id) {
+      if (existing) sel.removeChild(existing);
+      sel.value = ctx.surety_id;
+      return;
+    }
+    if (!existing) {
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = '— Confirm surety —';
+      sel.insertBefore(opt, sel.firstChild);
+    }
+    sel.value = '';
+  },
+
+  /** Staff picked a surety for a case that had none: persist (audited) then unblock. */
+  async onSuretyPicked(value) {
+    const ctx = this._adaptiveContext;
+    const picked = String(value || '').trim().toLowerCase();
+    if (!ctx || ctx.surety_id || !picked) return;
+    const sel = document.getElementById('pwApSurety');
+    if (ctx.packet_id) {
+      try {
+        const res = await fetch(`/api/paperwork/packets/${encodeURIComponent(ctx.packet_id)}/confirm-surety`, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ surety_id: picked }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.message || data.error || `HTTP ${res.status}`);
+        ctx.surety_id = data.surety_id;
+      } catch (e) {
+        if (sel) sel.value = '';
+        this._setApStatus(`Surety not confirmed: ${e.message}`, 'error');
+        return;
+      }
+    } else {
+      // No stored packet yet: finalize validates and stores the surety server-side.
+      ctx.surety_id = picked;
+    }
+    this._syncSuretyPicker(ctx);
+    if (sel) sel.disabled = true;
+    this._renderDocuSealReadiness({ ...(this._lastContextData || {}), context: ctx });
+    this._setApStatus(`Surety confirmed: ${String(ctx.surety_id).toUpperCase()}`, 'success');
   },
 
   _deriveDocuSealReadiness(data = {}) {
@@ -1104,8 +1167,7 @@ const SLPaperwork = {
     set('pwApBondAmount', ctx.bond_amount || '');
     set('pwApBooking', ctx.booking_number);
     set('pwApCounty', ctx.county);
-    const sur = document.getElementById('pwApSurety');
-    if (sur && ctx.surety_id) sur.value = ctx.surety_id;
+    this._syncSuretyPicker(ctx);
     if (ctx.self_indemnitor) {
       const cb = document.getElementById('pwApSelfIndemnitor');
       if (cb) cb.checked = true;
@@ -1127,6 +1189,7 @@ const SLPaperwork = {
 
       this._adaptiveContext = data.context;
       this._adaptiveFields = data.fields;
+      this._lastContextData = data;
       this._fillFormFromContext(data.context, data.fields);
       this._setAdaptiveAuthoritativeFieldsLocked(true);
       this._renderDocuSealReadiness(data);
@@ -1281,6 +1344,10 @@ const SLPaperwork = {
   },
 
   async finalizeAdaptivePacket() {
+    if (this._adaptiveContext && !this._adaptiveContext.surety_id) {
+      this._setApStatus('Confirm the surety (OSI or Palmetto) before sending.', 'error');
+      return;
+    }
     if (!this._adaptiveReadiness?.chainComplete || !this._adaptiveContext) {
       this._setApStatus('DocuSeal send is blocked until the server resolves a validated Match, BondCase, surety, POA, and complete hydration.', 'error');
       return;

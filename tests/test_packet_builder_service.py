@@ -145,6 +145,8 @@ def test_split_name_handles_jail_roster_comma_form():
     assert first2 == "Jane"
     assert mid2 == "Ann"
     assert last2 == "Doe"
+    suffixed = _split_name("JOHN TEST-DOE JR")
+    assert suffixed == ("JOHN", "", "TEST-DOE")
 
 
 def test_adaptive_field_map_includes_write_bond_date_and_words_keys():
@@ -327,6 +329,220 @@ async def test_resolve_case_context_keeps_bonded_coindemnitor():
     assert "TEST COINDEMNITOR" in names
     built = build_bond_data_from_dashboard(ctx=ctx, surety_id="palmetto")
     assert [row.get("name") for row in built["indemnitors"]] == names
+
+
+@pytest.mark.asyncio
+async def test_resolve_case_context_keeps_every_case_power():
+    """The bonded case's power list reaches prefill. A request row cannot add one."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.docuseal_service import (
+        DocuSealService,
+        build_bond_data_from_dashboard,
+    )
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    bond = {
+        "bond_case_id": "BC-POA",
+        "booking_number": "TEST-BK-POA",
+        "surety_id": "palmetto",
+        "poa_number": "TEST-POA-1",
+        "POA_Numbers": ["TEST-POA-1", "TEST-POA-2"],
+        "defendant_name": "TEST-Doe, John",
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+        "match_status": "validated",
+        "Bond_Amount": 1000,
+    }
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def to_list(self, length=3):
+            return list(self._rows)[:length]
+
+    bonds = MagicMock()
+    bonds.find_one = AsyncMock(return_value=bond)
+    bonds.find = MagicMock(return_value=_Cursor([bond]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor([]))
+
+    def _get(name):
+        if name in ("active_bonds", "bond_cases"):
+            return bonds
+        return empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(bond_case_id="BC-POA")
+
+    assert ctx["poa_number"] == "TEST-POA-1"
+    assert ctx["poa_numbers"] == ["TEST-POA-1", "TEST-POA-2"]
+    built = build_bond_data_from_dashboard(
+        ctx=ctx,
+        body={
+            "charge_details": [
+                {"charge": "TEST CHARGE", "poa_number": "TEST-STALE", "bond_amount": 1000},
+                {"charge": "TEST CHARGE TWO", "poa_number": "TEST-POA-2", "bond_amount": 1000},
+            ],
+        },
+        surety_id="palmetto",
+    )
+    assert built["poa_numbers"] == ["TEST-POA-1", "TEST-POA-2"]
+    values = DocuSealService.prefill_values_from_bond(built)
+    assert values["all_poa_numbers"] == "TEST-POA-1, TEST-POA-2"
+    assert values["bond_numbers"] == "TEST-POA-1, TEST-POA-2"
+    assert "TEST-STALE" not in values["all_poa_numbers"]
+
+
+@pytest.mark.asyncio
+async def test_empty_poa_numbers_does_not_hide_poa_numbers_alias():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    bond = {
+        "bond_case_id": "BC-POA-ALIAS",
+        "booking_number": "TEST-BK-ALIAS",
+        "surety_id": "palmetto",
+        "poa_number": "TEST-POA-1",
+        "poa_numbers": [],
+        "POA_Numbers": ["TEST-POA-1", "TEST-POA-2"],
+        "defendant_name": "TEST-Doe, John",
+        "county": "Lee",
+        "state": "FL",
+    }
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def to_list(self, length=3):
+            return list(self._rows)[:length]
+
+    bonds = MagicMock()
+    bonds.find = MagicMock(return_value=_Cursor([bond]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor([]))
+
+    def _get(name):
+        if name in ("active_bonds", "bond_cases"):
+            return bonds
+        return empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(bond_case_id="BC-POA-ALIAS")
+
+    assert ctx["poa_numbers"] == ["TEST-POA-1", "TEST-POA-2"]
+
+
+@pytest.mark.asyncio
+async def test_case_power_list_supplies_the_singular_power():
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.docuseal_service import DocuSealService, build_bond_data_from_dashboard
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    bond = {
+        "bond_case_id": "BC-POA-LIST",
+        "booking_number": "TEST-BK-LIST",
+        "surety_id": "palmetto",
+        "poa_numbers": ["TEST-POA-1", "TEST-POA-2"],
+        "defendant_name": "TEST-Doe, John",
+        "county": "Lee",
+        "state": "FL",
+    }
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def to_list(self, length=3):
+            return list(self._rows)[:length]
+
+    bonds = MagicMock()
+    bonds.find = MagicMock(return_value=_Cursor([bond]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value={"poa_number": "TEST-STALE"})
+    empty.find = MagicMock(return_value=_Cursor([]))
+
+    def _get(name):
+        if name in ("active_bonds", "bond_cases"):
+            return bonds
+        return empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(
+            bond_case_id="BC-POA-LIST",
+            intake_id="INTAKE-1",
+        )
+
+    assert ctx["poa_number"] == "TEST-POA-1"
+    assert ctx["poa_numbers"] == ["TEST-POA-1", "TEST-POA-2"]
+    built = build_bond_data_from_dashboard(
+        ctx=ctx,
+        intake_doc={"poa_number": "TEST-STALE"},
+        surety_id="palmetto",
+    )
+    values = DocuSealService.prefill_values_from_bond(built)
+    assert values["all_poa_numbers"] == "TEST-POA-1, TEST-POA-2"
+    assert "TEST-STALE" not in values["all_poa_numbers"]
+
+
+@pytest.mark.asyncio
+async def test_raw_suffix_name_is_not_printed_as_the_last_name():
+    """A name with no separate parts must not print Jr as the surname."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from dashboard.services.docuseal_service import (
+        DocuSealService,
+        build_bond_data_from_dashboard,
+    )
+    from dashboard.services.packet_builder_service import resolve_case_context
+
+    bond = {
+        "bond_case_id": "BC-NAME",
+        "booking_number": "TEST-BK-NAME",
+        "surety_id": "osi",
+        "poa_number": "TEST-POA-1",
+        "defendant_name": "JOHN TEST-DOE JR",
+        "county": "Lee",
+        "state": "FL",
+        "case_number": "TEST-CASE-1",
+        "match_status": "validated",
+    }
+
+    class _Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+
+        async def to_list(self, length=3):
+            return list(self._rows)[:length]
+
+    bonds = MagicMock()
+    bonds.find = MagicMock(return_value=_Cursor([bond]))
+    empty = MagicMock()
+    empty.find_one = AsyncMock(return_value=None)
+    empty.find = MagicMock(return_value=_Cursor([]))
+
+    def _get(name):
+        if name in ("active_bonds", "bond_cases"):
+            return bonds
+        return empty
+
+    with patch("dashboard.extensions.get_collection", side_effect=_get):
+        ctx = await resolve_case_context(bond_case_id="BC-NAME")
+
+    assert ctx["defendant"]["last_name"] == "TEST-DOE"
+    assert ctx["defendant"]["first_name"] == "JOHN"
+    assert ctx["defendant"]["name_parts_synthesized"] is True
+    built = build_bond_data_from_dashboard(ctx=ctx, surety_id="osi")
+    values = DocuSealService.prefill_values_from_bond(built)
+    assert values["defendant_name"] == "TEST-Doe, John"
+    assert values["DefName"] == "TEST-Doe, John"
 
 
 def _bond_cursor(docs):
