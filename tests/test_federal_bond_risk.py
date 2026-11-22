@@ -58,6 +58,17 @@ def _clear_live_sends(monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
 
+def _stored(doc: dict, key: str):
+    if key in doc or "." not in key:
+        return doc.get(key), key in doc
+    current = doc
+    for part in key.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return None, False
+        current = current[part]
+    return current, True
+
+
 def _match(doc: dict, filt: dict | None) -> bool:
     if not filt:
         return True
@@ -66,28 +77,28 @@ def _match(doc: dict, filt: dict | None) -> bool:
             if not any(_match(doc, sub) for sub in expected):
                 return False
             continue
+        value, present = _stored(doc, key)
         if isinstance(expected, dict) and "$in" in expected:
-            if doc.get(key) not in expected["$in"]:
+            if value not in expected["$in"]:
                 return False
             continue
         if isinstance(expected, dict) and "$gt" in expected:
-            if doc.get(key) is None or not doc.get(key) > expected["$gt"]:
+            if value is None or not value > expected["$gt"]:
                 return False
             continue
         if isinstance(expected, dict) and "$ne" in expected:
-            if doc.get(key) == expected["$ne"]:
+            if value == expected["$ne"]:
                 return False
             continue
         if isinstance(expected, dict) and "$lt" in expected:
-            if doc.get(key) is None or not str(doc.get(key)) < str(expected["$lt"]):
+            if value is None or not str(value) < str(expected["$lt"]):
                 return False
             continue
         if isinstance(expected, dict) and "$exists" in expected:
-            present = key in doc and doc.get(key) is not None
-            if bool(expected["$exists"]) != present:
+            if bool(expected["$exists"]) != (present and value is not None):
                 return False
             continue
-        if doc.get(key) != expected:
+        if value != expected:
             return False
     return True
 
@@ -162,6 +173,7 @@ class _DB:
         self.arrests = _Collection()
         self.docket_events = _Collection()
         self.notifications = _Collection()
+        self.federal_bond_risk_state = _Collection()
 
     def __getitem__(self, name: str):
         return getattr(self, name)
@@ -1280,6 +1292,104 @@ async def test_abandoned_slack_claim_can_be_taken_again(monkeypatch):
     assert db.docket_events.docs[0]["slack_delivered"] is True
     assert db.docket_events.docs[0]["alert_complete"] is True
     assert len(db.notifications.docs) == 0
+
+
+def test_order_as_to_stops_at_the_party_name():
+    from dashboard.services.federal_bond_risk import (
+        _events_from_text,
+        decide_matches,
+        parties_affected_by_text,
+        parties_named_in_filing,
+    )
+
+    text = "ORDER as to John Smith denying Motion to Modify Conditions of Release"
+    assert parties_named_in_filing(text) == ("John Smith",)
+    assert parties_affected_by_text(text, ["Smith, John", "Roe, Jane"]) == ("Smith, John",)
+    # A capture that is not itself a party still falls back to the party named in it.
+    assert parties_affected_by_text(
+        "ORDER as to John Smith foobar",
+        ["Smith, John", "Roe, Jane"],
+    ) == ("Smith, John",)
+    events = _events_from_text(text, "entry:77", ["Smith, John", "Roe, Jane"])
+    assert events
+    assert all(event.affected_names == ("Smith, John",) for event in events)
+    docket = _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        DocketParty("Roe, Jane", frozenset({"1990-02-02"})),
+        events=events,
+    )
+    clients = [
+        _client(name="John Smith", dobs=["1985-01-15"], bond="bond-j", defendant="def-j"),
+        _client(name="Jane Roe", dobs=["1990-02-02"], bond="bond-r", defendant="def-r"),
+    ]
+    decisions = decide_matches(clients, docket)
+    assert decisions
+    assert {row.client.bond_case_id for row in decisions} == {"bond-j"}
+
+
+@pytest.mark.asyncio
+async def test_hydration_past_the_ceiling_continues_on_the_next_scan(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.HYDRATE_CEILING", 1)
+    hits = [
+        _hit(id=1001, docket_id=1001),
+        _hit(id=1002, docket_id=1002, docketNumber="2:24-cr-00456"),
+    ]
+    court = _CourtListener(hits=hits, parties=[{"name": "Smith, John"}])
+    db = _DB()
+    first = await _scan(db, court, [_client()])
+    assert first["truncated"] is True
+    assert first["rows_written"] == 1
+    assert "next scan" in first["warning"]
+    second = await _scan(db, court, [_client()])
+    assert second["rows_written"] == 1
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002"}
+
+
+@pytest.mark.asyncio
+async def test_failed_notification_is_written_on_the_next_scan(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
+    db = _DB()
+    real_insert = db.notifications.insert_one
+    state = {"calls": 0}
+
+    async def fail_once(doc):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise RuntimeError("notification down")
+        return await real_insert(doc)
+
+    db.notifications.insert_one = fail_once
+    first = await _scan(db, court, [_client()])
+    assert first["rows_written"] == 1
+    assert db.notifications.docs == []
+    assert db.docket_events.docs[0].get("notification_written") is not True
+    second = await _scan(db, court, [_client()])
+    assert second["rows_written"] == 0
+    assert len(db.docket_events.docs) == 1
+    assert len(db.notifications.docs) == 1
+    assert db.notifications.docs[0]["metadata"]["source_id"] == db.docket_events.docs[0]["source_id"]
+    assert db.docket_events.docs[0]["notification_written"] is True
+
+
+@pytest.mark.asyncio
+async def test_missing_unique_index_aborts_before_any_alert(monkeypatch):
+    _enable(monkeypatch)
+
+    async def unavailable(*_args, **_kwargs):
+        raise RuntimeError("index down")
+
+    court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
+    db = _DB()
+    db.docket_events.create_index = unavailable
+    result = await _scan(db, court, [_client()])
+    assert result["success"] is False
+    assert result["skipped"] == "index_unavailable"
+    assert result["rows_written"] == 0
+    assert db.docket_events.docs == []
+    assert db.notifications.docs == []
+    assert court.calls == []
 
 
 def test_filing_as_to_one_defendant_does_not_link_the_other():

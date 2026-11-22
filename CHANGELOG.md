@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-22 (Federal bond-risk name boundary, hydration, notification, index)
+
+### Fixed
+- **An "as to" capture stops at the party name.** "ORDER as to John Smith denying Motion to Modify Conditions of Release" keeps John Smith. A capture that is not an exact docket party falls back to the known party named in that text.
+- **Hydration continues past the first 500 seeds.** The scan hydrates the seeds returned by the bounded search, up to a 3,000 ceiling. When seeds remain, the result is marked truncated and the next scan starts at the next docket instead of repeating the same batch.
+- **A CRM notification is retried after a partial write.** If the notification insert fails after the docket event is claimed, a later scan writes that notification without a second event.
+- **The scan stops when the unique alert index cannot be created or seen.** It does not continue and report a normal empty run.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the order-title capture, a second scan hydrating the docket left past the ceiling, a notification insert that fails once, and an index that cannot be created.
+
 ## [Unreleased] — 2026-11-22 (Federal bond-risk identity paging and search failures)
 
 ### Fixed
