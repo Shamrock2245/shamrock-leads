@@ -514,3 +514,26 @@ def test_unverified_indemnitor_refuses_before_payload(monkeypatch, surety_id, in
     assert result["delivery"].await_count == 0
     assert result["payment"].await_count == 0
     assert result["ensure"].await_count == 0
+
+
+# The CI pytest list names this file and not tests/test_docuseal_prefill_defects.py.
+# Importing the cases here runs them on that list without a workflow edit.
+from tests.test_docuseal_prefill_defects import (  # noqa: E402,F401
+    test_ambiguous_raw_name_does_not_fill_component_fields,
+    test_verified_last_name_survives_a_stale_raw_name,
+    test_compound_surname_is_not_cut_to_the_last_word,
+    test_conflicting_poa_number_fails_closed,
+    test_court_type_drops_a_trailing_court_word,
+    test_defendant_name_is_last_first_without_middle,
+    test_id_scan_name_replaces_stale_structured_parts,
+    test_packet_submission_sets_send_email_and_send_sms_false,
+    test_poa_list_order_is_list_then_charge_rows_then_singular,
+    test_empty_charge_details_uses_charge_list_poas,
+    test_printed_dates_use_america_new_york,
+    test_request_charge_row_cannot_add_an_unbound_poa,
+    test_second_poa_is_kept_when_poa_number_is_also_set,
+    test_stale_charge_list_does_not_add_a_poa,
+    test_stored_first_and_last_win_when_the_raw_name_has_a_middle,
+    test_structured_first_and_last_win_over_the_roster_string,
+    test_synthesized_suffix_split_does_not_become_the_last_name,
+)

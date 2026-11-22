@@ -45,5 +45,5 @@ def test_prefill_includes_coindemnitor_on_indemnitor_header():
     assert mod.E2E_INDEMNITOR_NAME in vals["indemnitor_name"]
     assert mod.E2E_COINDEMNITOR_NAME in vals["indemnitor_name"]
     assert vals["coindemnitor_name"] == mod.E2E_COINDEMNITOR_NAME
-    assert vals["defendant_name"] == mod.E2E_DEFENDANT_NAME
+    assert vals["defendant_name"] == "Testcase, Marcus"
     assert "Brendan" in (vals.get("agent_name") or bond["bondsman_name"])
