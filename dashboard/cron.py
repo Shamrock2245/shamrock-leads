@@ -96,8 +96,10 @@ async def _run_federal_bond_risk():
     """Florida federal bond-risk scan. No CourtListener call unless the flag and token are set.
 
     Expected skips (flag off, no token, maintenance, no open bonds) are logged
-    and the cycle completes. A scan that reports ``success: false`` is a
-    monitoring outage and is raised so the cron runner does not treat it as done.
+    and the cycle completes. A scan that reports ``success: false`` or
+    ``incomplete_coverage: true`` (partial search-source or hydration outages)
+    is a monitoring outage and is raised so the cron runner does not treat it as
+    healthy.
     """
     from dashboard.services.federal_bond_risk import run_federal_bond_risk_scan
     from dashboard.extensions import get_db
@@ -115,6 +117,24 @@ async def _run_federal_bond_risk():
             "[FederalBondRisk] skipped=%s warning=%s",
             result.get("skipped"),
             "yes" if result.get("warning") else "no",
+        )
+    elif result.get("incomplete_coverage"):
+        warning = result.get("warning") or "incomplete coverage"
+        logger.warning(
+            "[FederalBondRisk] incomplete scan rows=%s confirmed=%s possible=%s warning=%s",
+            result.get("rows_written", 0),
+            result.get("confirmed", 0),
+            result.get("possible", 0),
+            warning,
+        )
+        raise RuntimeError(f"Federal bond-risk scan incomplete: {warning}")
+    elif result.get("warning"):
+        logger.warning(
+            "[FederalBondRisk] rows=%s confirmed=%s possible=%s warning=%s",
+            result.get("rows_written", 0),
+            result.get("confirmed", 0),
+            result.get("possible", 0),
+            result.get("warning"),
         )
     else:
         logger.info(

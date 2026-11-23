@@ -497,17 +497,23 @@ async def test_upgrade_and_downgrade_write_audit_events(monkeypatch):
     recorded = [row for row in db.audit_events.docs if row["reason"] == "match_recorded"]
     assert recorded
     assert recorded[0]["actor"] == "system"
+    assert recorded[0]["confidence"] == 0.5
     assert recorded[0]["new_state"]["match_status"] == "possible"
+    assert recorded[0]["new_state"]["confidence"] == 0.5
     assert recorded[0]["evidence"]["filing_id"]
+    assert recorded[0]["evidence"]["candidate_bond_case_id"] == client.bond_case_id
 
     court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
     await _scan(db, court, [_client(dobs=["1985-01-15"])])
     upgraded = [row for row in db.audit_events.docs if row["reason"] == "possible_upgraded_to_confirmed"]
     assert upgraded[0]["actor"] == "system"
+    assert upgraded[0]["confidence"] == 0.95
     assert upgraded[0]["old_state"]["match_status"] == "possible"
     assert upgraded[0]["old_state"]["auto_linked"] is False
+    assert upgraded[0]["old_state"]["confidence"] == 0.5
     assert upgraded[0]["new_state"]["match_status"] == "confirmed"
     assert upgraded[0]["new_state"]["auto_linked"] is True
+    assert upgraded[0]["new_state"]["confidence"] == 0.95
 
     court.parties = [{
         "name": "Smith, John",
@@ -518,9 +524,12 @@ async def test_upgrade_and_downgrade_write_audit_events(monkeypatch):
     }]
     await _scan(db, court, [_client(dobs=["1985-01-15"])])
     downgraded = [row for row in db.audit_events.docs if row["reason"] == "identity_no_longer_confirms"]
+    assert downgraded[0]["confidence"] == 0.5
     assert downgraded[0]["old_state"]["auto_linked"] is True
+    assert downgraded[0]["old_state"]["confidence"] == 0.95
     assert downgraded[0]["new_state"]["match_status"] == "possible"
     assert downgraded[0]["new_state"]["auto_linked"] is False
+    assert downgraded[0]["new_state"]["confidence"] == 0.5
 
 
 @pytest.mark.asyncio
@@ -1878,6 +1887,10 @@ async def test_one_failed_search_source_does_not_hide_a_successful_one(monkeypat
     assert result["success"] is True
     assert result["skipped"] is None
     assert result["rows_written"] == 1
+    assert result["incomplete_coverage"] is True
+    assert result["truncated"] is True
+    assert "rd" in result["warning"]
+    assert "403" in result["warning"]
 
 
 def test_conflicting_client_dobs_do_not_auto_confirm():
@@ -3373,3 +3386,173 @@ async def test_failed_confirmed_notification_is_not_replayed_after_downgrade_or_
     assert second_b["rows_written"] == 1
     assert len(db_b.notifications.docs) == 1
     assert db_b.notifications.docs[0]["metadata"]["match_status"] == "possible"
+
+
+@pytest.mark.asyncio
+async def test_partial_search_outage_holds_checkpoint_and_raises_from_cron(monkeypatch):
+    from dashboard.cron import _run_federal_bond_risk
+
+    _enable(monkeypatch)
+
+    class _PartialSearchThenRecover(_CourtListener):
+        def __init__(self):
+            super().__init__(parties=[{"name": "Smith, John"}])
+            self.fail_rd = True
+            self.r_starts = []
+
+        async def search_recent(self, **kwargs):
+            self.calls.append(("search_recent", kwargs))
+            stype = kwargs["search_type"]
+            if stype == "rd" and self.fail_rd:
+                return {"success": False, "error": "HTTP 403", "status_code": 403, "results": []}
+            if stype != "r":
+                return {"success": True, "results": [], "truncated": False}
+            start_url = kwargs.get("start_url") or ""
+            self.r_starts.append(start_url)
+            if not start_url:
+                return {
+                    "success": True,
+                    "truncated": True,
+                    "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=slice2",
+                    "results": [
+                        _window_hit(4001, "2026-11-20", "Detention hearing", "2:24-cr-00401"),
+                    ],
+                }
+            assert start_url.endswith("cursor=slice2")
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [
+                    _window_hit(4002, "2026-11-19", "Detention hearing", "2:24-cr-00402"),
+                ],
+            }
+
+    court = _PartialSearchThenRecover()
+    db = _DB()
+
+    first = await _scan(db, court, [_client()])
+    assert first["success"] is True
+    assert first["rows_written"] == 1
+    assert first["incomplete_coverage"] is True
+    assert first["truncated"] is True
+    assert "rd" in first["warning"]
+    assert "403" in first["warning"]
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"4001"}
+
+    # Once rd recovers, Scan 2 re-reads slice 1 before advancing to slice 2.
+    court.fail_rd = False
+    second = await _scan(db, court, [_client()])
+    assert second["incomplete_coverage"] is False
+    assert court.r_starts == ["", ""]
+
+    third = await _scan(db, court, [_client()])
+    assert third["rows_written"] == 1
+    assert court.r_starts[-1].endswith("cursor=slice2")
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"4001", "4002"}
+
+    async def partial_scan(_db):
+        return {
+            "success": True,
+            "skipped": None,
+            "incomplete_coverage": True,
+            "rows_written": 1,
+            "confirmed": 0,
+            "possible": 1,
+            "warning": "CourtListener search failed for 1 source(s): rd HTTP 403",
+        }
+
+    async def paginated_scan(_db):
+        return {
+            "success": True,
+            "skipped": None,
+            "incomplete_coverage": False,
+            "rows_written": 1,
+            "confirmed": 0,
+            "possible": 1,
+            "warning": "Matching dockets remain after this hydration batch.",
+        }
+
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: object())
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", partial_scan)
+    with pytest.raises(RuntimeError, match="incomplete.*rd HTTP 403"):
+        await _run_federal_bond_risk()
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", paginated_scan)
+    await _run_federal_bond_risk()
+
+
+@pytest.mark.asyncio
+async def test_match_audits_record_confidence_across_transitions(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
+
+    # Dual confirmation (DOB + case number) -> confidence 1.0
+    dual_db = _DB()
+    dual_court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    await _scan(dual_db, dual_court, [_client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])])
+    assert dual_db.audit_events.docs[-1]["confidence"] == 1.0
+    assert dual_db.audit_events.docs[-1]["new_state"]["confidence"] == 1.0
+    assert dual_db.docket_events.docs[0]["confidence"] == 1.0
+
+    # Ambiguous multi-client match -> confidence 0.25
+    amb_db = _DB()
+    amb_clients = [
+        _client(name="John Smith", dobs=["1985-01-15"], bond="bond-a", defendant="def-a"),
+        _client(name="John Smith", dobs=["1985-01-15"], bond="bond-b", defendant="def-b"),
+    ]
+    await _scan(amb_db, dual_court, amb_clients)
+    assert len(amb_db.audit_events.docs) == 2
+    assert all(row["confidence"] == 0.25 for row in amb_db.audit_events.docs)
+    assert all(row["new_state"]["ambiguous"] is True for row in amb_db.audit_events.docs)
+
+    # Lifecycle transitions: confirmed (0.95) -> withdrawn by closure (0.0) -> restored (0.95) -> entry corrected (0.0)
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    class _CorrectingCourt(_CourtListener):
+        def __init__(self):
+            super().__init__(
+                hits=[_hit(recap_documents=[])],
+                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+            )
+            self.benign = False
+
+        async def list_docket_entries(self, docket_id, **kwargs):
+            desc = "Status conference" if self.benign else "Arrest warrant issued for John Smith"
+            return {"success": True, "truncated": False, "results": [{"id": 88, "description": desc, "date_filed": today}]}
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    court = _CorrectingCourt()
+    await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+
+    db.active_bonds.docs[0]["status"] = "exonerated"
+    await run_federal_bond_risk_scan(db, client=_CourtListener(hits=[]), notifier=_Notifier(), pause_s=0)
+    by_reason = {row["reason"]: row for row in db.audit_events.docs}
+    assert by_reason["match_recorded"]["confidence"] == 0.95
+    assert by_reason["client_no_longer_active"]["confidence"] == 0.0
+    assert by_reason["client_no_longer_active"]["old_state"]["confidence"] == 0.95
+    assert by_reason["client_no_longer_active"]["new_state"]["confidence"] == 0.0
+    assert by_reason["client_no_longer_active"]["evidence"]["candidate_bond_case_id"] == "bond-1"
+
+    db.active_bonds.docs[0]["status"] = "reinstated"
+    await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+    court.benign = True
+    await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+
+    reasons = [(row["reason"], row["confidence"], row["old_state"].get("confidence", 0.0), row["new_state"]["confidence"]) for row in db.audit_events.docs]
+    assert ("withdrawn_restored", 0.95, 0.0, 0.95) in reasons
+    assert ("identity_no_longer_matches", 0.0, 0.95, 0.0) in reasons

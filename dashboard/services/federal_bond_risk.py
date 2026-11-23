@@ -1397,7 +1397,7 @@ async def _collect_dockets(
     client,
     pause_s: float,
     db=None,
-) -> tuple[list[DocketView], bool, int, list[tuple[str, str, str]], list[str], list[str], list[str], list[str]]:
+) -> tuple[list[DocketView], bool, int, list[tuple[str, str, str]], list[str], list[str], list[str], list[str], list[str]]:
     """Search recent RECAP and docket pages, then hydrate the seed batch.
 
     Search checkpoints and seed offsets are returned rather than committed here
@@ -1541,6 +1541,7 @@ async def _collect_dockets(
         truncated,
         next_offset,
         pending_checkpoints,
+        failures,
         party_failures,
         entry_failures,
         brief_failures,
@@ -1712,6 +1713,11 @@ def _event_document(decision: MatchDecision, docket: DocketView, source_id: str)
         "auto_linked": confirmed,
         "ambiguous": decision.ambiguous,
         "confirmations": list(decision.confirmations),
+        "confidence": _match_confidence({
+            "match_status": decision.status,
+            "confirmations": decision.confirmations,
+            "ambiguous": decision.ambiguous,
+        }),
         "bond_case_id": decision.client.bond_case_id if confirmed else "",
         "candidate_bond_case_id": decision.client.bond_case_id,
         "defendant_id": decision.client.defendant_id if confirmed else "",
@@ -1918,6 +1924,23 @@ async def _ensure_notification(db, note: dict, source_id: str, status: str, revi
     return False
 
 
+def _match_confidence(row: Optional[dict]) -> float:
+    """Numeric confidence in [0.0, 1.0] derived from match status and confirmations."""
+    if not row:
+        return 0.0
+    status = str(row.get("match_status") or "")
+    confirmations = [str(c) for c in (row.get("confirmations") or []) if c]
+    if status == "confirmed":
+        if "dob" in confirmations and "case_number" in confirmations:
+            return 1.0
+        if confirmations:
+            return 0.95
+        return 0.9
+    if status == "possible":
+        return 0.25 if row.get("ambiguous") else 0.5
+    return 0.0
+
+
 def _audit_payload(source_id: str, before: dict, after: dict, reason: str, evidence: dict) -> dict:
     now = _now()
     return {
@@ -1929,6 +1952,7 @@ def _audit_payload(source_id: str, before: dict, after: dict, reason: str, evide
         "actor": "system",
         "agent_name": "federal_bond_risk",
         "source": SOURCE,
+        "confidence": _match_confidence(after),
         "reason": reason,
         "old_state": before,
         "new_state": after,
@@ -2130,9 +2154,11 @@ def _match_state(row: dict) -> dict:
     return {
         "match_status": row.get("match_status") or "",
         "auto_linked": bool(row.get("auto_linked")),
+        "ambiguous": bool(row.get("ambiguous")),
         "bond_case_id": row.get("bond_case_id") or "",
         "defendant_id": row.get("defendant_id") or row.get("matched_defendant_id") or "",
         "confirmations": list(row.get("confirmations") or []),
+        "confidence": _match_confidence(row),
     }
 
 
@@ -2144,6 +2170,8 @@ def _match_evidence(row: dict, reason: str) -> dict:
         "filing_id": row.get("filing_id") or "",
         "event_type": row.get("event_type") or "",
         "confirmations": list(row.get("confirmations") or []),
+        "candidate_bond_case_id": row.get("candidate_bond_case_id") or row.get("bond_case_id") or "",
+        "candidate_defendant_id": row.get("candidate_defendant_id") or row.get("defendant_id") or "",
     }
 
 
@@ -2401,10 +2429,12 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> list[st
             document = _mutable_update(row)
             document["match_status"] = "withdrawn"
             document["auto_linked"] = False
+            document["ambiguous"] = False
             document["bond_case_id"] = ""
             document["defendant_id"] = ""
             document["matched_defendant_id"] = None
             document["confirmations"] = []
+            document["confidence"] = 0.0
             document["notification_revision"] = _next_notification_revision(row, "withdrawn")
             document = _with_downgrade_audit(row, document, "client_no_longer_active")
             audit = _queue_match_audit(
@@ -2448,10 +2478,12 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
             document = _mutable_update(row)
             document["match_status"] = "withdrawn"
             document["auto_linked"] = False
+            document["ambiguous"] = False
             document["bond_case_id"] = ""
             document["defendant_id"] = ""
             document["matched_defendant_id"] = None
             document["confirmations"] = []
+            document["confidence"] = 0.0
             document["notification_revision"] = _next_notification_revision(row, "withdrawn")
             document = _with_downgrade_audit(row, document, "identity_no_longer_matches")
             audit = _queue_match_audit(
@@ -2722,6 +2754,7 @@ async def run_federal_bond_risk_scan(
                 hydrate_truncated,
                 next_seed_offset,
                 pending_checkpoints,
+                search_failures,
                 party_failures,
                 entry_failures,
                 brief_failures,
@@ -2774,13 +2807,15 @@ async def run_federal_bond_risk_scan(
         attempted_notifications.update(withdrawn_ids)
         written += len(withdrawn_ids)
         possible += len(withdrawn_ids)
-        # Only advance search/hydration checkpoints once every match in this slice
-        # has been hydrated and stored; otherwise a capped or failed-hydration run
-        # re-reads this slice so no docket is skipped.
-        hydration_incomplete = bool(party_failures or entry_failures or brief_failures)
-        if hydration_incomplete and (seeds_truncated or pending_checkpoints):
+        # Only advance search/hydration checkpoints once every search source and
+        # match in this slice has succeeded and been stored; otherwise a capped
+        # or partially failed run re-reads this slice so nothing is skipped.
+        incomplete_coverage = bool(
+            search_failures or party_failures or entry_failures or brief_failures
+        )
+        if incomplete_coverage and (seeds_truncated or pending_checkpoints or search_failures):
             base["truncated"] = True
-        if db is not None and not rows_capped and not hydration_incomplete:
+        if db is not None and not rows_capped and not incomplete_coverage:
             await _save_seed_offset(db, next_seed_offset)
             if next_seed_offset == 0:
                 for search_type, day, resume_url in pending_checkpoints:
@@ -2799,6 +2834,11 @@ async def run_federal_bond_risk_scan(
             warnings.append(
                 "Matching dockets remain after this hydration batch. "
                 "The next scan continues with the rest."
+            )
+        if search_failures:
+            warnings.append(
+                "CourtListener search failed for "
+                f"{len(search_failures)} source(s): " + "; ".join(search_failures[:8])
             )
         if party_failures:
             warnings.append(
@@ -2819,6 +2859,7 @@ async def run_federal_bond_risk_scan(
         return {
             **base,
             "skipped": None,
+            "incomplete_coverage": incomplete_coverage,
             "warning": " ".join(warnings) or None,
             "bonds_considered": len(clients),
             "dockets_reviewed": len(dockets),
