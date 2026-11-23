@@ -44,6 +44,7 @@ FLAG = "FEDERAL_BOND_RISK_ALERTS"
 SOURCE = "courtlistener_federal_bond_risk"
 EVENT_INDEX = "idx_federal_bond_risk_source"
 NOTIFICATION_INDEX = "idx_federal_bond_risk_notification"
+AUDIT_INDEX = "idx_federal_bond_risk_audit"
 _ON = {"1", "true", "yes", "on"}
 ACTIVE_STATUSES = ("active", "monitoring", "alert", "reinstated")
 FL_FEDERAL_COURTS = frozenset(FL_FEDERAL_COURT_IDS)
@@ -929,7 +930,8 @@ class _ScanStop(Exception):
 def _scan_stopped(base: dict, stop: _ScanStop) -> dict:
     payload = {**base, "skipped": stop.skipped, "warning": stop.warning, "rows_written": 0}
     if stop.skipped in {
-        "search_failed", "index_unavailable", "party_hydration_failed", "entry_hydration_failed",
+        "search_failed", "search_truncated", "index_unavailable",
+        "party_hydration_failed", "entry_hydration_failed",
     }:
         payload["success"] = False
     return payload
@@ -1067,6 +1069,43 @@ def _tenant_scope_token() -> str:
     return tenant or "unscoped"
 
 
+def _search_before_id(search_type: str) -> str:
+    """One date checkpoint per search type. A shared id collides across tenants."""
+    token = _tenant_scope_token()
+    base = f"search_before:{search_type}"
+    return base if not token else f"{base}:{token}"
+
+
+def _oldest_entry_day(hits: list) -> str:
+    days = []
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        day = str(_hit_entry_date(hit) or "")[:10]
+        if len(day) == 10 and day[4] == "-" and day[7] == "-":
+            days.append(day)
+    return min(days) if days else ""
+
+
+async def _search_before(db, search_type: str) -> str:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return ""
+    row = await collection.find_one({"_id": _search_before_id(search_type)})
+    return str((row or {}).get("before") or "")[:10]
+
+
+async def _save_search_before(db, search_type: str, day: str) -> None:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return
+    await collection.update_one(
+        {"_id": _search_before_id(search_type)},
+        {"$set": {"before": str(day or "")[:10], "updated_at": _now()}},
+        upsert=True,
+    )
+
+
 def _seed_cursor_id() -> str:
     """One cursor document per tenant. A shared ``_id`` collides when the proxy is on."""
     token = _tenant_scope_token()
@@ -1095,7 +1134,7 @@ async def _save_seed_offset(db, offset: int) -> None:
     )
 
 
-async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[DocketView], bool, list[str], list[str], list[str]]:
+async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[DocketView], bool, list[str], list[str], list[str], list[str]]:
     """Search recent RECAP and docket pages, then hydrate the seed batch.
 
     Caption surnames are not a filter. A lead-defendant caption with "et al."
@@ -1107,12 +1146,16 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
     seeds: dict[str, dict] = {}
     failures: list[str] = []
     successes = 0
+    search_notes: list[str] = []
+    stuck: list[str] = []
     for search_type in ("r", "rd", "d"):
+        cursor = await _search_before(db, search_type)
         result = await client.search_recent(
             search_type=search_type,
             query=BOND_RISK_QUERY,
             courts=list(FL_FEDERAL_COURT_IDS),
             entry_date_filed_after=window,
+            entry_date_filed_before=cursor or None,
             page_size=20,
             max_pages=MAX_SEARCH_PAGES,
             pause_s=pause_s,
@@ -1125,6 +1168,18 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
             log.warning("Federal bond-risk search %s failed: %s", search_type, detail)
             continue
         successes += 1
+        if result.get("truncated"):
+            oldest = _oldest_entry_day(result.get("results") or [])
+            if not oldest or (cursor and oldest >= cursor):
+                stuck.append(search_type)
+            else:
+                await _save_search_before(db, search_type, oldest)
+                search_notes.append(
+                    f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest}. "
+                    "The next scan continues with the older filings."
+                )
+        else:
+            await _save_search_before(db, search_type, "")
         for hit in result.get("results") or []:
             if not isinstance(hit, dict):
                 continue
@@ -1157,6 +1212,12 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
             + "; ".join(failures)
             + "). No alerts were written.",
             "search_failed",
+        )
+    if stuck:
+        raise _ScanStop(
+            "CourtListener search hit the 1,000-hit ceiling and the date window "
+            "could not move (" + ", ".join(stuck) + "). No alerts were written.",
+            "search_truncated",
         )
 
     batch, next_offset, truncated = select_seed_batch(
@@ -1191,16 +1252,19 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
             + "). No alerts were written.",
             "party_hydration_failed",
         )
-    if entry_attempts and len(entry_failures) == entry_attempts:
+    hard_entry_failures = [
+        item for item in entry_failures if not str(item).endswith("entry_list_truncated")
+    ]
+    if entry_attempts and hard_entry_failures and len(hard_entry_failures) == entry_attempts:
         raise _ScanStop(
             "CourtListener docket entries failed for every docket ("
-            + "; ".join(entry_failures[:8])
+            + "; ".join(hard_entry_failures[:8])
             + "). No alerts were written.",
             "entry_hydration_failed",
         )
     if db is not None:
         await _save_seed_offset(db, next_offset)
-    return views, truncated, party_failures, entry_failures, brief_failures
+    return views, truncated or bool(search_notes), party_failures, entry_failures, brief_failures, search_notes
 
 
 async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[DocketView], str, str, str]:
@@ -1231,6 +1295,9 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         detail = party_res.get("error") or f"HTTP {party_res.get('status_code') or 'error'}"
         log.warning("Docket %s parties unavailable: %s", docket_id, detail)
         return None, f"{docket_id} {detail}", "", ""
+    if party_res.get("truncated"):
+        log.warning("Docket %s party list was truncated", docket_id)
+        return None, f"{docket_id} party_list_truncated", "", ""
     parties = [row for row in (party_res.get("results") or []) if isinstance(row, dict)]
     entry_res = await client.list_docket_entries(
         int(docket_id), page_size=20, max_pages=MAX_ENTRY_PAGES, pause_s=pause_s,
@@ -1246,6 +1313,9 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         detail = entry_res.get("error") or f"HTTP {entry_res.get('status_code') or 'error'}"
         log.warning("Docket %s entries unavailable: %s", docket_id, detail)
         entry_error = f"{docket_id} {detail}"
+    if entry_res.get("success") and entry_res.get("truncated"):
+        log.warning("Docket %s entry list was truncated", docket_id)
+        entry_error = f"{docket_id} entry_list_truncated"
 
     court_id = _court_slug(brief) or _court_slug(first)
     docket_number = _first_text(brief, "docket_number") or _first_text(first, "docketNumber", "docket_number")
@@ -1443,9 +1513,9 @@ async def _ensure_unique_index(collection, keys, name: str, partial: dict) -> bo
 
 
 async def ensure_federal_bond_alert_index(db) -> None:
-    """Unique claim keys for the alert row and its CRM notification.
+    """Unique claim keys for the alert row, its notification, and its audit.
 
-    A scan that cannot create or see either index stops before any alert.
+    A scan that cannot create or see an index stops before any alert.
     """
     events_ready = await _ensure_unique_index(
         getattr(db, "docket_events", None),
@@ -1459,7 +1529,13 @@ async def ensure_federal_bond_alert_index(db) -> None:
         NOTIFICATION_INDEX,
         {"type": "federal_bond_risk"},
     )
-    if not events_ready or not notes_ready:
+    audits_ready = await _ensure_unique_index(
+        getattr(db, "audit_events", None),
+        [("source", 1), ("event_id", 1)],
+        AUDIT_INDEX,
+        {"source": SOURCE},
+    )
+    if not events_ready or not notes_ready or not audits_ready:
         raise _ScanStop(
             "Federal bond-risk unique index was not created. Scan stopped before any alert was written.",
             "index_unavailable",
@@ -1589,23 +1665,24 @@ def _queue_match_audit(
     return payload
 
 
-async def _audit_already_written(db, event_id: str) -> bool:
+async def _insert_audit(db, payload: dict) -> bool:
+    """Claim one immutable audit. Overlapping scans share the ``event_id``."""
     collection = getattr(db, "audit_events", None)
+    event_id = str(payload.get("event_id") or "")
     if collection is None or not event_id:
         return False
-    found = await collection.find_one({"source": SOURCE, "event_id": event_id})
-    return bool(found)
-
-
-async def _insert_audit(db, payload: dict) -> bool:
-    if await _audit_already_written(db, str(payload.get("event_id") or "")):
-        return True
-    collection = getattr(db, "audit_events", None)
-    if collection is None:
-        return False
+    stored = dict(payload)
+    stored["source"] = SOURCE
+    stored["event_id"] = event_id
     try:
-        await collection.insert_one(dict(payload))
+        await collection.update_one(
+            {"source": SOURCE, "event_id": event_id},
+            {"$setOnInsert": stored},
+            upsert=True,
+        )
     except Exception as exc:
+        if _duplicate_key(exc):
+            return True
         log.warning("Federal bond-risk audit was not written: %s", type(exc).__name__)
         return False
     return True
@@ -1636,14 +1713,12 @@ async def _remember_audit(db, source_id: str, payload: dict) -> None:
     if events is None or not source_id:
         return
     event_id = str(payload.get("event_id") or "")
-    row = await events.find_one({"source": SOURCE, "source_id": source_id})
-    pending = [item for item in ((row or {}).get("audit_pending") or []) if isinstance(item, dict)]
-    if any(item.get("event_id") == event_id for item in pending):
+    if not event_id:
         return
     try:
         await events.update_one(
             {"source": SOURCE, "source_id": source_id},
-            {"$push": {"audit_pending": payload}},
+            {"$addToSet": {"audit_pending": payload}},
         )
     except Exception as exc:
         log.warning("Federal bond-risk pending audit was not stored: %s", type(exc).__name__)
@@ -2255,7 +2330,7 @@ async def run_federal_bond_risk_scan(
                 "slack_pending": slack_pending,
             }
         try:
-            dockets, seeds_truncated, party_failures, entry_failures, brief_failures = await _collect_dockets(client, pause_s, db)
+            dockets, seeds_truncated, party_failures, entry_failures, brief_failures, search_notes = await _collect_dockets(client, pause_s, db)
         except _ScanStop as stop:
             slack_sent, slack_pending, _attempts = await retry_pending_slack(db, notifier)
             stopped = _scan_stopped(base, stop)
@@ -2319,6 +2394,7 @@ async def run_federal_bond_risk_scan(
                 "CourtListener docket brief failed for "
                 f"{len(brief_failures)} docket(s): " + "; ".join(brief_failures[:8])
             )
+        warnings.extend(search_notes)
         return {
             **base,
             "skipped": None,

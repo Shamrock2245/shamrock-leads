@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk search ceiling and audit claim)
+
+### Fixed
+- **A search that hits the 1,000-hit ceiling continues on the next scan.** The oldest filing date becomes the next upper bound, so older warrant and release hits are not left behind the newest 50 pages. If that date cannot move, the scan fails instead of looking complete.
+- **A truncated party list does not match.** A truncated entry list is named in the warning, and the entries already read are still used.
+- **An audit event is claimed once.** The unique key is `(source, event_id)`, written with one upsert, so two scans cannot insert the same immutable audit.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the older search window, a ceiling that cannot move, a truncated party list, a truncated entry list, and two audit inserts that share one `event_id`.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk restore, DOB conflict, Slack claim)
 
 ### Fixed

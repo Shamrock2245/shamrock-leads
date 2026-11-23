@@ -1023,6 +1023,14 @@ async def _ensure_all_indexes():
             partialFilterExpression={"type": "federal_bond_risk"},
             background=True,
         )
+        await _idx(
+            "audit_events",
+            [("source", 1), ("event_id", 1)],
+            unique=True,
+            name="idx_federal_bond_risk_audit",
+            partialFilterExpression={"source": "courtlistener_federal_bond_risk"},
+            background=True,
+        )
         # Co-signer candidates. TTL deletes a contacts doc only while
         # unreviewed_expire_at is set (every candidate still unreviewed).
         # Mixed docs are trimmed by purge_unreviewed_candidates instead.

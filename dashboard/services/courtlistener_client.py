@@ -625,6 +625,7 @@ class CourtListenerClient:
         courts: Optional[list] = None,
         filed_after: Optional[str] = None,
         entry_date_filed_after: Optional[str] = None,
+        entry_date_filed_before: Optional[str] = None,
         page_size: int = 20,
         max_pages: int = 50,
         pause_s: float = 0.0,
@@ -657,6 +658,8 @@ class CourtListenerClient:
         }
         if entry_date_filed_after:
             params["entry_date_filed_after"] = entry_date_filed_after
+        if entry_date_filed_before:
+            params["entry_date_filed_before"] = entry_date_filed_before
         if filed_after:
             params["filed_after"] = filed_after
         if courts:

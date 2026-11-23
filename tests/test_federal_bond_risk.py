@@ -160,6 +160,7 @@ class _Collection:
         if "_id" in fields:
             raise RuntimeError("immutable _id")
         pushed = update.get("$push") or {}
+        added = update.get("$addToSet") or {}
         for doc in self.docs:
             if _match(doc, filt):
                 doc.update(fields)
@@ -168,6 +169,13 @@ class _Collection:
                     if not isinstance(current, list):
                         current = []
                     current.append(value)
+                    doc[key] = current
+                for key, value in added.items():
+                    current = doc.get(key)
+                    if not isinstance(current, list):
+                        current = []
+                    if value not in current:
+                        current.append(value)
                     doc[key] = current
                 return _WriteResult(matched_count=1, upserted_id=None)
         if not upsert:
@@ -216,6 +224,8 @@ class _CourtListener:
         self.parties_error_ids = parties_error_ids
         self.entries_error = None
         self.entries_error_ids = None
+        self.parties_truncated = False
+        self.entries_truncated = False
         self.calls = []
 
     async def search_limited(self, **kwargs):
@@ -256,7 +266,12 @@ class _CourtListener:
             self.parties_error_ids is None or docket_id in self.parties_error_ids
         ):
             return self.parties_error
-        return {"success": True, "status_code": 200, "results": self.parties}
+        return {
+            "success": True,
+            "status_code": 200,
+            "results": self.parties,
+            "truncated": bool(self.parties_truncated),
+        }
 
     async def list_docket_entries(self, docket_id: int, **kwargs):
         self.calls.append(("entries", docket_id))
@@ -265,7 +280,12 @@ class _CourtListener:
             self.entries_error_ids is None or docket_id in self.entries_error_ids
         ):
             return self.entries_error
-        return {"success": True, "status_code": 200, "results": self.entries}
+        return {
+            "success": True,
+            "status_code": 200,
+            "results": self.entries,
+            "truncated": bool(self.entries_truncated),
+        }
 
     async def close(self):
         return None
@@ -636,16 +656,16 @@ async def test_failed_match_audit_is_written_on_the_next_scan(monkeypatch):
     _enable(monkeypatch)
     court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
     db = _DB()
-    real_insert = db.audit_events.insert_one
+    real_update = db.audit_events.update_one
     state = {"calls": 0}
 
-    async def fail_once(doc):
+    async def fail_once(filt, update, upsert=False):
         state["calls"] += 1
-        if state["calls"] == 1:
+        if state["calls"] == 1 and upsert:
             raise RuntimeError("audit down")
-        return await real_insert(doc)
+        return await real_update(filt, update, upsert=upsert)
 
-    db.audit_events.insert_one = fail_once
+    db.audit_events.update_one = fail_once
     await _scan(db, court, [_client()])
     assert db.docket_events.docs[0]["match_status"] == "possible"
     assert db.audit_events.docs == []
@@ -710,16 +730,16 @@ async def test_upgrade_keeps_an_earlier_pending_audit(monkeypatch):
     _enable(monkeypatch)
     court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
     db = _DB()
-    real_insert = db.audit_events.insert_one
+    real_update = db.audit_events.update_one
     state = {"calls": 0}
 
-    async def fail_until_retry(doc):
+    async def fail_until_retry(filt, update, upsert=False):
         state["calls"] += 1
-        if state["calls"] <= 3:
+        if state["calls"] <= 3 and upsert:
             raise RuntimeError("audit down")
-        return await real_insert(doc)
+        return await real_update(filt, update, upsert=upsert)
 
-    db.audit_events.insert_one = fail_until_retry
+    db.audit_events.update_one = fail_until_retry
     await _scan(db, court, [_client()])
     original = db.docket_events.docs[0]["audit_pending"][0]["event_id"]
     court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
@@ -2362,6 +2382,150 @@ async def test_active_bonds_page_past_the_first_batch():
     clients = await load_active_clients(db, page_size=200)
     assert len(clients) == 201
     assert clients[-1].bond_case_id == "bond-0200"
+
+
+def _window_hit(docket_id: int, day: str, description: str, number: str = "2:24-cr-00123"):
+    return _hit(
+        id=docket_id,
+        docket_id=docket_id,
+        docketNumber=number,
+        entry_date_filed=day,
+        recap_documents=[{"id": docket_id, "description": description, "entry_date_filed": day}],
+    )
+
+
+class _PagedSearch(_CourtListener):
+    def __init__(self):
+        super().__init__(parties=[{"name": "Smith, John"}])
+
+    async def search_recent(self, **kwargs):
+        self.calls.append(("search_recent", kwargs))
+        if kwargs["search_type"] != "r":
+            return {"success": True, "results": [], "truncated": False}
+        before = kwargs.get("entry_date_filed_before")
+        if not before:
+            return {
+                "success": True,
+                "truncated": True,
+                "results": [_window_hit(1001, "2026-11-20", "Arrest warrant issued")],
+            }
+        if before == "2026-11-20":
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [_window_hit(1002, "2026-11-01", "Failure to appear", "2:24-cr-00456")],
+            }
+        return {"success": True, "results": [], "truncated": False}
+
+
+class _StuckSearch(_CourtListener):
+    def __init__(self):
+        super().__init__(parties=[{"name": "Smith, John"}])
+
+    async def search_recent(self, **kwargs):
+        self.calls.append(("search_recent", kwargs))
+        if kwargs["search_type"] != "r":
+            return {"success": True, "results": [], "truncated": False}
+        return {
+            "success": True,
+            "truncated": True,
+            "results": [_window_hit(1001, "2026-11-20", "Arrest warrant issued")],
+        }
+
+
+@pytest.mark.asyncio
+async def test_truncated_search_continues_before_the_oldest_hit(monkeypatch):
+    _enable(monkeypatch)
+    court = _PagedSearch()
+    db = _DB()
+    first = await _scan(db, court, [_client()])
+    assert first["rows_written"] == 1
+    assert first["truncated"] is True
+    assert "1,000-hit ceiling" in first["warning"]
+    assert db.docket_events.docs[0]["docket_id"] == "1001"
+    second = await _scan(db, court, [_client()])
+    assert second["rows_written"] == 1
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002"}
+    r_calls = [kwargs for kind, kwargs in court.calls if kind == "search_recent" and kwargs["search_type"] == "r"]
+    assert r_calls[0].get("entry_date_filed_before") in (None, "")
+    assert r_calls[1]["entry_date_filed_before"] == "2026-11-20"
+
+    stuck = _StuckSearch()
+    stuck_db = _DB()
+    opened = await _scan(stuck_db, stuck, [_client()])
+    assert opened["rows_written"] == 1
+    blocked = await _scan(stuck_db, stuck, [_client()])
+    assert blocked["success"] is False
+    assert blocked["skipped"] == "search_truncated"
+    assert blocked["rows_written"] == 0
+    assert len(stuck_db.docket_events.docs) == 1
+
+
+@pytest.mark.asyncio
+async def test_truncated_party_list_does_not_match_and_entry_truncation_is_named(monkeypatch):
+    _enable(monkeypatch)
+    parties = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}])
+    parties.parties_truncated = True
+    missed = await _scan(_DB(), parties, [_client(dobs=["1985-01-15"])])
+    assert missed["success"] is False
+    assert missed["skipped"] == "party_hydration_failed"
+    assert missed["rows_written"] == 0
+
+    entries = _CourtListener(
+        hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued"}])],
+        parties=[{"name": "Smith, John"}],
+        entries=[{"id": 21, "description": "Detention hearing", "date_filed": datetime.now(timezone.utc).date().isoformat()}],
+    )
+    entries.entries_truncated = True
+    db = _DB()
+    kept = await _scan(db, entries, [_client()])
+    assert kept["success"] is True
+    assert kept["rows_written"] >= 1
+    assert "entry_list_truncated" in kept["warning"]
+
+
+@pytest.mark.asyncio
+async def test_audit_event_id_is_claimed_once(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import (
+        AUDIT_INDEX,
+        SOURCE,
+        _insert_audit,
+        ensure_federal_bond_alert_index,
+    )
+
+    db = _DB()
+    await ensure_federal_bond_alert_index(db)
+    assert any(
+        kwargs.get("name") == AUDIT_INDEX and kwargs.get("unique") is True
+        for _keys, kwargs in db.audit_events.indexes
+    )
+    payload = {
+        "event_id": "evt-1",
+        "source": SOURCE,
+        "reason": "match_recorded",
+        "actor": "system",
+        "event_type": "federal_bond_risk_match_changed",
+    }
+    assert await _insert_audit(db, payload) is True
+    assert await _insert_audit(db, dict(payload)) is True
+    assert len(db.audit_events.docs) == 1
+    assert db.audit_events.docs[0]["event_id"] == "evt-1"
+
+    class _DuplicateKey(Exception):
+        code = 11000
+
+    class _Racer(_Collection):
+        async def update_one(self, filt, update, upsert=False):
+            if upsert:
+                raise _DuplicateKey("E11000 duplicate key")
+            return await super().update_one(filt, update, upsert=upsert)
+
+    raced = _DB()
+    raced.audit_events = _Racer()
+    raced.audit_events.docs.append(dict(payload))
+    assert await _insert_audit(raced, payload) is True
+    assert len(raced.audit_events.docs) == 1
 
 
 @pytest.mark.asyncio
