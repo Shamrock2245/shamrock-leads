@@ -1399,10 +1399,15 @@ def _downgrade_copy(name: str, event_label: str) -> tuple[str, str]:
     return _redact_sensitive(title), _redact_sensitive(message)
 
 
+def _mutable_update(document: dict) -> dict:
+    """Fields safe to ``$set``. ``_id`` is immutable and must not be in the update."""
+    return {key: value for key, value in document.items() if key != "_id"}
+
+
 def _with_downgrade_audit(existing: dict, document: dict, reason: str) -> dict:
     """Replace a confirmed link and keep the previous bond attachment in history."""
     now = _now()
-    updated = dict(document)
+    updated = _mutable_update(document)
     updated["detected_at"] = existing.get("detected_at") or updated.get("detected_at") or now
     updated["downgraded_at"] = now
     updated["downgraded_from"] = existing.get("match_status") or "confirmed"
@@ -1497,7 +1502,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "possible"},
-            {"$set": document},
+            {"$set": _mutable_update(document)},
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
@@ -1507,7 +1512,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         document = _with_downgrade_audit(existing, document, "identity_no_longer_confirms")
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "confirmed"},
-            {"$set": document},
+            {"$set": _mutable_update(document)},
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
@@ -1541,6 +1546,37 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
     return "new"
 
 
+async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
+    """A stored link whose bond is not active is not posted as confirmed."""
+    active = {client.bond_case_id for client in clients}
+    cursor = db.docket_events.find({"source": SOURCE, "auto_linked": True})
+    rows = await _to_list(cursor, 500)
+    for row in rows:
+        bond = str(row.get("bond_case_id") or "")
+        if bond and bond in active:
+            continue
+        if row.get("match_status") not in {"confirmed", "possible"}:
+            continue
+        source_id = str(row.get("source_id") or "")
+        prior_status = row.get("match_status")
+        document = _mutable_update(row)
+        document["match_status"] = "withdrawn"
+        document["auto_linked"] = False
+        document["bond_case_id"] = ""
+        document["defendant_id"] = ""
+        document["matched_defendant_id"] = None
+        document["confirmations"] = []
+        document = _with_downgrade_audit(row, document, "client_no_longer_active")
+        result = await db.docket_events.update_one(
+            {"_id": row.get("_id"), "match_status": prior_status},
+            {"$set": _mutable_update(document)},
+        )
+        if getattr(result, "matched_count", 0) and source_id:
+            await _ensure_notification(
+                db, _downgrade_note(document, source_id), source_id, "withdrawn",
+            )
+
+
 async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[MatchDecision]) -> list[str]:
     """A filing seen again that no longer matches must not stay auto-linked."""
     filing_ids = {event.filing_id for event in docket.events if event.filing_id}
@@ -1557,7 +1593,7 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
         if str(row.get("filing_id") or "") not in filing_ids or source_id in still_open:
             continue
         prior_status = row.get("match_status")
-        document = dict(row)
+        document = _mutable_update(row)
         document["match_status"] = "withdrawn"
         document["auto_linked"] = False
         document["bond_case_id"] = ""
@@ -1567,7 +1603,7 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
         document = _with_downgrade_audit(row, document, "identity_no_longer_matches")
         result = await db.docket_events.update_one(
             {"_id": row.get("_id"), "match_status": prior_status},
-            {"$set": document},
+            {"$set": _mutable_update(document)},
         )
         if not getattr(result, "matched_count", 0):
             continue
@@ -1753,10 +1789,13 @@ async def run_federal_bond_risk_scan(
             from writers.slack_notifier import SlackNotifier
 
             notifier = SlackNotifier()
-        slack_sent, slack_pending, slack_attempts = await retry_pending_slack(db, notifier)
+        loaded_clients = clients is None
         if clients is None:
             clients = await load_active_clients(db)
+        if loaded_clients:
+            await _unlink_inactive_clients(db, clients)
         if not clients:
+            slack_sent, slack_pending, slack_attempts = await retry_pending_slack(db, notifier)
             return {
                 **base,
                 "skipped": "no_active_clients",
@@ -1767,7 +1806,11 @@ async def run_federal_bond_risk_scan(
         try:
             dockets, seeds_truncated, party_failures = await _collect_dockets(client, pause_s, db)
         except _ScanStop as stop:
-            return _scan_stopped(base, stop)
+            slack_sent, slack_pending, _attempts = await retry_pending_slack(db, notifier)
+            stopped = _scan_stopped(base, stop)
+            stopped["slack_sent"] = slack_sent
+            stopped["slack_pending"] = slack_pending
+            return stopped
         if seeds_truncated:
             base["truncated"] = True
 
@@ -1782,28 +1825,6 @@ async def run_federal_bond_risk_scan(
         written = 0
         confirmed = 0
         possible = 0
-
-        async def _deliver(decision: MatchDecision, docket: DocketView) -> None:
-            nonlocal slack_sent, slack_pending, slack_attempts
-            if slack_attempts >= MAX_SLACK:
-                slack_pending += 1
-                return
-            source_id = _source_id(docket, decision)
-            if not await _claim_slack_delivery(db, source_id):
-                slack_pending += 1
-                return
-            slack_attempts += 1
-            existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
-            attempts = int((existing or {}).get("slack_attempts") or 0) + 1
-            delivered = _alert_slack(decision, docket, notifier)
-            await _record_slack(db, source_id, delivered, attempts)
-            if delivered:
-                slack_sent += 1
-            else:
-                slack_pending += 1
-
-        retries: list[tuple[MatchDecision, DocketView]] = []
-        fresh: list[tuple[MatchDecision, DocketView, str]] = []
         for decision, docket in decisions:
             source_id = _source_id(docket, decision)
             existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
@@ -1811,43 +1832,21 @@ async def run_federal_bond_risk_scan(
                 base["truncated"] = True
                 continue
             outcome = await _store_decision(db, decision, docket)
-            if outcome == "duplicate":
-                continue
-            if outcome == "retry_slack":
-                retries.append((decision, docket))
+            if outcome in {"duplicate", "retry_slack"}:
                 continue
             written += 1
             if outcome == "downgraded" or decision.status != "confirmed":
                 possible += 1
             else:
                 confirmed += 1
-            fresh.append((decision, docket, outcome))
         withdrawn_ids: list[str] = []
         for docket, group in by_docket.values():
             withdrawn_ids.extend(await _withdraw_stale_confirmations(db, docket, group))
-        # Undelivered Slack posts are retried before new alerts fill the cap.
-        for decision, docket in retries:
-            await _deliver(decision, docket)
-        for decision, docket, _outcome in fresh:
-            await _deliver(decision, docket)
-        for source_id in withdrawn_ids:
-            if slack_attempts >= MAX_SLACK:
-                slack_pending += 1
-                continue
-            row = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
-            if not row or not await _claim_slack_delivery(db, source_id):
-                slack_pending += 1
-                continue
-            slack_attempts += 1
-            delivered = _alert_stored(row, notifier)
-            attempts = int(row.get("slack_attempts") or 0) + 1
-            await _record_slack(db, source_id, delivered, attempts)
-            written += 1
-            possible += 1
-            if delivered:
-                slack_sent += 1
-            else:
-                slack_pending += 1
+        written += len(withdrawn_ids)
+        possible += len(withdrawn_ids)
+        # Slack runs only after this scan's evidence has been written, so a
+        # failed earlier post cannot repeat a link that was just withdrawn.
+        slack_sent, slack_pending, _slack_attempts = await retry_pending_slack(db, notifier)
         warnings = []
         if seeds_truncated:
             warnings.append(

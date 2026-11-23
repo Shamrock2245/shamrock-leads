@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk Slack retry and immutable id)
+
+### Fixed
+- **Slack retries wait until this scan has reconciled the link.** A failed earlier post is not repeated as "confirmed" after the same run finds the match is only possible, withdrawn, or no longer an active client. The post uses the updated wording.
+- **Updates built from a stored row do not include `_id`.** Mongo rejects an update that tries to change `_id`. Withdrawal and downgrade writes send only mutable fields.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a failed confirmed Slack post that is retried only after the link is downgraded, and the test collection rejects an update that includes `_id`.
+
 ## [Unreleased] — 2026-11-22 (Federal bond-risk downgrade of stale confirmed links)
 
 ### Fixed

@@ -152,6 +152,9 @@ class _Collection:
         return kwargs.get("name")
 
     async def update_one(self, filt, update, upsert=False):
+        fields = update.get("$set") or {}
+        if "_id" in fields:
+            raise RuntimeError("immutable _id")
         for doc in self.docs:
             if _match(doc, filt):
                 doc.update(update.get("$set") or {})
@@ -1514,6 +1517,73 @@ async def test_later_conflicting_party_dobs_downgrade_a_confirmed_link(monkeypat
     assert withdrawn["auto_linked"] is False
     assert withdrawn["downgrade_reason"] == "identity_no_longer_matches"
     assert withdrawn["match_history"][-1]["to"] == "withdrawn"
+    assert withdrawn["_id"]
+
+
+@pytest.mark.asyncio
+async def test_failed_slack_retry_uses_the_downgraded_wording(monkeypatch):
+    _enable(monkeypatch)
+
+    class _FailThenSend:
+        def __init__(self):
+            self.calls = []
+
+        def notify_alert(self, **kwargs):
+            self.calls.append(kwargs)
+            return len(self.calls) > 1
+
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    db = _DB()
+    notifier = _FailThenSend()
+    client = _client(dobs=["1985-01-15"])
+    first = await _scan(db, court, [client], notifier)
+    assert first["slack_sent"] == 0
+    assert notifier.calls[0]["details"]["auto_linked"] is True
+    assert db.docket_events.docs[0]["slack_delivered"] is False
+
+    court.parties = [{
+        "name": "Smith, John",
+        "date_of_birth": "1985-01-15",
+        "extra_info": "DOB: 02/02/1990",
+    }]
+    second = await _scan(db, court, [client], notifier)
+    assert second["slack_sent"] == 1
+    assert notifier.calls[-1]["details"]["auto_linked"] is False
+    assert "no longer confirms" in notifier.calls[-1]["message"]
+    assert all(not call["details"]["auto_linked"] for call in notifier.calls[1:])
+
+
+@pytest.mark.asyncio
+async def test_inactive_client_is_not_retried_as_confirmed(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, run_federal_bond_risk_scan
+
+    db = _DB()
+    db.docket_events.docs.append({
+        "_id": "old-link",
+        "source": SOURCE,
+        "source_id": "fl-federal:9:warrant:entry:1:bond-missing",
+        "slack_delivered": False,
+        "title": "Federal bond risk linked — Warrant",
+        "description": "Confirmed for Pat Sample.",
+        "court_name": "M.D. Florida",
+        "docket_number": "9:20-cr-00001",
+        "event_type": "warrant",
+        "filing_id": "entry:1",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "bond_case_id": "bond-missing",
+        "slack_attempts": 1,
+    })
+    notifier = _Notifier()
+    await run_federal_bond_risk_scan(db, client=_CourtListener(hits=[]), notifier=notifier, pause_s=0)
+    assert db.docket_events.docs[0]["match_status"] == "withdrawn"
+    assert db.docket_events.docs[0]["auto_linked"] is False
+    assert notifier.calls[0]["details"]["auto_linked"] is False
+    assert "no longer confirms" in notifier.calls[0]["message"]
 
 
 @pytest.mark.asyncio
