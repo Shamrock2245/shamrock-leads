@@ -477,6 +477,11 @@ def party_dobs_for_docket(party: dict, docket_id: str) -> set[str]:
     return _dobs_from_extra(party.get("extra_info"))
 
 
+_FEDERAL_JUDGE_DOCKET = re.compile(
+    r"^(?:\d{1,2}:)?\d{2}-(?:CR|MJ)-\d+(?:-\d+)?(?:-[A-Z]{2,4})+$"
+)
+
+
 def canonical_identifier(value: str) -> Optional[str]:
     """Case or agency number. Requires a digit and at least 5 alphanumeric characters."""
     raw = str(value or "").strip()
@@ -484,7 +489,10 @@ def canonical_identifier(value: str) -> Optional[str]:
         return None
     compact = re.sub(r"\s+", "", raw.upper()).replace("–", "-").replace("—", "-")
     # 2:24-cr-00123-JES-NPM and 2:24-cr-00123-SPC are the same case.
-    compact = re.sub(r"(?:-[A-Z]{2,4})+$", "", compact)
+    # Strip trailing judge initials only on federal cr/mj docket numbers so
+    # agency identifiers like AG-445566-FL vs AG-445566-JES stay exact.
+    if _FEDERAL_JUDGE_DOCKET.match(compact):
+        compact = re.sub(r"(?:-[A-Z]{2,4})+$", "", compact)
     if not re.search(r"\d", compact):
         return None
     alnum = re.sub(r"[^A-Z0-9]", "", compact)

@@ -92,24 +92,66 @@ async def _run_docket_monitor():
     result = await run_docket_scan(get_db(), limit=100)
     logger.info("[DocketMonitor] ✅ %d bonds, %d events", result.get("bonds_scanned", 0), result.get("events_found", 0))
 
+def _alert_federal_bond_risk_outage(
+    title: str,
+    message: str,
+    *,
+    level: str,
+    details: dict,
+) -> None:
+    """Send an operational Slack alert to #alerts on a failed or degraded federal scan."""
+    try:
+        from writers.slack_notifier import SlackNotifier
+
+        SlackNotifier().notify_alert(
+            title=title[:140],
+            message=message,
+            level=level,
+            details=details,
+            source="FederalBondRisk",
+            bridge=False,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[FederalBondRisk] operational Slack alert failed: %s",
+            type(exc).__name__,
+        )
+
+
 async def _run_federal_bond_risk():
     """Florida federal bond-risk scan. No CourtListener call unless the flag and token are set.
 
     Expected skips (flag off, no token, maintenance, no open bonds) are logged
     and the cycle completes. A scan that reports ``success: false`` or
     ``incomplete_coverage: true`` (partial search-source or hydration outages)
-    is a monitoring outage and is raised so the cron runner does not treat it as
+    alerts ``#alerts`` and raises so the cron runner does not treat it as
     healthy.
     """
     from dashboard.services.federal_bond_risk import run_federal_bond_risk_scan
     from dashboard.extensions import get_db
-    result = await run_federal_bond_risk_scan(get_db())
+    try:
+        result = await run_federal_bond_risk_scan(get_db())
+    except Exception as exc:
+        _alert_federal_bond_risk_outage(
+            "Federal bond-risk scan crashed",
+            f"Scheduled federal bond-risk scan raised {type(exc).__name__}.",
+            level="error",
+            details={"error_type": type(exc).__name__},
+        )
+        raise
     if result.get("success") is False:
         skipped = result.get("skipped") or "failed"
+        warning = result.get("warning") or ""
         logger.warning(
             "[FederalBondRisk] scan failed skipped=%s warning=%s",
             skipped,
-            result.get("warning") or "",
+            warning,
+        )
+        _alert_federal_bond_risk_outage(
+            f"Federal bond-risk scan failed ({skipped})",
+            warning or f"Federal bond-risk scan stopped with status {skipped}.",
+            level="error",
+            details={"skipped": skipped, "rows_written": result.get("rows_written", 0)},
         )
         raise RuntimeError(f"Federal bond-risk scan failed: {skipped}")
     if result.get("skipped"):
@@ -126,6 +168,16 @@ async def _run_federal_bond_risk():
             result.get("confirmed", 0),
             result.get("possible", 0),
             warning,
+        )
+        _alert_federal_bond_risk_outage(
+            "Federal bond-risk scan incomplete coverage",
+            warning,
+            level="warning",
+            details={
+                "rows_written": result.get("rows_written", 0),
+                "confirmed": result.get("confirmed", 0),
+                "possible": result.get("possible", 0),
+            },
         )
         raise RuntimeError(f"Federal bond-risk scan incomplete: {warning}")
     elif result.get("warning"):

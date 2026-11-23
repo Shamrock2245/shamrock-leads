@@ -401,11 +401,20 @@ def test_docket_number_strips_every_trailing_judge_initial():
     base = canonical_identifier("2:24-cr-00123")
     assert canonical_identifier("2:24-cr-00123-SPC") == base
     assert canonical_identifier("2:24-cr-00123-JES-NPM") == base
+    assert canonical_identifier("2:24-cr-00123-1-JES-NPM") == "2:24-CR-00123-1"
     assert canonical_identifier("9:20-mj-00015-AB-CD") == canonical_identifier("9:20-mj-00015")
     assert is_fl_federal_criminal("flmd", "2:24-cr-00123-JES-NPM")
     docket = _docket_for(DocketParty("Smith, John", frozenset()))
     docket.docket_number = "2:24-cr-00123-JES-NPM"
     assert match_client(_client(numbers=["2:24-cr-00123"]), docket) == ("confirmed", ("case_number",))
+
+    # Agency numbers keep alphabetic suffixes intact so distinct agencies never collide.
+    assert canonical_identifier("AG-445566-FL") == "AG-445566-FL"
+    assert canonical_identifier("AG-445566-JES") == "AG-445566-JES"
+    agency_docket = _docket_for(DocketParty("Smith, John", frozenset()))
+    agency_docket.docket_number = "2:24-cr-00999"
+    agency_docket.numbers = {"AG-445566-JES"}
+    assert match_client(_client(numbers=["AG-445566-FL"]), agency_docket) == ("possible", ())
 
 
 def test_subjectless_actor_event_on_one_defendant_is_not_confirmed():
@@ -3966,3 +3975,85 @@ async def test_pending_slice_id_is_unique_per_tenant(monkeypatch):
         "pending_slice:alpha",
         "pending_slice:beta",
     }
+
+
+@pytest.mark.asyncio
+async def test_failed_and_incomplete_cron_scans_send_operational_slack_alert(monkeypatch):
+    from dashboard.cron import _run_federal_bond_risk
+
+    sent = []
+
+    class _SpyNotifier:
+        def notify_alert(self, **kwargs):
+            sent.append(kwargs)
+            return True
+
+    monkeypatch.setattr("writers.slack_notifier.SlackNotifier", _SpyNotifier)
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: object())
+
+    async def failed(_db):
+        return {
+            "success": False,
+            "skipped": "search_failed",
+            "warning": "CourtListener search failed",
+            "rows_written": 0,
+        }
+
+    async def incomplete(_db):
+        return {
+            "success": True,
+            "skipped": None,
+            "incomplete_coverage": True,
+            "warning": "CourtListener search failed for 1 source(s): rd HTTP 403",
+            "rows_written": 1,
+            "confirmed": 0,
+            "possible": 1,
+        }
+
+    async def crashed(_db):
+        raise ConnectionError("network down")
+
+    async def skipped(_db):
+        return {"success": True, "skipped": "flag_off"}
+
+    async def healthy(_db):
+        return {
+            "success": True,
+            "skipped": None,
+            "incomplete_coverage": False,
+            "rows_written": 0,
+            "confirmed": 0,
+            "possible": 0,
+            "warning": None,
+        }
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", skipped)
+    await _run_federal_bond_risk()
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", healthy)
+    await _run_federal_bond_risk()
+    assert sent == []
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", failed)
+    with pytest.raises(RuntimeError, match="search_failed"):
+        await _run_federal_bond_risk()
+    assert len(sent) == 1
+    assert sent[-1]["level"] == "error"
+    assert sent[-1]["source"] == "FederalBondRisk"
+    assert sent[-1]["bridge"] is False
+    assert sent[-1]["details"]["skipped"] == "search_failed"
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", incomplete)
+    with pytest.raises(RuntimeError, match="incomplete"):
+        await _run_federal_bond_risk()
+    assert len(sent) == 2
+    assert sent[-1]["level"] == "warning"
+    assert "incomplete coverage" in sent[-1]["title"].lower()
+    assert sent[-1]["bridge"] is False
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", crashed)
+    with pytest.raises(ConnectionError, match="network down"):
+        await _run_federal_bond_risk()
+    assert len(sent) == 3
+    assert sent[-1]["level"] == "error"
+    assert sent[-1]["details"] == {"error_type": "ConnectionError"}
+    assert "network down" not in json.dumps(sent[-1])
