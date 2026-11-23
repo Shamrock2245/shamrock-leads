@@ -155,9 +155,16 @@ class _Collection:
         fields = update.get("$set") or {}
         if "_id" in fields:
             raise RuntimeError("immutable _id")
+        pushed = update.get("$push") or {}
         for doc in self.docs:
             if _match(doc, filt):
-                doc.update(update.get("$set") or {})
+                doc.update(fields)
+                for key, value in pushed.items():
+                    current = doc.get(key)
+                    if not isinstance(current, list):
+                        current = []
+                    current.append(value)
+                    doc[key] = current
                 return _WriteResult(matched_count=1, upserted_id=None)
         if not upsert:
             return _WriteResult(matched_count=0, upserted_id=None)
@@ -423,6 +430,136 @@ async def test_docket_entry_outage_is_not_an_empty_success(monkeypatch):
     assert kept["success"] is True
     assert kept["rows_written"] == 1
     assert "1002" in kept["warning"]
+
+
+@pytest.mark.asyncio
+async def test_reinstated_bond_stays_monitored_and_linked(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, run_federal_bond_risk_scan
+
+    db = _DB()
+    db.active_bonds.docs.extend([
+        {
+            "_id": "bond-re",
+            "status": "reinstated",
+            "Bond_Case_ID": "bond-re",
+            "Defendant_ID": "def-re",
+            "defendant_name": "John Smith",
+        },
+        {
+            "_id": "bond-ex",
+            "status": "exonerated",
+            "Bond_Case_ID": "bond-ex",
+            "Defendant_ID": "def-ex",
+            "defendant_name": "Jane Roe",
+        },
+    ])
+    clients = await load_active_clients(db)
+    assert [client.bond_case_id for client in clients] == ["bond-re"]
+    for source_id, bond_id in (
+        ("fl-federal:1:warrant:entry:1:bond-re", "bond-re"),
+        ("fl-federal:1:warrant:entry:1:bond-ex", "bond-ex"),
+    ):
+        db.docket_events.docs.append({
+            "_id": bond_id,
+            "source": SOURCE,
+            "source_id": source_id,
+            "slack_delivered": True,
+            "match_status": "confirmed",
+            "auto_linked": True,
+            "bond_case_id": bond_id,
+            "event_type": "warrant",
+            "filing_id": "entry:1",
+            "docket_id": "1",
+        })
+    await run_federal_bond_risk_scan(
+        db, client=_CourtListener(hits=[]), notifier=_Notifier(), pause_s=0,
+    )
+    by_bond = {row["prior_bond_case_id"] if row.get("match_status") == "withdrawn" else row["bond_case_id"]: row for row in db.docket_events.docs}
+    assert by_bond["bond-re"]["match_status"] == "confirmed"
+    assert by_bond["bond-re"]["auto_linked"] is True
+    assert by_bond["bond-ex"]["match_status"] == "withdrawn"
+    assert by_bond["bond-ex"]["auto_linked"] is False
+
+
+@pytest.mark.asyncio
+async def test_failed_match_audit_is_written_on_the_next_scan(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
+    db = _DB()
+    real_insert = db.audit_events.insert_one
+    state = {"calls": 0}
+
+    async def fail_once(doc):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise RuntimeError("audit down")
+        return await real_insert(doc)
+
+    db.audit_events.insert_one = fail_once
+    await _scan(db, court, [_client()])
+    assert db.docket_events.docs[0]["match_status"] == "possible"
+    assert db.audit_events.docs == []
+    assert db.docket_events.docs[0]["audit_pending"]
+    await _scan(db, court, [_client()])
+    assert len(db.docket_events.docs) == 1
+    assert len(db.audit_events.docs) == 1
+    assert db.audit_events.docs[0]["actor"] == "system"
+    assert db.audit_events.docs[0]["reason"] == "match_recorded"
+    assert db.docket_events.docs[0]["audit_pending"] == []
+
+
+@pytest.mark.asyncio
+async def test_closed_bond_past_the_first_page_is_still_unlinked(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, run_federal_bond_risk_scan
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "open-bond",
+        "status": "active",
+        "Bond_Case_ID": "bond-open",
+        "Defendant_ID": "def-open",
+        "defendant_name": "John Smith",
+    })
+    for index in range(501):
+        db.docket_events.docs.append({
+            "_id": f"{index:04d}",
+            "source": SOURCE,
+            "source_id": f"fl-federal:1:warrant:entry:{index}:bond-open",
+            "slack_delivered": True,
+            "match_status": "confirmed",
+            "auto_linked": True,
+            "bond_case_id": "bond-open",
+            "event_type": "warrant",
+            "filing_id": f"entry:{index}",
+            "docket_id": "1",
+        })
+    db.docket_events.docs.append({
+        "_id": "zzz-closed",
+        "source": SOURCE,
+        "source_id": "fl-federal:1:warrant:entry:closed:bond-closed",
+        "slack_delivered": False,
+        "title": "Federal bond risk linked — Warrant",
+        "description": "Confirmed for Pat Sample.",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "bond_case_id": "bond-closed",
+        "event_type": "warrant",
+        "filing_id": "entry:closed",
+        "docket_id": "1",
+        "court_name": "M.D. Florida",
+        "docket_number": "9:20-cr-00001",
+    })
+    notifier = _Notifier()
+    await run_federal_bond_risk_scan(
+        db, client=_CourtListener(hits=[]), notifier=notifier, pause_s=0,
+    )
+    closed = next(row for row in db.docket_events.docs if row["_id"] == "zzz-closed")
+    assert closed["match_status"] == "withdrawn"
+    assert closed["auto_linked"] is False
+    assert notifier.calls
+    assert notifier.calls[0]["details"]["auto_linked"] is False
 
 
 def test_full_name_and_event_rules():

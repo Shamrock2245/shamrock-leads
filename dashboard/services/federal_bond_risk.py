@@ -45,7 +45,7 @@ SOURCE = "courtlistener_federal_bond_risk"
 EVENT_INDEX = "idx_federal_bond_risk_source"
 NOTIFICATION_INDEX = "idx_federal_bond_risk_notification"
 _ON = {"1", "true", "yes", "on"}
-ACTIVE_STATUSES = ("active", "monitoring", "alert")
+ACTIVE_STATUSES = ("active", "monitoring", "alert", "reinstated")
 FL_FEDERAL_COURTS = frozenset(FL_FEDERAL_COURT_IDS)
 BOND_PAGE = 200
 # Search already stops at 50 pages. Hydrate every seed from that window.
@@ -722,8 +722,29 @@ async def _to_list(cursor, limit: int) -> list:
     return list(rows or [])
 
 
+async def _each_page(collection, query: dict, page_size: int = 200):
+    """Every matching row, in ``_id`` order, one page after another."""
+    last_id = None
+    step = max(int(page_size or 200), 1)
+    while True:
+        page_query = dict(query)
+        if last_id is not None:
+            page_query["_id"] = {"$gt": last_id}
+        cursor = collection.find(page_query)
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("_id", 1)
+        page = await _to_list(cursor, step)
+        if not page:
+            return
+        yield page
+        tail = page[-1].get("_id")
+        if tail is None or tail == last_id or len(page) < step:
+            return
+        last_id = tail
+
+
 async def _page_bonds(db, page_size: int) -> list[dict]:
-    """Every active, monitoring, and alert bond, in ``_id`` order."""
+    """Every open bond, including reinstated ones, in ``_id`` order."""
     bonds: list[dict] = []
     last_id = None
     while True:
@@ -784,7 +805,7 @@ async def _related_by_ids(collection, ids: list[str], page_size: int = BOND_PAGE
 
 
 async def load_active_clients(db, page_size: int = BOND_PAGE) -> list[ClientIdentity]:
-    """Active, monitoring, and alert bonds, plus defendant and arrest identifiers."""
+    """Open bonds (active, monitoring, alert, and reinstated), plus defendant and arrest identifiers."""
     bonds = await _page_bonds(db, page_size)
     defendant_ids = []
     for bond in bonds:
@@ -1451,38 +1472,129 @@ async def _ensure_notification(db, note: dict, source_id: str, status: str) -> b
     return False
 
 
-async def _write_match_audit(
-    db,
+def _audit_payload(source_id: str, before: dict, after: dict, reason: str, evidence: dict) -> dict:
+    now = _now()
+    return {
+        "event_id": str(uuid.uuid4()),
+        "event_type": "federal_bond_risk_match_changed",
+        "action": "federal_bond_risk_match_changed",
+        "entity_type": "docket_event",
+        "entity_id": source_id,
+        "actor": "system",
+        "agent_name": "federal_bond_risk",
+        "source": SOURCE,
+        "reason": reason,
+        "old_state": before,
+        "new_state": after,
+        "evidence": evidence,
+        "timestamp": now,
+        "created_at": now,
+    }
+
+
+def _queue_match_audit(
+    document: dict,
     source_id: str,
     before: dict,
     after: dict,
     reason: str,
     evidence: dict,
-) -> None:
-    """Append-only audit. The mutable docket row is not the record of the change."""
+) -> dict:
+    """Keep the audit on the row that this transition is about to commit."""
+    payload = _audit_payload(source_id, before, after, reason, evidence)
+    pending = [item for item in (document.get("audit_pending") or []) if isinstance(item, dict)]
+    pending.append(payload)
+    document["audit_pending"] = pending
+    return payload
+
+
+async def _audit_already_written(db, event_id: str) -> bool:
+    collection = getattr(db, "audit_events", None)
+    if collection is None or not event_id:
+        return False
+    found = await collection.find_one({"source": SOURCE, "event_id": event_id})
+    return bool(found)
+
+
+async def _insert_audit(db, payload: dict) -> bool:
+    if await _audit_already_written(db, str(payload.get("event_id") or "")):
+        return True
     collection = getattr(db, "audit_events", None)
     if collection is None:
-        return
-    now = _now()
+        return False
     try:
-        await collection.insert_one({
-            "event_id": str(uuid.uuid4()),
-            "event_type": "federal_bond_risk_match_changed",
-            "action": "federal_bond_risk_match_changed",
-            "entity_type": "docket_event",
-            "entity_id": source_id,
-            "actor": "system",
-            "agent_name": "federal_bond_risk",
-            "source": SOURCE,
-            "reason": reason,
-            "old_state": before,
-            "new_state": after,
-            "evidence": evidence,
-            "timestamp": now,
-            "created_at": now,
-        })
+        await collection.insert_one(dict(payload))
     except Exception as exc:
         log.warning("Federal bond-risk audit was not written: %s", type(exc).__name__)
+        return False
+    return True
+
+
+async def _clear_pending_audit(db, source_id: str, event_id: str) -> None:
+    events = getattr(db, "docket_events", None)
+    if events is None or not source_id or not event_id:
+        return
+    row = await events.find_one({"source": SOURCE, "source_id": source_id})
+    if not row:
+        return
+    pending = [item for item in (row.get("audit_pending") or []) if isinstance(item, dict)]
+    remaining = [item for item in pending if item.get("event_id") != event_id]
+    if remaining == pending:
+        return
+    try:
+        await events.update_one(
+            {"_id": row.get("_id")},
+            {"$set": {"audit_pending": remaining}},
+        )
+    except Exception as exc:
+        log.warning("Federal bond-risk pending audit was not cleared: %s", type(exc).__name__)
+
+
+async def _remember_audit(db, source_id: str, payload: dict) -> None:
+    events = getattr(db, "docket_events", None)
+    if events is None or not source_id:
+        return
+    event_id = str(payload.get("event_id") or "")
+    row = await events.find_one({"source": SOURCE, "source_id": source_id})
+    pending = [item for item in ((row or {}).get("audit_pending") or []) if isinstance(item, dict)]
+    if any(item.get("event_id") == event_id for item in pending):
+        return
+    try:
+        await events.update_one(
+            {"source": SOURCE, "source_id": source_id},
+            {"$push": {"audit_pending": payload}},
+        )
+    except Exception as exc:
+        log.warning("Federal bond-risk pending audit was not stored: %s", type(exc).__name__)
+
+
+async def _flush_match_audit(db, source_id: str, payload: dict) -> bool:
+    """Write one queued audit. A failed insert stays on the row for the next scan."""
+    if await _insert_audit(db, payload):
+        await _clear_pending_audit(db, source_id, str(payload.get("event_id") or ""))
+        return True
+    await _remember_audit(db, source_id, payload)
+    return False
+
+
+async def retry_pending_audits(db) -> int:
+    """Write audits that were saved on the row after insert_one failed."""
+    written = 0
+    async for page in _each_page(db.docket_events, {"source": SOURCE}):
+        for row in page:
+            pending = [item for item in (row.get("audit_pending") or []) if isinstance(item, dict)]
+            if not pending:
+                continue
+            failed = False
+            for item in pending:
+                if not await _insert_audit(db, item):
+                    failed = True
+                    break
+                written += 1
+                await _clear_pending_audit(db, str(row.get("source_id") or ""), str(item.get("event_id") or ""))
+            if failed:
+                return written
+    return written
 
 
 def _match_state(row: dict) -> dict:
@@ -1616,30 +1728,32 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         document["detected_at"] = existing.get("detected_at") or document["detected_at"]
         document["upgraded_at"] = _now()
         document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
+        audit = _queue_match_audit(
+            document, source_id, _match_state(existing), _match_state(document),
+            "possible_upgraded_to_confirmed", _match_evidence(document, "possible_upgraded_to_confirmed"),
+        )
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "possible"},
             {"$set": _mutable_update(document)},
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
-        await _write_match_audit(
-            db, source_id, _match_state(existing), _match_state(document),
-            "possible_upgraded_to_confirmed", _match_evidence(document, "possible_upgraded_to_confirmed"),
-        )
+        await _flush_match_audit(db, source_id, audit)
         await _ensure_notification(db, note, source_id, decision.status)
         return "upgraded"
     if downgrade:
         document = _with_downgrade_audit(existing, document, "identity_no_longer_confirms")
+        audit = _queue_match_audit(
+            document, source_id, _match_state(existing), _match_state(document),
+            "identity_no_longer_confirms", _match_evidence(document, "identity_no_longer_confirms"),
+        )
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "confirmed"},
             {"$set": _mutable_update(document)},
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
-        await _write_match_audit(
-            db, source_id, _match_state(existing), _match_state(document),
-            "identity_no_longer_confirms", _match_evidence(document, "identity_no_longer_confirms"),
-        )
+        await _flush_match_audit(db, source_id, audit)
         await _ensure_notification(db, _downgrade_note(document, source_id), source_id, decision.status)
         return "downgraded"
     if existing:
@@ -1651,6 +1765,10 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         if not existing.get("slack_delivered"):
             return "retry_slack"
         return "duplicate"
+    audit = _queue_match_audit(
+        document, source_id, {}, _match_state(document),
+        "match_recorded", _match_evidence(document, "match_recorded"),
+    )
     claimed = await _claim_insert(db, document)
     if claimed != "inserted":
         winner = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
@@ -1662,10 +1780,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
             return "retry_slack"
         return "duplicate"
     await _ensure_notification(db, note, source_id, decision.status)
-    await _write_match_audit(
-        db, source_id, {}, _match_state(document),
-        "match_recorded", _match_evidence(document, "match_recorded"),
-    )
+    await _flush_match_audit(db, source_id, audit)
     log.info(
         "Federal bond-risk %s court=%s event=%s filing=%s auto_linked=%s",
         decision.status, docket.court_id, decision.event_type, decision.filing_id,
@@ -1675,38 +1790,38 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
 
 
 async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
-    """A stored link whose bond is not active is not posted as confirmed."""
+    """A stored link whose bond is not an open liability is not posted as confirmed."""
     active = {client.bond_case_id for client in clients}
-    cursor = db.docket_events.find({"source": SOURCE, "auto_linked": True})
-    rows = await _to_list(cursor, 500)
-    for row in rows:
-        bond = str(row.get("bond_case_id") or "")
-        if bond and bond in active:
-            continue
-        if row.get("match_status") not in {"confirmed", "possible"}:
-            continue
-        source_id = str(row.get("source_id") or "")
-        prior_status = row.get("match_status")
-        document = _mutable_update(row)
-        document["match_status"] = "withdrawn"
-        document["auto_linked"] = False
-        document["bond_case_id"] = ""
-        document["defendant_id"] = ""
-        document["matched_defendant_id"] = None
-        document["confirmations"] = []
-        document = _with_downgrade_audit(row, document, "client_no_longer_active")
-        result = await db.docket_events.update_one(
-            {"_id": row.get("_id"), "match_status": prior_status},
-            {"$set": _mutable_update(document)},
-        )
-        if getattr(result, "matched_count", 0) and source_id:
-            await _write_match_audit(
-                db, source_id, _match_state(row), _match_state(document),
+    async for page in _each_page(db.docket_events, {"source": SOURCE, "auto_linked": True}):
+        for row in page:
+            bond = str(row.get("bond_case_id") or "")
+            if bond and bond in active:
+                continue
+            if row.get("match_status") not in {"confirmed", "possible"}:
+                continue
+            source_id = str(row.get("source_id") or "")
+            prior_status = row.get("match_status")
+            document = _mutable_update(row)
+            document["match_status"] = "withdrawn"
+            document["auto_linked"] = False
+            document["bond_case_id"] = ""
+            document["defendant_id"] = ""
+            document["matched_defendant_id"] = None
+            document["confirmations"] = []
+            document = _with_downgrade_audit(row, document, "client_no_longer_active")
+            audit = _queue_match_audit(
+                document, source_id, _match_state(row), _match_state(document),
                 "client_no_longer_active", _match_evidence(document, "client_no_longer_active"),
             )
-            await _ensure_notification(
-                db, _downgrade_note(document, source_id), source_id, "withdrawn",
+            result = await db.docket_events.update_one(
+                {"_id": row.get("_id"), "match_status": prior_status},
+                {"$set": _mutable_update(document)},
             )
+            if getattr(result, "matched_count", 0) and source_id:
+                await _flush_match_audit(db, source_id, audit)
+                await _ensure_notification(
+                    db, _downgrade_note(document, source_id), source_id, "withdrawn",
+                )
 
 
 async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[MatchDecision]) -> list[str]:
@@ -1715,36 +1830,38 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
     if not filing_ids:
         return []
     still_open = {_source_id(docket, decision) for decision in decisions}
-    cursor = db.docket_events.find({"source": SOURCE, "docket_id": str(docket.docket_id)})
-    rows = await _to_list(cursor, 200)
     withdrawn: list[str] = []
-    for row in rows:
-        source_id = str(row.get("source_id") or "")
-        if row.get("match_status") not in {"confirmed", "possible"}:
-            continue
-        if str(row.get("filing_id") or "") not in filing_ids or source_id in still_open:
-            continue
-        prior_status = row.get("match_status")
-        document = _mutable_update(row)
-        document["match_status"] = "withdrawn"
-        document["auto_linked"] = False
-        document["bond_case_id"] = ""
-        document["defendant_id"] = ""
-        document["matched_defendant_id"] = None
-        document["confirmations"] = []
-        document = _with_downgrade_audit(row, document, "identity_no_longer_matches")
-        result = await db.docket_events.update_one(
-            {"_id": row.get("_id"), "match_status": prior_status},
-            {"$set": _mutable_update(document)},
-        )
-        if not getattr(result, "matched_count", 0):
-            continue
-        await _write_match_audit(
-            db, source_id, _match_state(row), _match_state(document),
-            "identity_no_longer_matches", _match_evidence(document, "identity_no_longer_matches"),
-        )
-        await _ensure_notification(db, _downgrade_note(document, source_id), source_id, "withdrawn")
-        withdrawn.append(source_id)
+    async for page in _each_page(
+        db.docket_events, {"source": SOURCE, "docket_id": str(docket.docket_id)},
+    ):
+        for row in page:
+            source_id = str(row.get("source_id") or "")
+            if row.get("match_status") not in {"confirmed", "possible"}:
+                continue
+            if str(row.get("filing_id") or "") not in filing_ids or source_id in still_open:
+                continue
+            prior_status = row.get("match_status")
+            document = _mutable_update(row)
+            document["match_status"] = "withdrawn"
+            document["auto_linked"] = False
+            document["bond_case_id"] = ""
+            document["defendant_id"] = ""
+            document["matched_defendant_id"] = None
+            document["confirmations"] = []
+            document = _with_downgrade_audit(row, document, "identity_no_longer_matches")
+            audit = _queue_match_audit(
+                document, source_id, _match_state(row), _match_state(document),
+                "identity_no_longer_matches", _match_evidence(document, "identity_no_longer_matches"),
+            )
+            result = await db.docket_events.update_one(
+                {"_id": row.get("_id"), "match_status": prior_status},
+                {"$set": _mutable_update(document)},
+            )
+            if not getattr(result, "matched_count", 0):
+                continue
+            await _flush_match_audit(db, source_id, audit)
+            await _ensure_notification(db, _downgrade_note(document, source_id), source_id, "withdrawn")
+            withdrawn.append(source_id)
     return withdrawn
 
 
@@ -1925,6 +2042,7 @@ async def run_federal_bond_risk_scan(
             from writers.slack_notifier import SlackNotifier
 
             notifier = SlackNotifier()
+        await retry_pending_audits(db)
         loaded_clients = clients is None
         if clients is None:
             clients = await load_active_clients(db)

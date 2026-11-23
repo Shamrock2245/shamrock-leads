@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk open bonds, audit retry, full link scan)
+
+### Fixed
+- **Reinstated bonds stay in the federal scan.** They are open liabilities. A reinstated case is monitored, and an existing link is not withdrawn just because the status is no longer `active`.
+- **A failed match audit is retried.** If `audit_events` insert fails after the docket row is written, the audit payload stays on that row. The next scan writes it.
+- **Every stored auto-link is read in `_id` order.** Reconciliation no longer stops at an unsorted 500-row page, so an older confirmed row for a closed bond is still withdrawn and is not posted as current.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a reinstated bond, an audit insert that fails once, and a closed-bond link past the old 500-row read.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk audit, entry failures, subjectless filings)
 
 ### Fixed
