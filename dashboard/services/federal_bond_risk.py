@@ -1174,6 +1174,59 @@ async def load_active_clients(db, page_size: int = BOND_PAGE) -> list[ClientIden
     return clients
 
 
+async def _active_bond_ids(db, page_size: int = BOND_PAGE) -> set[str]:
+    """Current active bond_case_ids from ``active_bonds``."""
+    bonds = await _page_bonds(db, page_size)
+    ids: set[str] = set()
+    for bond in bonds:
+        bond_case_id = str(
+            bond.get("Bond_Case_ID") or bond.get("bond_case_id") or bond.get("_id") or ""
+        ).strip()
+        if bond_case_id:
+            ids.add(bond_case_id)
+    return ids
+
+
+async def _bond_is_active(db, bond_case_id: str, *, require_record: bool = True) -> bool:
+    """Confirm ``bond_case_id`` still has an active status in ``active_bonds``.
+
+    When ``require_record`` is True (all DB-loaded scans), a missing record or
+    lookup error fails closed and returns False.
+    """
+    bonds = getattr(db, "active_bonds", None) if db is not None else None
+    bond_id = str(bond_case_id or "").strip()
+    if not bond_id:
+        return False
+    if bonds is None:
+        return not require_record
+    clauses: list[dict] = [
+        {"Bond_Case_ID": bond_id},
+        {"bond_case_id": bond_id},
+        {"_id": bond_id},
+    ]
+    try:
+        from bson import ObjectId
+
+        if ObjectId.is_valid(bond_id):
+            clauses.append({"_id": ObjectId(bond_id)})
+    except Exception:
+        pass
+    try:
+        active_row = await bonds.find_one({
+            "status": {"$in": list(ACTIVE_STATUSES)},
+            "$or": clauses,
+        })
+        if active_row is not None:
+            return True
+        if require_record:
+            return False
+        any_row = await bonds.find_one({"$or": clauses})
+        return any_row is None
+    except Exception as exc:
+        log.warning("Federal bond-risk bond status recheck failed: %s", type(exc).__name__)
+        return False
+
+
 class _ScanStop(Exception):
     def __init__(self, warning: str, skipped: str):
         self.warning = warning
@@ -2267,10 +2320,17 @@ def _downgrade_note(document: dict, source_id: str) -> dict:
     })
 
 
-async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> str:
+async def _store_decision(
+    db,
+    decision: MatchDecision,
+    docket: DocketView,
+    *,
+    require_active_record: bool = False,
+) -> str:
     """Insert, upgrade, or downgrade one staff row.
 
-    Returns ``new``, ``upgraded``, ``downgraded``, ``retry_slack``, or ``duplicate``.
+    Returns ``new``, ``upgraded``, ``downgraded``, ``restored``, ``withdrawn``,
+    ``inactive``, ``retry_slack``, or ``duplicate``.
     A Slack retry does not write another CRM notification. The row is not
     complete until Slack delivery is recorded. A confirmed link that later
     evidence no longer supports is replaced and the previous attachment is kept
@@ -2278,6 +2338,17 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
     """
     source_id = _source_id(docket, decision)
     existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+    still_active = (
+        str(decision.client.status or "").strip().lower() in ACTIVE_STATUSES
+        and await _bond_is_active(
+            db, decision.client.bond_case_id, require_record=require_active_record,
+        )
+    )
+    if not still_active:
+        if existing and existing.get("match_status") in {"confirmed", "possible"}:
+            if await _withdraw_row(db, existing, "client_no_longer_active"):
+                return "withdrawn"
+        return "inactive"
     document = _event_document(decision, docket, source_id)
     document["notification_revision"] = _next_notification_revision(existing, decision.status)
     note = _notification(decision, docket, source_id)
@@ -2409,9 +2480,42 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
     return "new"
 
 
-async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> list[str]:
+async def _withdraw_row(db, row: dict, reason: str) -> bool:
+    """Withdraw one active alert row, recording its immutable audit and notification."""
+    source_id = str(row.get("source_id") or "")
+    prior_status = row.get("match_status")
+    document = _mutable_update(row)
+    document["match_status"] = "withdrawn"
+    document["auto_linked"] = False
+    document["ambiguous"] = False
+    document["bond_case_id"] = ""
+    document["defendant_id"] = ""
+    document["matched_defendant_id"] = None
+    document["confirmations"] = []
+    document["confidence"] = 0.0
+    document["notification_revision"] = _next_notification_revision(row, "withdrawn")
+    document = _with_downgrade_audit(row, document, reason)
+    audit = _queue_match_audit(
+        document, source_id, _match_state(row), _match_state(document),
+        reason, _match_evidence(document, reason),
+        prior=row,
+    )
+    result = await db.docket_events.update_one(
+        {"_id": row.get("_id"), "match_status": prior_status},
+        _transition_update(document, audit),
+    )
+    if getattr(result, "matched_count", 0) and source_id:
+        await _flush_match_audit(db, source_id, audit)
+        await _ensure_notification(
+            db, _downgrade_note(document, source_id), source_id, "withdrawn",
+            document["notification_revision"],
+        )
+        return True
+    return False
+
+
+async def _unlink_inactive_bond_ids(db, active: set[str]) -> list[str]:
     """A stored confirmed or possible row whose bond is closed is not posted."""
-    active = {client.bond_case_id for client in clients}
     unlinked_ids: list[str] = []
     async for page in _each_page(
         db.docket_events,
@@ -2425,35 +2529,14 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> list[st
             if any(bond in active for bond in bonds if bond):
                 continue
             source_id = str(row.get("source_id") or "")
-            prior_status = row.get("match_status")
-            document = _mutable_update(row)
-            document["match_status"] = "withdrawn"
-            document["auto_linked"] = False
-            document["ambiguous"] = False
-            document["bond_case_id"] = ""
-            document["defendant_id"] = ""
-            document["matched_defendant_id"] = None
-            document["confirmations"] = []
-            document["confidence"] = 0.0
-            document["notification_revision"] = _next_notification_revision(row, "withdrawn")
-            document = _with_downgrade_audit(row, document, "client_no_longer_active")
-            audit = _queue_match_audit(
-                document, source_id, _match_state(row), _match_state(document),
-                "client_no_longer_active", _match_evidence(document, "client_no_longer_active"),
-                prior=row,
-            )
-            result = await db.docket_events.update_one(
-                {"_id": row.get("_id"), "match_status": prior_status},
-                _transition_update(document, audit),
-            )
-            if getattr(result, "matched_count", 0) and source_id:
-                await _flush_match_audit(db, source_id, audit)
-                await _ensure_notification(
-                    db, _downgrade_note(document, source_id), source_id, "withdrawn",
-                    document["notification_revision"],
-                )
+            if await _withdraw_row(db, row, "client_no_longer_active") and source_id:
                 unlinked_ids.append(source_id)
     return unlinked_ids
+
+
+async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> list[str]:
+    """A stored confirmed or possible row whose bond is closed is not posted."""
+    return await _unlink_inactive_bond_ids(db, {client.bond_case_id for client in clients})
 
 
 async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[MatchDecision]) -> list[str]:
@@ -2474,35 +2557,8 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
                 continue
             if str(row.get("filing_id") or "") not in filing_ids or source_id in still_open:
                 continue
-            prior_status = row.get("match_status")
-            document = _mutable_update(row)
-            document["match_status"] = "withdrawn"
-            document["auto_linked"] = False
-            document["ambiguous"] = False
-            document["bond_case_id"] = ""
-            document["defendant_id"] = ""
-            document["matched_defendant_id"] = None
-            document["confirmations"] = []
-            document["confidence"] = 0.0
-            document["notification_revision"] = _next_notification_revision(row, "withdrawn")
-            document = _with_downgrade_audit(row, document, "identity_no_longer_matches")
-            audit = _queue_match_audit(
-                document, source_id, _match_state(row), _match_state(document),
-                "identity_no_longer_matches", _match_evidence(document, "identity_no_longer_matches"),
-                prior=row,
-            )
-            result = await db.docket_events.update_one(
-                {"_id": row.get("_id"), "match_status": prior_status},
-                _transition_update(document, audit),
-            )
-            if not getattr(result, "matched_count", 0):
-                continue
-            await _flush_match_audit(db, source_id, audit)
-            await _ensure_notification(
-                db, _downgrade_note(document, source_id), source_id, "withdrawn",
-                document["notification_revision"],
-            )
-            withdrawn.append(source_id)
+            if await _withdraw_row(db, row, "identity_no_longer_matches") and source_id:
+                withdrawn.append(source_id)
     return withdrawn
 
 
@@ -2773,6 +2829,15 @@ async def run_federal_bond_risk_scan(
         if seeds_truncated:
             base["truncated"] = True
 
+        # Re-check active bonds after search/hydration so a bond closed during a
+        # long CourtListener scan is withdrawn immediately and never stored.
+        mid_scan_unlinked: list[str] = []
+        if loaded_clients:
+            active_ids = await _active_bond_ids(db)
+            mid_scan_unlinked = await _unlink_inactive_bond_ids(db, active_ids)
+            attempted_notifications.update(mid_scan_unlinked)
+            clients = [client for client in clients if client.bond_case_id in active_ids]
+
         decisions: list[tuple[MatchDecision, DocketView]] = []
         by_docket: dict[str, tuple[DocketView, list[MatchDecision]]] = {}
         for docket in dockets:
@@ -2781,23 +2846,37 @@ async def run_federal_bond_risk_scan(
             for decision in group:
                 decisions.append((decision, docket))
 
-        written = 0
+        written = len(mid_scan_unlinked)
         confirmed = 0
-        possible = 0
+        possible = len(mid_scan_unlinked)
         rows_capped = False
         for decision, docket in decisions:
             source_id = _source_id(docket, decision)
+            if loaded_clients and not await _bond_is_active(
+                db, decision.client.bond_case_id, require_record=True,
+            ):
+                existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+                if existing and existing.get("match_status") in {"confirmed", "possible"}:
+                    if await _withdraw_row(db, existing, "client_no_longer_active"):
+                        attempted_notifications.add(source_id)
+                        written += 1
+                        possible += 1
+                continue
             existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
             if not existing and written >= MAX_ROWS:
                 rows_capped = True
                 base["truncated"] = True
                 continue
-            outcome = await _store_decision(db, decision, docket)
+            outcome = await _store_decision(
+                db, decision, docket, require_active_record=loaded_clients,
+            )
+            if outcome == "inactive":
+                continue
             attempted_notifications.add(source_id)
             if outcome in {"duplicate", "retry_slack"}:
                 continue
             written += 1
-            if outcome == "downgraded" or decision.status != "confirmed":
+            if outcome in {"downgraded", "withdrawn"} or decision.status != "confirmed":
                 possible += 1
             else:
                 confirmed += 1
@@ -2820,6 +2899,13 @@ async def run_federal_bond_risk_scan(
             if next_seed_offset == 0:
                 for search_type, day, resume_url in pending_checkpoints:
                     await _save_search_checkpoint(db, search_type, day, resume_url)
+        # Re-check active bonds one more time before emitting CRM or Slack alerts
+        # so a bond closed during decision persistence is withdrawn first.
+        if loaded_clients:
+            late_unlinked = await _unlink_inactive_bond_ids(db, await _active_bond_ids(db))
+            attempted_notifications.update(late_unlinked)
+            written += len(late_unlinked)
+            possible += len(late_unlinked)
         # Notification and Slack retries run only after this scan's evidence has
         # been reconciled, so an outdated pre-downgrade alert is never sent.
         await retry_pending_notifications(db, skip_source_ids=attempted_notifications)

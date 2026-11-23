@@ -3556,3 +3556,157 @@ async def test_match_audits_record_confidence_across_transitions(monkeypatch):
     reasons = [(row["reason"], row["confidence"], row["old_state"].get("confidence", 0.0), row["new_state"]["confidence"]) for row in db.audit_events.docs]
     assert ("withdrawn_restored", 0.95, 0.0, 0.95) in reasons
     assert ("identity_no_longer_matches", 0.0, 0.95, 0.0) in reasons
+
+
+@pytest.mark.asyncio
+async def test_bond_closing_mid_scan_is_not_stored_or_notified(monkeypatch):
+    from dashboard.services.federal_bond_risk import _store_decision
+
+    _enable(monkeypatch)
+    monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
+
+    # Case A: bond closes during CourtListener search/hydration on a brand-new match.
+    db_a = _DB()
+    db_a.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db_a.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+
+    class _CloseOnSearch(_CourtListener):
+        def __init__(self, target_docs, idx=0):
+            super().__init__(
+                hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
+                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+            )
+            self.target_docs = target_docs
+            self.idx = idx
+
+        async def search_recent(self, **kwargs):
+            res = await super().search_recent(**kwargs)
+            if kwargs.get("search_type") == "r":
+                self.target_docs[self.idx]["status"] = "exonerated"
+            return res
+
+    notifier_a = _Notifier()
+    res_a = await run_federal_bond_risk_scan(
+        db_a, client=_CloseOnSearch(db_a.active_bonds.docs), notifier=notifier_a, pause_s=0,
+    )
+    assert res_a["rows_written"] == 0
+    assert res_a["confirmed"] == 0
+    assert db_a.docket_events.docs == []
+    assert db_a.notifications.docs == []
+    assert notifier_a.calls == []
+
+    # Case B: bond closes during Scan 2 search after an existing confirmed row was stored on Scan 1.
+    db_b = _DB()
+    db_b.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db_b.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    scan1 = await run_federal_bond_risk_scan(
+        db_b,
+        client=_CourtListener(
+            hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
+            parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        ),
+        notifier=_Notifier(),
+        pause_s=0,
+    )
+    assert scan1["confirmed"] == 1
+    notifier_b2 = _Notifier()
+    scan2 = await run_federal_bond_risk_scan(
+        db_b, client=_CloseOnSearch(db_b.active_bonds.docs), notifier=notifier_b2, pause_s=0,
+    )
+    assert scan2["rows_written"] == 1
+    assert scan2["confirmed"] == 0
+    assert db_b.docket_events.docs[0]["match_status"] == "withdrawn"
+    assert db_b.docket_events.docs[0]["auto_linked"] is False
+    assert db_b.docket_events.docs[0]["bond_case_id"] == ""
+    assert db_b.docket_events.docs[0]["confidence"] == 0.0
+    assert any(
+        a["reason"] == "client_no_longer_active" and a["confidence"] == 0.0
+        for a in db_b.audit_events.docs
+    )
+    assert db_b.notifications.docs[-1]["metadata"]["match_status"] == "withdrawn"
+    assert len(notifier_b2.calls) == 1
+    assert notifier_b2.calls[0]["details"]["match_status"] == "withdrawn"
+    assert notifier_b2.calls[0]["details"]["auto_linked"] is False
+
+    # Case C: second bond closes right before its decision is stored in the persistence loop.
+    db_c = _DB()
+    db_c.active_bonds.docs.extend([
+        {"_id": "bond-1", "Bond_Case_ID": "bond-1", "Defendant_ID": "def-1", "defendant_name": "John Smith", "status": "active"},
+        {"_id": "bond-2", "Bond_Case_ID": "bond-2", "Defendant_ID": "def-2", "defendant_name": "Jane Roe", "status": "active"},
+    ])
+    db_c.defendants.docs.extend([
+        {"_id": "def-1", "Defendant_ID": "def-1", "date_of_birth": "1985-01-15"},
+        {"_id": "def-2", "Defendant_ID": "def-2", "date_of_birth": "1990-02-02"},
+    ])
+
+    class _TwoDocketCourt(_CourtListener):
+        def __init__(self):
+            super().__init__(
+                hits=[
+                    _hit(id=1001, docket_id=1001, caseName="United States v. John Smith", docketNumber="2:24-cr-00101"),
+                    _hit(id=1002, docket_id=1002, caseName="United States v. Jane Roe", docketNumber="2:24-cr-00102"),
+                ],
+            )
+
+        async def list_docket_parties(self, docket_id, **kwargs):
+            if docket_id == 1001:
+                return {"success": True, "truncated": False, "results": [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]}
+            return {"success": True, "truncated": False, "results": [{"name": "Roe, Jane", "extra_info": "DOB: 02/02/1990"}]}
+
+    real_update = db_c.docket_events.update_one
+    closed_second = {"done": False}
+
+    async def close_second_after_first(filt, update, upsert=False):
+        res = await real_update(filt, update, upsert=upsert)
+        if upsert and not closed_second["done"]:
+            closed_second["done"] = True
+            db_c.active_bonds.docs[1]["status"] = "exonerated"
+        return res
+
+    db_c.docket_events.update_one = close_second_after_first
+    notifier_c = _Notifier()
+    res_c = await run_federal_bond_risk_scan(db_c, client=_TwoDocketCourt(), notifier=notifier_c, pause_s=0)
+    assert res_c["rows_written"] == 1
+    assert res_c["confirmed"] == 1
+    assert {row["bond_case_id"] for row in db_c.docket_events.docs} == {"bond-1"}
+    assert {row["entity_id"] for row in db_c.notifications.docs} == {"bond-1"}
+    assert {call["details"]["bond_case_id"] for call in notifier_c.calls} == {"bond-1"}
+
+    # Direct _store_decision call with require_active_record=True also fails closed on inactive bonds.
+    from dashboard.services.federal_bond_risk import MatchDecision
+
+    stale = MatchDecision(
+        client=_client(name="Jane Roe", dobs=["1990-02-02"], bond="bond-2", defendant="def-2"),
+        status="confirmed",
+        confirmations=("dob",),
+        event_type="warrant",
+        event_label="Warrant",
+        filing_id="entry:55",
+    )
+    assert await _store_decision(
+        db_c,
+        stale,
+        _docket_for(DocketParty("Roe, Jane", frozenset({"1990-02-02"}))),
+        require_active_record=True,
+    ) == "inactive"
+    assert {row["bond_case_id"] for row in db_c.docket_events.docs} == {"bond-1"}
