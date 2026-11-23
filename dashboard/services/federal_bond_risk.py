@@ -769,26 +769,53 @@ _COMMA_NAME_TRAILERS = frozenset({
 })
 
 
-def _name_in_text(name: str, text: str) -> bool:
-    """True only when ``name`` appears as one contiguous ordered sequence."""
+def _token_spans(value: str, base_offset: int = 0) -> list[tuple[str, int, int]]:
+    """Normalized alpha tokens with their character ``(start, end)`` spans."""
+    out: list[tuple[str, int, int]] = []
+    for match in re.finditer(r"[A-Za-z'-]+", value or ""):
+        token = match.group(0).strip("'-").replace("'", "").upper()
+        if token and token not in _SUFFIXES:
+            out.append((token, base_offset + match.start(), base_offset + match.end()))
+    return out
+
+
+def _name_spans_in_text(name: str, text: str) -> list[tuple[int, int]]:
+    """Character ``(start, end)`` spans where ``name`` appears contiguously in order."""
     parts = name_parts(name)
     if not parts or not text:
-        return False
+        return []
     first, middles, last = parts
     last_seq = tuple(last.split())
     last_len = len(last_seq)
 
-    for segment in _NAME_SEGMENT_SPLIT.split(text):
+    seg_bounds: list[tuple[int, int]] = []
+    pos = 0
+    for sep_match in _NAME_SEGMENT_SPLIT.finditer(text):
+        if sep_match.start() > pos:
+            seg_bounds.append((pos, sep_match.start()))
+        pos = sep_match.end()
+    if pos < len(text):
+        seg_bounds.append((pos, len(text)))
+
+    spans: list[tuple[int, int]] = []
+    for seg_start, seg_end in seg_bounds:
+        segment = text[seg_start:seg_end]
         if not segment.strip():
             continue
-        comma_pieces = segment.split(",")
-        for chunk in comma_pieces:
-            toks = _tokens(chunk)
+        piece_spans: list[tuple[int, int]] = []
+        p_start = seg_start
+        for part in segment.split(","):
+            piece_spans.append((p_start, p_start + len(part)))
+            p_start += len(part) + 1
+        for ps, pe in piece_spans:
+            tok_spans = _token_spans(text[ps:pe], ps)
+            toks = [item[0] for item in tok_spans]
             for i, tok in enumerate(toks):
                 if tok != first:
                     continue
                 if i + 1 + last_len <= len(toks) and tuple(toks[i + 1 : i + 1 + last_len]) == last_seq:
-                    return True
+                    spans.append((tok_spans[i][1], tok_spans[i + last_len][2]))
+                    continue
                 if middles:
                     mid_len = len(middles)
                     j = i + 1 + mid_len
@@ -797,16 +824,20 @@ def _name_in_text(name: str, text: str) -> bool:
                         and tuple(toks[j : j + last_len]) == last_seq
                         and _middles_compatible(middles, tuple(toks[i + 1 : j]))
                     ):
-                        return True
+                        spans.append((tok_spans[i][1], tok_spans[j + last_len - 1][2]))
                 elif (
                     i + 2 + last_len <= len(toks)
                     and tuple(toks[i + 2 : i + 2 + last_len]) == last_seq
                     and toks[i + 1] not in _NON_MIDDLE_TOKENS
                 ):
-                    return True
-        for k in range(len(comma_pieces) - 1):
-            left_toks = _tokens(comma_pieces[k])
-            right_toks = _tokens(comma_pieces[k + 1])
+                    spans.append((tok_spans[i][1], tok_spans[i + 1 + last_len][2]))
+        for k in range(len(piece_spans) - 1):
+            left_spans = _token_spans(text[piece_spans[k][0] : piece_spans[k][1]], piece_spans[k][0])
+            right_spans = _token_spans(
+                text[piece_spans[k + 1][0] : piece_spans[k + 1][1]], piece_spans[k + 1][0],
+            )
+            left_toks = [item[0] for item in left_spans]
+            right_toks = [item[0] for item in right_spans]
             if not (
                 len(left_toks) >= last_len
                 and tuple(left_toks[-last_len:]) == last_seq
@@ -815,9 +846,11 @@ def _name_in_text(name: str, text: str) -> bool:
                 and right_toks[0] == first
             ):
                 continue
+            span_start = left_spans[-last_len][1]
             tail = right_toks[1:]
             if not tail or tail[0] in _COMMA_NAME_TRAILERS:
-                return True
+                spans.append((span_start, right_spans[0][2]))
+                continue
             if middles:
                 mid_len = len(middles)
                 if (
@@ -825,11 +858,16 @@ def _name_in_text(name: str, text: str) -> bool:
                     and _middles_compatible(middles, tuple(tail[:mid_len]))
                     and (len(tail) == mid_len or tail[mid_len] in _COMMA_NAME_TRAILERS)
                 ):
-                    return True
+                    spans.append((span_start, right_spans[mid_len][2]))
                 continue
             if len(tail[0]) == 1 and (len(tail) == 1 or tail[1] in _COMMA_NAME_TRAILERS):
-                return True
-    return False
+                spans.append((span_start, right_spans[1][2]))
+    return spans
+
+
+def _name_in_text(name: str, text: str) -> bool:
+    """True only when ``name`` appears as one contiguous ordered sequence."""
+    return bool(_name_spans_in_text(name, text))
 
 
 def parties_affected_by_text(text: str, party_names: list[str]) -> tuple[str, ...]:
@@ -866,6 +904,123 @@ def parties_affected_by_text(text: str, party_names: list[str]) -> tuple[str, ..
     if len(mentioned) == 1:
         return (mentioned[0],)
     return tuple(dict.fromkeys(mentioned))
+
+
+_EVENT_RULE_BY_TYPE = {et: pat for et, _label, pat in _EVENT_RULES}
+_PERSONAL_ACTOR_SENSITIVE = frozenset({"failure_to_appear", "warrant"})
+_CLAUSE_SPLIT = re.compile(
+    r"[;\n\r:]+"
+    r"|(?<!\b[A-Za-z])(?<!\bSt)(?<!\bJr)(?<!\bSr)\.(?=\s|$)"
+    r"|,\s+(?:and|but|while|whereas|however)\s+",
+    re.I,
+)
+_NON_DEFENDANT_ACTOR = re.compile(
+    r"\b(?:counsel|attorney|lawyer|defender|representative|prosecutor|government|"
+    r"united\s+states|ausa|usao|witness|material\s+witness|victim|surety|"
+    r"bondsman|bail\s+agent|probation|pretrial\s+services|marshal|officer|"
+    r"agent|interpreter|juror)\b",
+    re.I,
+)
+_REPRESENTATIVE_PREFIX = re.compile(
+    r"\b(?:counsel|attorney|lawyer|defender|representative)\s+(?:for|of|representing)\s+(?:the\s+)?(?:defendant\s+)?$",
+    re.I,
+)
+_SUBJECT_BRIDGE_TOKENS = frozenset({
+    "HAS", "HAD", "IS", "WAS", "WHO", "ALLEGEDLY", "ALLEGED", "DEFENDANT", "DEF",
+})
+_TARGET_BRIDGE_TOKENS = frozenset({
+    "ISSUED", "ENTERED", "ORDERED", "FILED", "RETURNED", "EXECUTED",
+    "UNEXECUTED", "AS", "TO", "FOR", "AGAINST", "BY", "OF", "RE",
+    "ON", "IN", "THE", "A", "DEFENDANT", "DEFENDANTS", "DEF",
+    "BOND", "RELEASE", "PRETRIAL", "CONDITIONS", "AND",
+})
+
+
+def _strip_joint_names(bridge: str, current_party: str, party_names: list[str]) -> str:
+    """Blank out earlier party names inside a joint target clause like ``for A and B``."""
+    masked = bridge
+    for other in party_names:
+        if full_name_equal(other, current_party):
+            continue
+        for ns, ne in reversed(_name_spans_in_text(other, masked)):
+            after = masked[ne:]
+            if re.match(r"^\s*(?:and|&)\b", after, re.I):
+                masked = masked[:ns] + (" " * (ne - ns)) + masked[ne:]
+    return masked
+
+
+def _actor_event_parties(text: str, event_type: str, party_names: list[str]) -> tuple[str, ...]:
+    """Tie an actor-sensitive event phrase to the defendant it actually refers to."""
+    pattern = _EVENT_RULE_BY_TYPE.get(event_type)
+    if pattern is None or not text:
+        return ()
+    names = list(party_names or [])
+    matched: list[str] = []
+    header_patterns = (
+        r"\bas to\b(?:\s+the)?(?:\s+defendant)?\s+([^.;\n]+)",
+        r"\bfor defendant\s+([^.;\n]+)",
+    )
+    for clause in _CLAUSE_SPLIT.split(text):
+        if not clause or not clause.strip():
+            continue
+        found_in_clause = False
+        for match in pattern.finditer(clause):
+            found_in_clause = True
+            before = clause[: match.start()]
+            after = clause[match.end() :]
+            if not names:
+                if event_type not in _PERSONAL_ACTOR_SENSITIVE or not _NON_DEFENDANT_ACTOR.search(clause):
+                    matched.extend(parties_named_in_filing(clause))
+                continue
+            for party_name in names:
+                for ns, ne in _name_spans_in_text(party_name, before):
+                    prefix = before[:ns]
+                    bridge = before[ne:]
+                    if (
+                        "," not in bridge
+                        and not _REPRESENTATIVE_PREFIX.search(prefix)
+                        and not _NON_DEFENDANT_ACTOR.search(bridge)
+                        and not _NON_DEFENDANT_ACTOR.search(prefix.rsplit(",", 1)[-1])
+                        and set(_tokens(bridge)).issubset(_SUBJECT_BRIDGE_TOKENS)
+                    ):
+                        matched.append(party_name)
+                for ns, _ne in _name_spans_in_text(party_name, after):
+                    bridge = after[:ns]
+                    if (
+                        "," in bridge
+                        or _NON_DEFENDANT_ACTOR.search(bridge)
+                        or _REPRESENTATIVE_PREFIX.search(bridge)
+                    ):
+                        continue
+                    cleaned_bridge = _strip_joint_names(bridge, party_name, names)
+                    if set(_tokens(cleaned_bridge)).issubset(_TARGET_BRIDGE_TOKENS):
+                        matched.append(party_name)
+            for hpat in header_patterns:
+                for hmatch in re.finditer(hpat, before, flags=re.I):
+                    raw_after_kw = before[hmatch.start(1) :]
+                    if event_type in _PERSONAL_ACTOR_SENSITIVE and _NON_DEFENDANT_ACTOR.search(raw_after_kw):
+                        continue
+                    chunk = _party_chunk(hmatch.group(1))
+                    if not chunk:
+                        continue
+                    chunk_pos = raw_after_kw.find(chunk)
+                    between = raw_after_kw[chunk_pos + len(chunk) :] if chunk_pos >= 0 else ""
+                    if "," in between or _NON_DEFENDANT_ACTOR.search(between):
+                        continue
+                    for part in re.split(r"\s+(?:and|&)\s+|;\s*", chunk):
+                        part = part.strip(" ,.-")
+                        if not name_parts(part):
+                            continue
+                        exact = [name for name in names if full_name_equal(part, name)]
+                        if exact:
+                            matched.extend(exact)
+                        else:
+                            inside = [name for name in names if _name_in_text(name, part)]
+                            if len(inside) == 1:
+                                matched.append(inside[0])
+        if not found_in_clause:
+            continue
+    return tuple(dict.fromkeys(matched))
 
 
 def _filing_affects_client(event: DocketEvent, client: ClientIdentity) -> bool:
@@ -1264,11 +1419,16 @@ def _stop_if_blocked(result: dict) -> None:
 
 
 def _events_from_text(text: str, filing_id: str, party_names: list[str] | None = None) -> list[DocketEvent]:
-    named = parties_affected_by_text(text, list(party_names or []))
-    return [
-        DocketEvent(event_type, label, filing_id, named)
-        for event_type, label in classify_bond_risk(text)
-    ]
+    names = list(party_names or [])
+    general_named = parties_affected_by_text(text, names)
+    events: list[DocketEvent] = []
+    for event_type, label in classify_bond_risk(text):
+        if event_type in _ACTOR_SENSITIVE:
+            named = _actor_event_parties(text, event_type, names)
+        else:
+            named = general_named
+        events.append(DocketEvent(event_type, label, filing_id, named))
+    return events
 
 
 def _hit_entry_date(hit: dict) -> str:
@@ -1330,17 +1490,15 @@ def _extend_events(docket: DocketView, text: str, filing_id: str, party_names: l
     """Keep every filing. A later copy of the same filing can add the party it names."""
     if not filing_id:
         return
-    named = parties_affected_by_text(text, list(party_names or [party.name for party in docket.parties]))
+    resolved_parties = list(party_names or [party.name for party in docket.parties])
     have = {(event.event_type, event.filing_id): event for event in docket.events}
-    for event in _events_from_text(text, filing_id, party_names or [party.name for party in docket.parties]):
+    for event in _events_from_text(text, filing_id, resolved_parties):
         key = (event.event_type, event.filing_id)
         existing = have.get(key)
         if existing is not None:
-            if named:
-                existing.affected_names = tuple(dict.fromkeys((*existing.affected_names, *named)))
+            if event.affected_names:
+                existing.affected_names = tuple(dict.fromkeys((*existing.affected_names, *event.affected_names)))
             continue
-        if named:
-            event.affected_names = named
         docket.events.append(event)
         have[key] = event
 
@@ -1931,7 +2089,7 @@ def _next_notification_revision(existing: Optional[dict], new_status: str) -> in
     return stored
 
 
-async def _mark_notification(db, source_id: str, status: str, revision: int = 0) -> None:
+def _notification_version_filter(source_id: str, status: str, revision: int = 0) -> dict:
     revision = int(revision or 0)
     version: dict = (
         {"$or": [
@@ -1947,33 +2105,53 @@ async def _mark_notification(db, source_id: str, status: str, revision: int = 0)
         {"match_status": {"$exists": False}},
         {"match_status": None},
     ]}
-    await db.docket_events.update_one(
-        {"source": SOURCE, "source_id": source_id, "$and": [status_match, version]},
+    return {"source": SOURCE, "source_id": source_id, "$and": [status_match, version]}
+
+
+async def _mark_notification(db, source_id: str, status: str, revision: int = 0) -> bool:
+    result = await db.docket_events.update_one(
+        _notification_version_filter(source_id, status, revision),
         {"$set": {"notification_written": True, "notification_status": status}},
     )
+    return bool(getattr(result, "matched_count", 0))
 
 
 async def _ensure_notification(db, note: dict, source_id: str, status: str, revision: int = 0) -> bool:
-    """Insert the CRM notification once. Overlapping scans share one row."""
+    """Insert the CRM notification once, gated on the current docket_event revision."""
+    claim = await db.docket_events.update_one(
+        _notification_version_filter(source_id, status, revision),
+        {"$set": {"notification_claim_at": _now(), "notification_claim_status": status}},
+    )
+    if not getattr(claim, "matched_count", 0):
+        return False
     claim_key = _notification_claim_key(source_id, status, revision)
     stored = dict(note)
     stored["type"] = "federal_bond_risk"
     stored["claim_key"] = claim_key
+    upserted = False
     try:
         result = await db.notifications.update_one(
             {"type": "federal_bond_risk", "claim_key": claim_key},
             {"$setOnInsert": stored},
             upsert=True,
         )
+        upserted = bool(getattr(result, "upserted_id", None))
     except Exception as exc:
         if not _duplicate_key(exc):
             log.warning("Federal bond-risk notification was not written: %s", type(exc).__name__)
             return False
-        await _mark_notification(db, source_id, status, revision)
-        return True
-    if getattr(result, "upserted_id", None) or getattr(result, "matched_count", 0):
-        await _mark_notification(db, source_id, status, revision)
-        return True
+        return await _mark_notification(db, source_id, status, revision)
+    if upserted or getattr(result, "matched_count", 0):
+        if await _mark_notification(db, source_id, status, revision):
+            return True
+        if upserted:
+            delete_one = getattr(db.notifications, "delete_one", None)
+            if delete_one is not None:
+                try:
+                    await delete_one({"type": "federal_bond_risk", "claim_key": claim_key})
+                except Exception as exc:
+                    log.warning("Federal bond-risk stale notification cleanup failed: %s", type(exc).__name__)
+        return False
     return False
 
 
@@ -2215,6 +2393,15 @@ def _match_state(row: dict) -> dict:
     }
 
 
+def _match_state_changed(existing: dict, document: dict) -> bool:
+    """True when match evidence changed even though match_status stayed the same."""
+    before = _match_state(existing)
+    after = _match_state(document)
+    before["confirmations"] = sorted(before["confirmations"])
+    after["confirmations"] = sorted(after["confirmations"])
+    return before != after
+
+
 def _match_evidence(row: dict, reason: str) -> dict:
     return {
         "reason": reason,
@@ -2439,6 +2626,56 @@ async def _store_decision(
         )
         return "downgraded"
     if existing:
+        if _match_state_changed(existing, document):
+            document["detected_at"] = existing.get("detected_at") or document["detected_at"]
+            document["updated_at"] = _now()
+            document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
+            document["slack_delivered"] = bool(existing.get("slack_delivered"))
+            document["alert_complete"] = bool(existing.get("alert_complete"))
+            document["slack_claim"] = bool(existing.get("slack_claim"))
+            if existing.get("slack_delivered_at"):
+                document["slack_delivered_at"] = existing["slack_delivered_at"]
+            if existing.get("slack_last_attempt_at"):
+                document["slack_last_attempt_at"] = existing["slack_last_attempt_at"]
+            if existing.get("slack_claim_at"):
+                document["slack_claim_at"] = existing["slack_claim_at"]
+            if existing.get("upgraded_at"):
+                document["upgraded_at"] = existing["upgraded_at"]
+            document["notification_written"] = bool(existing.get("notification_written"))
+            document["notification_status"] = existing.get("notification_status") or ""
+            rev = int(existing.get("notification_revision") or 0)
+            document["notification_revision"] = rev
+            document["_history_event"] = {
+                "at": _now(),
+                "from": existing.get("match_status") or decision.status,
+                "to": decision.status,
+                "reason": "match_evidence_updated",
+                "auto_linked": bool(document.get("auto_linked")),
+                "bond_case_id": document.get("bond_case_id") or "",
+                "matched_defendant_id": document.get("matched_defendant_id"),
+                "confidence": _match_confidence(document),
+            }
+            audit = _queue_match_audit(
+                document, source_id, _match_state(existing), _match_state(document),
+                "match_evidence_updated", _match_evidence(document, "match_evidence_updated"),
+                prior=existing,
+            )
+            result = await db.docket_events.update_one(
+                {
+                    "_id": existing.get("_id"),
+                    **_notification_version_filter(source_id, decision.status, rev),
+                },
+                _transition_update(document, audit),
+            )
+            if not getattr(result, "matched_count", 0):
+                return "duplicate"
+            await _flush_match_audit(db, source_id, audit)
+            if (
+                not existing.get("notification_written")
+                or existing.get("notification_status") != decision.status
+            ):
+                await _ensure_notification(db, note, source_id, decision.status, rev)
+            return "updated"
         if (
             not existing.get("notification_written")
             or existing.get("notification_status") != decision.status
@@ -2458,8 +2695,13 @@ async def _store_decision(
     claimed = await _claim_insert(db, document)
     if claimed != "inserted":
         winner = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
-        if winner and winner.get("match_status") == "confirmed" and decision.status != "confirmed":
-            return await _store_decision(db, decision, docket)
+        if winner and (
+            winner.get("match_status") != decision.status
+            or _match_state_changed(winner, document)
+        ):
+            return await _store_decision(
+                db, decision, docket, require_active_record=require_active_record,
+            )
         if winner and not winner.get("notification_written"):
             await _ensure_notification(
                 db, note, source_id, decision.status,

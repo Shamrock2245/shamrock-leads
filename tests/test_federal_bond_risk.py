@@ -202,6 +202,13 @@ class _Collection:
         self.docs.append(stored)
         return _WriteResult(matched_count=0, upserted_id=stored["_id"])
 
+    async def delete_one(self, filt):
+        for idx, doc in enumerate(self.docs):
+            if _match(doc, filt):
+                self.docs.pop(idx)
+                return type("DeleteResult", (), {"deleted_count": 1})()
+        return type("DeleteResult", (), {"deleted_count": 0})()
+
 
 class _DB:
     def __init__(self):
@@ -3710,3 +3717,153 @@ async def test_bond_closing_mid_scan_is_not_stored_or_notified(monkeypatch):
         require_active_record=True,
     ) == "inactive"
     assert {row["bond_case_id"] for row in db_c.docket_events.docs} == {"bond-1"}
+
+
+@pytest.mark.asyncio
+async def test_actor_sensitive_phrase_must_tie_to_defendant(monkeypatch):
+    from dashboard.services.federal_bond_risk import _events_from_text, decide_matches
+
+    _enable(monkeypatch)
+    party = DocketParty("Smith, John", frozenset({"1985-01-15"}))
+    client = _client(name="John Smith", dobs=["1985-01-15"])
+
+    negative_texts = (
+        "John Smith was present; counsel for the government failed to appear",
+        "John Smith was present, counsel for the government failed to appear",
+        "Counsel for John Smith failed to appear",
+        "Failure to appear by counsel for John Smith",
+        "Arrest warrant issued for witness John Smith",
+        "ORDER as to John Smith: counsel for the government failed to appear",
+        "ORDER as to John Smith, counsel for the government failed to appear",
+        "John Smith appeared; arrest warrant issued for material witness",
+    )
+    for text in negative_texts:
+        events = _events_from_text(text, "entry:1", ["Smith, John"])
+        assert events, text
+        assert all(ev.affected_names == () for ev in events), (text, events)
+        decisions = decide_matches([client], _docket_for(party, events=events))
+        assert len(decisions) == 1, text
+        assert decisions[0].status == "possible", (text, decisions)
+        assert decisions[0].confirmations == (), (text, decisions)
+
+    positive_texts = (
+        "John Smith failed to appear",
+        "Defendant John Smith has failed to appear",
+        "Failure to appear by John Smith",
+        "Arrest warrant issued for John Smith",
+        "Arrest warrant issued as to Smith, John",
+        "ORDER as to John Smith denying Motion to Modify Conditions of Release",
+        "Motion by the Government to revoke bond as to John Smith",
+        "Arrest warrant issued for John Smith and Jane Roe",
+    )
+    party_names = ["Smith, John", "Roe, Jane"]
+    for text in positive_texts:
+        events = _events_from_text(text, "entry:2", party_names)
+        assert events, text
+        assert any("Smith, John" in ev.affected_names for ev in events), (text, events)
+        docket = _docket_for(party, events=events) if "Jane Roe" not in text else _docket_for(
+            party, DocketParty("Roe, Jane", frozenset({"1990-02-02"})), events=events,
+        )
+        decisions = decide_matches([client], docket)
+        assert decisions[0].status == "confirmed", (text, decisions)
+        assert decisions[0].confirmations == ("dob",), (text, decisions)
+
+    # End-to-end scan through _extend_events must also keep multi-clause counsel FTA as possible.
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[{
+            "id": 9,
+            "description": "John Smith was present; counsel for the government failed to appear",
+        }])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    db = _DB()
+    result = await _scan(db, court, [client])
+    assert result["rows_written"] == 1
+    assert result["possible"] == 1
+    assert result["confirmed"] == 0
+    assert db.docket_events.docs[0]["match_status"] == "possible"
+    assert db.docket_events.docs[0]["auto_linked"] is False
+
+
+@pytest.mark.asyncio
+async def test_stale_notification_insert_is_blocked_on_newer_revision(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, _ensure_notification
+
+    # Case 1: docket_events already moved to revision 2 before _ensure_notification runs for revision 1.
+    db = _DB()
+    db.docket_events.docs.append({
+        "_id": "row-1",
+        "source": SOURCE,
+        "source_id": "src-rev",
+        "match_status": "possible",
+        "notification_revision": 2,
+    })
+    stale_note = {
+        "title": "Federal bond risk linked",
+        "metadata": {"source_id": "src-rev", "match_status": "confirmed"},
+    }
+    assert await _ensure_notification(db, stale_note, "src-rev", "confirmed", revision=1) is False
+    assert db.notifications.docs == []
+
+    # Case 2: concurrent scan advances revision from 1 to 2 while notifications.update_one is in flight.
+    db_race = _DB()
+    db_race.docket_events.docs.append({
+        "_id": "row-2",
+        "source": SOURCE,
+        "source_id": "src-race",
+        "match_status": "confirmed",
+        "notification_revision": 1,
+    })
+    real_update = db_race.notifications.update_one
+
+    async def advance_revision_during_insert(filt, update, upsert=False):
+        res = await real_update(filt, update, upsert=upsert)
+        db_race.docket_events.docs[0]["match_status"] = "possible"
+        db_race.docket_events.docs[0]["notification_revision"] = 2
+        return res
+
+    db_race.notifications.update_one = advance_revision_during_insert
+    assert await _ensure_notification(db_race, stale_note, "src-race", "confirmed", revision=1) is False
+    assert db_race.notifications.docs == []
+
+
+@pytest.mark.asyncio
+async def test_same_status_evidence_change_persists_and_audits(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    db = _DB()
+    client = _client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])
+
+    scan1 = await _scan(db, court, [client])
+    assert scan1["rows_written"] == 1
+    assert scan1["confirmed"] == 1
+    assert db.docket_events.docs[0]["confirmations"] == ["dob", "case_number"]
+    assert db.docket_events.docs[0]["confidence"] == 1.0
+    assert len(db.audit_events.docs) == 1
+
+    # Lose DOB evidence while retaining case_number confirmation (same match_status="confirmed").
+    court.parties = [{"name": "Smith, John"}]
+    scan2 = await _scan(db, court, [client])
+    assert scan2["rows_written"] == 1
+    assert scan2["confirmed"] == 1
+    assert db.docket_events.docs[0]["match_status"] == "confirmed"
+    assert db.docket_events.docs[0]["confirmations"] == ["case_number"]
+    assert db.docket_events.docs[0]["confidence"] == 0.95
+    assert db.docket_events.docs[0]["match_history"][-1]["reason"] == "match_evidence_updated"
+    assert len(db.audit_events.docs) == 2
+    updated_audit = db.audit_events.docs[-1]
+    assert updated_audit["reason"] == "match_evidence_updated"
+    assert updated_audit["confidence"] == 0.95
+    assert updated_audit["old_state"]["confirmations"] == ["dob", "case_number"]
+    assert updated_audit["old_state"]["confidence"] == 1.0
+    assert updated_audit["new_state"]["confirmations"] == ["case_number"]
+    assert updated_audit["new_state"]["confidence"] == 0.95
+
+    # Repeating with unchanged evidence writes 0 rows and no extra audit.
+    scan3 = await _scan(db, court, [client])
+    assert scan3["rows_written"] == 0
+    assert len(db.audit_events.docs) == 2
