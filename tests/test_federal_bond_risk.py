@@ -177,6 +177,21 @@ class _Collection:
                     if value not in current:
                         current.append(value)
                     doc[key] = current
+                pulled = update.get("$pull") or {}
+                for key, value in pulled.items():
+                    current = doc.get(key)
+                    if not isinstance(current, list):
+                        continue
+                    if isinstance(value, dict):
+                        doc[key] = [
+                            item for item in current
+                            if not (
+                                isinstance(item, dict)
+                                and all(item.get(field) == expected for field, expected in value.items())
+                            )
+                        ]
+                    else:
+                        doc[key] = [item for item in current if item != value]
                 return _WriteResult(matched_count=1, upserted_id=None)
         if not upsert:
             return _WriteResult(matched_count=0, upserted_id=None)
@@ -275,7 +290,7 @@ class _CourtListener:
 
     async def list_docket_entries(self, docket_id: int, **kwargs):
         self.calls.append(("entries", docket_id))
-        assert int(kwargs.get("max_pages") or 1) <= 3
+        assert int(kwargs.get("max_pages") or 1) <= 50
         if self.entries_error and (
             self.entries_error_ids is None or docket_id in self.entries_error_ids
         ):
@@ -1498,7 +1513,7 @@ async def test_recent_search_walks_a_bounded_number_of_pages(monkeypatch):
     assert len([url for url, _params in calls if "cursor=p" in url or url == "/search/"]) == 3
     assert not any("cursor=p4" in url for url, _params in calls)
 
-    entries = await client.list_docket_entries(5, page_size=20, max_pages=MAX_ENTRY_PAGES, pause_s=0)
+    entries = await client.list_docket_entries(5, page_size=20, max_pages=2, pause_s=0)
     assert entries["pages_fetched"] == 2
     assert [row["id"] for row in entries["results"]] == [8, 7]
     entry_params = [params for url, params in calls if url == "/docket-entries/"][0]
@@ -2434,6 +2449,109 @@ class _StuckSearch(_CourtListener):
 
 
 @pytest.mark.asyncio
+async def test_clearing_a_pending_audit_does_not_erase_a_newer_one():
+    from dashboard.services.federal_bond_risk import SOURCE, _clear_pending_audit
+
+    db = _DB()
+    db.docket_events.docs.append({
+        "_id": "row",
+        "source": SOURCE,
+        "source_id": "src-1",
+        "audit_pending": [
+            {"event_id": "old", "reason": "match_recorded"},
+            {"event_id": "new", "reason": "withdrawn_restored"},
+        ],
+    })
+    real_find = db.docket_events.find_one
+
+    async def stale_find(filt=None, projection=None, sort=None):
+        row = await real_find(filt, projection, sort)
+        if not row or "audit_pending" not in row:
+            return row
+        stale = dict(row)
+        stale["audit_pending"] = [item for item in row["audit_pending"] if item["event_id"] != "new"]
+        return stale
+
+    db.docket_events.find_one = stale_find
+    await _clear_pending_audit(db, "src-1", "old")
+    assert [item["event_id"] for item in db.docket_events.docs[0]["audit_pending"]] == ["new"]
+
+
+@pytest.mark.asyncio
+async def test_entry_pages_cover_the_lookback_window(monkeypatch):
+    _enable(monkeypatch)
+    calls = []
+
+    class _Response:
+        def __init__(self, payload):
+            self.status_code = 200
+            self._payload = payload
+            self.headers = {}
+
+        def json(self):
+            return self._payload
+
+    class _HTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls.append((url, dict(params or {})))
+            page = len(calls)
+            if page == 1:
+                return _Response({
+                    "results": [{"id": 1, "description": "Status conference", "date_filed": "2026-11-20"}],
+                    "next": "https://www.courtlistener.com/api/rest/v4/docket-entries/?cursor=e2",
+                })
+            if page == 2:
+                return _Response({
+                    "results": [{"id": 2, "description": "Arrest warrant issued", "date_filed": "2026-11-05"}],
+                    "next": "https://www.courtlistener.com/api/rest/v4/docket-entries/?cursor=e3",
+                })
+            if page == 3:
+                return _Response({
+                    "results": [{"id": 3, "description": "Ancient minute", "date_filed": "2020-01-01"}],
+                    "next": "https://www.courtlistener.com/api/rest/v4/docket-entries/?cursor=e4",
+                })
+            raise AssertionError(url)
+
+    client = CourtListenerClient(api_token="test-token")
+    client._in_maintenance_window = lambda: False
+    client._client = _HTTP()
+    found = await client.list_docket_entries(
+        5, page_size=20, max_pages=MAX_ENTRY_PAGES, pause_s=0, until_date="2026-10-09",
+    )
+    assert found["truncated"] is False
+    assert found["pages_fetched"] == 3
+    assert [row["id"] for row in found["results"]] == [1, 2, 3]
+    assert len(calls) == 3
+
+    class _Deep(_CourtListener):
+        async def list_docket_entries(self, docket_id, **kwargs):
+            self.calls.append(("entries", kwargs))
+            assert int(kwargs["max_pages"]) > 2
+            assert kwargs.get("until_date")
+            today = datetime.now(timezone.utc).date().isoformat()
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [
+                    {"id": 1, "description": "Status conference", "date_filed": today},
+                    {"id": 80, "description": "Arrest warrant issued", "date_filed": today},
+                ],
+            }
+
+    deep = _Deep(
+        hits=[_hit(recap_documents=[])],
+        parties=[{"name": "Smith, John"}],
+    )
+    db = _DB()
+    result = await _scan(db, deep, [_client()])
+    assert result["rows_written"] == 1
+    assert db.docket_events.docs[0]["event_type"] == "warrant"
+    assert db.docket_events.docs[0]["filing_id"] == "entry:80"
+
+
+@pytest.mark.asyncio
 async def test_truncated_search_continues_before_the_oldest_hit(monkeypatch):
     _enable(monkeypatch)
     court = _PagedSearch()
@@ -2479,9 +2597,10 @@ async def test_truncated_party_list_does_not_match_and_entry_truncation_is_named
     entries.entries_truncated = True
     db = _DB()
     kept = await _scan(db, entries, [_client()])
-    assert kept["success"] is True
-    assert kept["rows_written"] >= 1
-    assert "entry_list_truncated" in kept["warning"]
+    assert kept["success"] is False
+    assert kept["skipped"] == "entry_hydration_failed"
+    assert kept["rows_written"] == 0
+    assert db.docket_events.docs == []
 
 
 @pytest.mark.asyncio

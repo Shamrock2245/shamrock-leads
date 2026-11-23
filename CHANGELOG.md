@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk audit pull and entry window)
+
+### Fixed
+- **Clearing one pending audit does not erase a newer one.** The completed `event_id` is removed with `$pull`. The match update does not replace `audit_pending` or `match_history`.
+- **Docket entries are read through the 45-day lookback.** Paging stops when a filing is older than that window. If the safety ceiling is hit while newer filings may remain, that docket is not alerted.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a stale audit clear that leaves the newer payload, and a warrant past the second entry page.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk search ceiling and audit claim)
 
 ### Fixed

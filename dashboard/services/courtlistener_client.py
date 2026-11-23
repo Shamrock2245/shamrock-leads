@@ -270,6 +270,19 @@ def _strip_html_text(raw_html: str) -> str:
 BASE_URL = "https://www.courtlistener.com/api/rest/v4"
 
 
+def _entry_page_left_window(results: list, until_date: str) -> bool:
+    """True when this newest-first page has reached filings older than the window."""
+    if not until_date:
+        return False
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        day = str(row.get("date_filed") or "")[:10]
+        if len(day) == 10 and day[4] == "-" and day[7] == "-" and day < until_date:
+            return True
+    return False
+
+
 def _search_page_left_window(results: list, until_entry_before: Optional[str]) -> bool:
     """True when every dated hit on the page is older than the filing window."""
     if not until_entry_before:
@@ -721,13 +734,17 @@ class CourtListenerClient:
         page_size: int = 15,
         max_pages: int = 1,
         pause_s: float = 0.0,
+        until_date: Optional[str] = None,
     ) -> dict:
-        """Newest docket entries. ``max_pages`` is capped at 3. No plain_text.
+        """Newest docket entries, through the caller's filing window.
 
-        The first request selects fields. A later page uses the ``next`` URL
-        only, so the cursor is not widened into an unbounded walk.
+        ``max_pages`` is a safety ceiling (at most 50). No plain_text. The
+        first request selects fields. A later page uses the ``next`` URL only.
+        Paging stops once a page contains a filing older than ``until_date``.
+        ``truncated`` is true only when the ceiling is hit while newer filings
+        may remain.
         """
-        page_cap = max(1, min(int(max_pages or 1), 3))
+        page_cap = max(1, min(int(max_pages or 1), 50))
         params: Optional[dict] = {
             "docket": int(docket_id),
             "fields": DOCKET_ENTRY_FIELDS,
@@ -737,6 +754,7 @@ class CourtListenerClient:
         url = "/docket-entries/"
         combined: list = []
         pages = 0
+        window_end = str(until_date or "")[:10]
         for _ in range(page_cap):
             res = await self._read_v4(url, params)
             pages += 1
@@ -744,9 +762,19 @@ class CourtListenerClient:
                 res["results"] = combined or res.get("results") or []
                 res["pages_fetched"] = pages if not combined else pages - 1
                 return res
-            combined.extend(res.get("results") or [])
+            page_rows = list(res.get("results") or [])
+            combined.extend(page_rows)
             data = res.get("data") if isinstance(res.get("data"), dict) else {}
             next_url = str((data or {}).get("next") or "").strip()
+            if _entry_page_left_window(page_rows, window_end):
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": False,
+                }
             if not next_url or pages >= page_cap:
                 return {
                     "success": True,

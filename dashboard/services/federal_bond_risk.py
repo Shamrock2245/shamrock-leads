@@ -56,9 +56,9 @@ MAX_ROWS = 30
 MAX_SLACK = 10
 LOOKBACK_DAYS = 45
 SLACK_CLAIM_TTL = timedelta(minutes=30)
-# Safety ceiling only. Paging stops when the entry dates leave the window.
+# Safety ceiling only. Paging stops when the filing dates leave the window.
 MAX_SEARCH_PAGES = 50
-MAX_ENTRY_PAGES = 2
+MAX_ENTRY_PAGES = 50
 
 BOND_RISK_QUERY = (
     '"conditions of release" OR "detention hearing" OR "failure to appear" '
@@ -1252,9 +1252,7 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
             + "). No alerts were written.",
             "party_hydration_failed",
         )
-    hard_entry_failures = [
-        item for item in entry_failures if not str(item).endswith("entry_list_truncated")
-    ]
+    hard_entry_failures = list(entry_failures)
     if entry_attempts and hard_entry_failures and len(hard_entry_failures) == entry_attempts:
         raise _ScanStop(
             "CourtListener docket entries failed for every docket ("
@@ -1300,10 +1298,19 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         return None, f"{docket_id} party_list_truncated", "", ""
     parties = [row for row in (party_res.get("results") or []) if isinstance(row, dict)]
     entry_res = await client.list_docket_entries(
-        int(docket_id), page_size=20, max_pages=MAX_ENTRY_PAGES, pause_s=pause_s,
+        int(docket_id),
+        page_size=20,
+        max_pages=MAX_ENTRY_PAGES,
+        pause_s=pause_s,
+        until_date=filing_window_start(),
     )
     _stop_if_blocked(entry_res)
     entry_error = ""
+    if entry_res.get("success") and entry_res.get("truncated"):
+        # Still inside the lookback window when the safety ceiling was hit.
+        # A partial list would hide a warrant or release, so this docket stops.
+        log.warning("Docket %s entry list did not cover the lookback window", docket_id)
+        return None, "", f"{docket_id} entry_list_truncated", ""
     if entry_res.get("success"):
         entries = [
             row for row in (entry_res.get("results") or [])
@@ -1313,9 +1320,6 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         detail = entry_res.get("error") or f"HTTP {entry_res.get('status_code') or 'error'}"
         log.warning("Docket %s entries unavailable: %s", docket_id, detail)
         entry_error = f"{docket_id} {detail}"
-    if entry_res.get("success") and entry_res.get("truncated"):
-        log.warning("Docket %s entry list was truncated", docket_id)
-        entry_error = f"{docket_id} entry_list_truncated"
 
     court_id = _court_slug(brief) or _court_slug(first)
     docket_number = _first_text(brief, "docket_number") or _first_text(first, "docketNumber", "docket_number")
@@ -1689,20 +1693,14 @@ async def _insert_audit(db, payload: dict) -> bool:
 
 
 async def _clear_pending_audit(db, source_id: str, event_id: str) -> None:
+    """Drop one completed audit. A newer pending item is not rewritten away."""
     events = getattr(db, "docket_events", None)
     if events is None or not source_id or not event_id:
         return
-    row = await events.find_one({"source": SOURCE, "source_id": source_id})
-    if not row:
-        return
-    pending = [item for item in (row.get("audit_pending") or []) if isinstance(item, dict)]
-    remaining = [item for item in pending if item.get("event_id") != event_id]
-    if remaining == pending:
-        return
     try:
         await events.update_one(
-            {"_id": row.get("_id")},
-            {"$set": {"audit_pending": remaining}},
+            {"source": SOURCE, "source_id": source_id},
+            {"$pull": {"audit_pending": {"event_id": event_id}}},
         )
     except Exception as exc:
         log.warning("Federal bond-risk pending audit was not cleared: %s", type(exc).__name__)
@@ -1784,8 +1782,20 @@ def _downgrade_copy(name: str, event_label: str) -> tuple[str, str]:
 
 
 def _mutable_update(document: dict) -> dict:
-    """Fields safe to ``$set``. ``_id`` is immutable and must not be in the update."""
-    return {key: value for key, value in document.items() if key != "_id"}
+    """Fields safe to ``$set``. Lists that other scans append stay off this update."""
+    skipped = {"_id", "audit_pending", "match_history", "_history_event"}
+    return {key: value for key, value in document.items() if key not in skipped}
+
+
+def _transition_update(document: dict, audit: Optional[dict] = None) -> dict:
+    """Commit a match change without replacing pending audits or history."""
+    update: dict = {"$set": _mutable_update(document)}
+    history_event = document.get("_history_event")
+    if history_event:
+        update["$push"] = {"match_history": history_event}
+    if audit:
+        update["$addToSet"] = {"audit_pending": audit}
+    return update
 
 
 def _with_downgrade_audit(existing: dict, document: dict, reason: str) -> dict:
@@ -1798,8 +1808,7 @@ def _with_downgrade_audit(existing: dict, document: dict, reason: str) -> dict:
     updated["downgrade_reason"] = reason
     updated["prior_bond_case_id"] = existing.get("bond_case_id") or ""
     updated["prior_matched_defendant_id"] = existing.get("matched_defendant_id")
-    history = list(existing.get("match_history") or [])
-    history.append({
+    updated["_history_event"] = {
         "at": now,
         "from": existing.get("match_status") or "confirmed",
         "to": updated.get("match_status"),
@@ -1807,8 +1816,7 @@ def _with_downgrade_audit(existing: dict, document: dict, reason: str) -> dict:
         "auto_linked": bool(existing.get("auto_linked")),
         "bond_case_id": existing.get("bond_case_id") or "",
         "matched_defendant_id": existing.get("matched_defendant_id"),
-    })
-    updated["match_history"] = history
+    }
     updated["slack_delivered"] = False
     updated["alert_complete"] = False
     updated["slack_claim"] = False
@@ -1890,7 +1898,6 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         document["detected_at"] = existing.get("detected_at") or document["detected_at"]
         document["upgraded_at"] = _now()
         document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
-        document["match_history"] = list(existing.get("match_history") or [])
         audit = _queue_match_audit(
             document, source_id, _match_state(existing), _match_state(document),
             "possible_upgraded_to_confirmed", _match_evidence(document, "possible_upgraded_to_confirmed"),
@@ -1898,7 +1905,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         )
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "possible"},
-            {"$set": _mutable_update(document)},
+            _transition_update(document, audit),
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
@@ -1913,8 +1920,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         document["slack_claim"] = False
         document["slack_delivered"] = False
         document["alert_complete"] = False
-        history = list(existing.get("match_history") or [])
-        history.append({
+        document["_history_event"] = {
             "at": _now(),
             "from": "withdrawn",
             "to": decision.status,
@@ -1922,8 +1928,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
             "auto_linked": bool(existing.get("auto_linked")),
             "bond_case_id": existing.get("prior_bond_case_id") or existing.get("bond_case_id") or "",
             "matched_defendant_id": existing.get("prior_matched_defendant_id") or existing.get("matched_defendant_id"),
-        })
-        document["match_history"] = history
+        }
         audit = _queue_match_audit(
             document, source_id, _match_state(existing), _match_state(document),
             "withdrawn_restored", _match_evidence(document, "withdrawn_restored"),
@@ -1931,7 +1936,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         )
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "withdrawn"},
-            {"$set": _mutable_update(document)},
+            _transition_update(document, audit),
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
@@ -1949,7 +1954,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         )
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "confirmed"},
-            {"$set": _mutable_update(document)},
+            _transition_update(document, audit),
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
@@ -2033,7 +2038,7 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
             )
             result = await db.docket_events.update_one(
                 {"_id": row.get("_id"), "match_status": prior_status},
-                {"$set": _mutable_update(document)},
+                _transition_update(document, audit),
             )
             if getattr(result, "matched_count", 0) and source_id:
                 await _flush_match_audit(db, source_id, audit)
@@ -2076,7 +2081,7 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
             )
             result = await db.docket_events.update_one(
                 {"_id": row.get("_id"), "match_status": prior_status},
-                {"$set": _mutable_update(document)},
+                _transition_update(document, audit),
             )
             if not getattr(result, "matched_count", 0):
                 continue
