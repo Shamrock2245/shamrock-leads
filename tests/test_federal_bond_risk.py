@@ -345,6 +345,31 @@ async def _scan(db, court, clients, notifier=None):
     )
 
 
+def test_subjectless_actor_event_on_one_defendant_is_not_confirmed():
+    from dashboard.services.federal_bond_risk import decide_matches
+
+    filing = DocketEvent("failure_to_appear", "Failure to appear", "entry:1")
+    docket = _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        events=[filing],
+    )
+    rows = decide_matches([_client(dobs=["1985-01-15"])], docket)
+    assert rows[0].status == "possible"
+    assert rows[0].confirmations == ()
+    named = DocketEvent("failure_to_appear", "Failure to appear", "entry:2", ("John Smith",))
+    linked = decide_matches([_client(dobs=["1985-01-15"])], _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        events=[named],
+    ))
+    assert linked[0].status == "confirmed"
+    hearing = DocketEvent("detention_hearing", "Detention hearing", "entry:3")
+    case_event = decide_matches([_client(dobs=["1985-01-15"])], _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        events=[hearing],
+    ))
+    assert case_event[0].status == "confirmed"
+
+
 def test_subjectless_filing_on_several_defendants_is_not_confirmed():
     from dashboard.services.federal_bond_risk import decide_matches
 
@@ -2446,6 +2471,61 @@ class _StuckSearch(_CourtListener):
             "truncated": True,
             "results": [_window_hit(1001, "2026-11-20", "Arrest warrant issued")],
         }
+
+
+@pytest.mark.asyncio
+async def test_failed_scan_is_not_logged_as_a_completed_skip(monkeypatch):
+    from dashboard.cron import _run_federal_bond_risk
+
+    async def failed(_db):
+        return {"success": False, "skipped": "search_failed", "warning": "CourtListener search failed"}
+
+    async def quiet(_db):
+        return {"success": True, "skipped": "flag_off"}
+
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: object())
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", failed)
+    with pytest.raises(RuntimeError, match="search_failed"):
+        await _run_federal_bond_risk()
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.run_federal_bond_risk_scan", quiet)
+    await _run_federal_bond_risk()
+
+
+class _SameDayResume(_CourtListener):
+    def __init__(self):
+        super().__init__(parties=[{"name": "Smith, John"}])
+
+    async def search_recent(self, **kwargs):
+        self.calls.append(("search_recent", kwargs))
+        if kwargs["search_type"] != "r":
+            return {"success": True, "results": [], "truncated": False}
+        if not kwargs.get("start_url"):
+            return {
+                "success": True,
+                "truncated": True,
+                "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=same-day",
+                "results": [_window_hit(1001, "2026-11-20", "Order Setting Conditions of Release")],
+            }
+        assert kwargs["start_url"].endswith("cursor=same-day")
+        return {
+            "success": True,
+            "truncated": False,
+            "results": [_window_hit(1002, "2026-11-20", "Order Setting Conditions of Release", "2:24-cr-00456")],
+        }
+
+
+@pytest.mark.asyncio
+async def test_same_day_search_ceiling_resumes_from_the_cursor(monkeypatch):
+    _enable(monkeypatch)
+    court = _SameDayResume()
+    db = _DB()
+    first = await _scan(db, court, [_client()])
+    assert first["rows_written"] == 1
+    assert db.docket_events.docs[0]["docket_id"] == "1001"
+    second = await _scan(db, court, [_client()])
+    assert second["rows_written"] == 1
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002"}
+    assert second["success"] is True
 
 
 @pytest.mark.asyncio

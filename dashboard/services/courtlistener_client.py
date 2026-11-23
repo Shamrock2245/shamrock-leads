@@ -639,6 +639,7 @@ class CourtListenerClient:
         filed_after: Optional[str] = None,
         entry_date_filed_after: Optional[str] = None,
         entry_date_filed_before: Optional[str] = None,
+        start_url: Optional[str] = None,
         page_size: int = 20,
         max_pages: int = 50,
         pause_s: float = 0.0,
@@ -678,7 +679,9 @@ class CourtListenerClient:
         if courts:
             params["court"] = " ".join(str(c).strip() for c in courts if str(c).strip())
 
-        url = "/search/"
+        url = start_url or "/search/"
+        if start_url:
+            params = None
         combined: list = []
         pages = 0
         last: dict = {"success": False, "results": [], "status_code": None, "data": None}
@@ -702,15 +705,19 @@ class CourtListenerClient:
                     "pages_fetched": pages,
                     "truncated": False,
                 }
-            if not next_url or pages >= page_cap:
-                return {
+            truncated = bool(next_url) and pages >= page_cap
+            if not next_url or truncated:
+                payload = {
                     "success": True,
                     "status_code": 200,
                     "results": combined,
                     "data": data,
                     "pages_fetched": pages,
-                    "truncated": bool(next_url) and pages >= page_cap,
+                    "truncated": truncated,
                 }
+                if truncated and next_url:
+                    payload["resume_url"] = next_url
+                return payload
             url = next_url
             params = None
             if pause_s:

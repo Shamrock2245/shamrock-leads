@@ -93,10 +93,23 @@ async def _run_docket_monitor():
     logger.info("[DocketMonitor] ✅ %d bonds, %d events", result.get("bonds_scanned", 0), result.get("events_found", 0))
 
 async def _run_federal_bond_risk():
-    """Florida federal bond-risk scan. No CourtListener call unless the flag and token are set."""
+    """Florida federal bond-risk scan. No CourtListener call unless the flag and token are set.
+
+    Expected skips (flag off, no token, maintenance, no open bonds) are logged
+    and the cycle completes. A scan that reports ``success: false`` is a
+    monitoring outage and is raised so the cron runner does not treat it as done.
+    """
     from dashboard.services.federal_bond_risk import run_federal_bond_risk_scan
     from dashboard.extensions import get_db
     result = await run_federal_bond_risk_scan(get_db())
+    if result.get("success") is False:
+        skipped = result.get("skipped") or "failed"
+        logger.warning(
+            "[FederalBondRisk] scan failed skipped=%s warning=%s",
+            skipped,
+            result.get("warning") or "",
+        )
+        raise RuntimeError(f"Federal bond-risk scan failed: {skipped}")
     if result.get("skipped"):
         logger.info(
             "[FederalBondRisk] skipped=%s warning=%s",

@@ -100,6 +100,14 @@ _EVENT_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
     )),
 )
 _SET_SUPPRESSED_BY = {"revocation_of_release", "modification_of_release", "bond_conditions_changed"}
+# These phrases can describe counsel, the government, or another person.
+# Without a named defendant they stay possible, even on a one-defendant docket.
+_ACTOR_SENSITIVE = frozenset({
+    "failure_to_appear",
+    "warrant",
+    "revocation_of_release",
+    "modification_of_release",
+})
 
 _DOB_FIELDS = (
     "dob", "DOB", "date_of_birth", "defendant_dob", "Date_of_Birth", "Defendant_DOB",
@@ -653,8 +661,9 @@ def _docket_people(docket: DocketView) -> set[tuple]:
 def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[MatchDecision]:
     """One decision per client per event. Two confirmed people on one event are not linked.
 
-    A filing that names nobody, on a docket with more than one defendant, is
-    not confirmed. Several bonds for the same defendant are still one person.
+    A filing that names nobody is not confirmed when the docket has more than
+    one defendant, or when the phrase can describe someone other than the
+    defendant. Several bonds for the same defendant are still one person.
     """
     decisions: list[MatchDecision] = []
     for event in docket.events:
@@ -665,10 +674,9 @@ def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[Ma
             status, confirmations = match_client(client, docket)
             if not status:
                 continue
-            if (
-                status == "confirmed"
-                and not event.affected_names
-                and len(_docket_people(docket)) > 1
+            if status == "confirmed" and not event.affected_names and (
+                len(_docket_people(docket)) > 1
+                or event.event_type in _ACTOR_SENSITIVE
             ):
                 status = "possible"
                 confirmations = ()
@@ -1087,21 +1095,26 @@ def _oldest_entry_day(hits: list) -> str:
     return min(days) if days else ""
 
 
-async def _search_before(db, search_type: str) -> str:
+async def _search_checkpoint(db, search_type: str) -> tuple[str, str]:
+    """Saved upper date and the CourtListener ``next`` URL, if a slice remains."""
     collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
     if collection is None:
-        return ""
-    row = await collection.find_one({"_id": _search_before_id(search_type)})
-    return str((row or {}).get("before") or "")[:10]
+        return "", ""
+    row = await collection.find_one({"_id": _search_before_id(search_type)}) or {}
+    return str(row.get("before") or "")[:10], str(row.get("resume_url") or "")
 
 
-async def _save_search_before(db, search_type: str, day: str) -> None:
+async def _save_search_checkpoint(db, search_type: str, day: str = "", resume_url: str = "") -> None:
     collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
     if collection is None:
         return
     await collection.update_one(
         {"_id": _search_before_id(search_type)},
-        {"$set": {"before": str(day or "")[:10], "updated_at": _now()}},
+        {"$set": {
+            "before": str(day or "")[:10],
+            "resume_url": str(resume_url or ""),
+            "updated_at": _now(),
+        }},
         upsert=True,
     )
 
@@ -1149,13 +1162,14 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
     search_notes: list[str] = []
     stuck: list[str] = []
     for search_type in ("r", "rd", "d"):
-        cursor = await _search_before(db, search_type)
+        cursor, resume = await _search_checkpoint(db, search_type)
         result = await client.search_recent(
             search_type=search_type,
             query=BOND_RISK_QUERY,
             courts=list(FL_FEDERAL_COURT_IDS),
             entry_date_filed_after=window,
-            entry_date_filed_before=cursor or None,
+            entry_date_filed_before=None if resume else (cursor or None),
+            start_url=resume or None,
             page_size=20,
             max_pages=MAX_SEARCH_PAGES,
             pause_s=pause_s,
@@ -1170,16 +1184,23 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
         successes += 1
         if result.get("truncated"):
             oldest = _oldest_entry_day(result.get("results") or [])
-            if not oldest or (cursor and oldest >= cursor):
-                stuck.append(search_type)
-            else:
-                await _save_search_before(db, search_type, oldest)
+            resume_url = str(result.get("resume_url") or "")
+            if resume_url and resume_url != resume:
+                await _save_search_checkpoint(db, search_type, oldest or cursor, resume_url)
+                search_notes.append(
+                    f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest or 'the cutoff date'}. "
+                    "The next scan continues from the remaining search cursor."
+                )
+            elif oldest and (not cursor or oldest < cursor):
+                await _save_search_checkpoint(db, search_type, oldest, "")
                 search_notes.append(
                     f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest}. "
                     "The next scan continues with the older filings."
                 )
+            else:
+                stuck.append(search_type)
         else:
-            await _save_search_before(db, search_type, "")
+            await _save_search_checkpoint(db, search_type, "", "")
         for hit in result.get("results") or []:
             if not isinstance(hit, dict):
                 continue

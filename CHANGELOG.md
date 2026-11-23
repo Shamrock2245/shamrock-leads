@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk cron failure, unnamed actor, search cursor)
+
+### Fixed
+- **A failed federal scan is not a completed cron cycle.** `search_failed`, a missing index, and a hydration outage raise. Flag off, no token, and maintenance still log and return.
+- **An FTA or warrant that names nobody stays possible.** On a one-defendant docket, "Counsel for the government failed to appear" is not auto-linked. A filing that names the defendant, and a case event such as a detention hearing, can still confirm.
+- **Hits that share the cutoff date are not skipped.** When the 1,000-hit page stops on one date, the next scan resumes from CourtListener's search cursor.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a failed scan versus flag-off, an unnamed failure to appear, and two hits on the same cutoff date.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk audit pull and entry window)
 
 ### Fixed
