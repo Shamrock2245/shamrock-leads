@@ -2966,14 +2966,24 @@ async def test_truncated_search_holds_checkpoint_until_capped_rows_are_stored(mo
             start_url = kwargs.get("start_url") or ""
             self.r_starts.append(start_url)
             if not start_url:
+                if len(self.r_starts) == 1:
+                    return {
+                        "success": True,
+                        "truncated": True,
+                        "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=slice2",
+                        "results": [
+                            _window_hit(1001, "2026-11-20", "Detention hearing", "2:24-cr-00101"),
+                            _window_hit(1002, "2026-11-20", "Detention hearing", "2:24-cr-00102"),
+                            _window_hit(1003, "2026-11-20", "Detention hearing", "2:24-cr-00103"),
+                        ],
+                    }
+                # Newer filings arriving before Scan 2 would push 1003 off a re-queried slice.
                 return {
                     "success": True,
                     "truncated": True,
-                    "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=slice2",
+                    "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=newer",
                     "results": [
-                        _window_hit(1001, "2026-11-20", "Detention hearing", "2:24-cr-00101"),
-                        _window_hit(1002, "2026-11-20", "Detention hearing", "2:24-cr-00102"),
-                        _window_hit(1003, "2026-11-20", "Detention hearing", "2:24-cr-00103"),
+                        _window_hit(9001, "2026-11-21", "Detention hearing", "2:24-cr-00901"),
                     ],
                 }
             assert start_url.endswith("cursor=slice2")
@@ -2994,13 +3004,13 @@ async def test_truncated_search_holds_checkpoint_until_capped_rows_are_stored(mo
     assert "row cap" in first["warning"]
     assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002"}
 
-    # Slice 1 had 1 unwritten match remaining, so Scan 2 re-reads slice 1 before advancing.
+    # Slice 1's remaining seed 1003 drains from durable state without re-searching CourtListener.
     second = await _scan(db, court, [_client()])
     assert second["rows_written"] == 1
     assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002", "1003"}
-    assert court.r_starts == ["", ""]
+    assert court.r_starts == [""]
 
-    # Now slice 1 is completely stored, so Scan 3 advances to cursor=slice2.
+    # Now slice 1 is completely drained, so Scan 3 advances to cursor=slice2.
     third = await _scan(db, court, [_client()])
     assert third["rows_written"] == 1
     assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002", "1003", "1004"}
@@ -3048,7 +3058,7 @@ async def test_truncated_search_holds_checkpoint_while_hydration_batch_remains(m
     assert s1["rows_written"] == 1
     s2 = await _scan(db, court, [_client()])
     assert s2["rows_written"] == 1
-    assert court.r_starts == ["", ""]
+    assert court.r_starts == [""]
     assert {row["docket_id"] for row in db.docket_events.docs} == {"2001", "2002"}
 
     s3 = await _scan(db, court, [_client()])
@@ -3265,11 +3275,11 @@ async def test_partial_hydration_failure_holds_search_checkpoint(monkeypatch):
     assert first["rows_written"] == 1
     assert {row["docket_id"] for row in db.docket_events.docs} == {"3001"}
 
-    # Recover party hydration on Scan 2: slice 1 must be retried so 3002 is not skipped.
+    # Recover party hydration on Scan 2: 3002 drains from the stored slice without re-searching.
     court.parties_error_ids = set()
     second = await _scan(db, court, [_client()])
     assert second["rows_written"] == 1
-    assert court.r_starts == ["", ""]
+    assert court.r_starts == [""]
     assert {row["docket_id"] for row in db.docket_events.docs} == {"3001", "3002"}
 
     # Now all dockets in slice 1 hydrated cleanly, so Scan 3 advances to slice 2.
@@ -3331,7 +3341,7 @@ async def test_partial_hydration_failure_holds_search_checkpoint(monkeypatch):
     e_court.entries_error_ids = set()
     e2 = await _scan(e_db, e_court, [_client()])
     assert e2["rows_written"] == 1
-    assert e_court.r_starts == ["", ""]
+    assert e_court.r_starts == [""]
     assert {row["docket_id"] for row in e_db.docket_events.docs} == {"3001", "3002"}
 
 
@@ -3867,3 +3877,92 @@ async def test_same_status_evidence_change_persists_and_audits(monkeypatch):
     scan3 = await _scan(db, court, [client])
     assert scan3["rows_written"] == 0
     assert len(db.audit_events.docs) == 2
+
+
+@pytest.mark.asyncio
+async def test_filing_scan_uses_only_recap_search_types_not_docket_only(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John"}],
+    )
+    db = _DB()
+    result = await _scan(db, court, [_client()])
+    assert result["success"] is True
+    assert result["rows_written"] == 1
+    searched_types = {
+        kwargs["search_type"]
+        for kind, kwargs in court.calls
+        if kind == "search_recent"
+    }
+    assert searched_types == {"r", "rd"}
+
+
+@pytest.mark.asyncio
+async def test_pending_slice_id_is_unique_per_tenant(monkeypatch):
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    from dashboard.services.federal_bond_risk import (
+        _clear_pending_slice,
+        _load_pending_slice,
+        _pending_slice_id,
+        _save_pending_slice,
+    )
+    from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.tenancy.scope import TenantScopedDatabase
+
+    class _States:
+        def __init__(self):
+            self.docs = []
+
+        async def find_one(self, filt=None):
+            for doc in self.docs:
+                if all(doc.get(key) == value for key, value in (filt or {}).items()):
+                    return dict(doc)
+            return None
+
+        async def update_one(self, filt, update, upsert=False):
+            for doc in self.docs:
+                if all(doc.get(key) == value for key, value in (filt or {}).items()):
+                    doc.update((update or {}).get("$set") or {})
+                    return type("R", (), {"matched_count": 1, "upserted_id": None})()
+            if not upsert:
+                return type("R", (), {"matched_count": 0, "upserted_id": None})()
+            new_id = (filt or {}).get("_id")
+            if any(doc.get("_id") == new_id for doc in self.docs):
+                raise RuntimeError("E11000 duplicate key")
+            stored = dict(filt or {})
+            stored.update((update or {}).get("$set") or {})
+            self.docs.append(stored)
+            return type("R", (), {"matched_count": 0, "upserted_id": new_id})()
+
+    class _Raw:
+        def __init__(self):
+            self.federal_bond_risk_state = _States()
+
+    raw = _Raw()
+    db = TenantScopedDatabase(raw)
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        assert _pending_slice_id() == "pending_slice:alpha"
+        assert await _save_pending_slice(
+            db, [{"id": "101", "hits": []}], [("r", "2026-11-20", "")], [], commit_checkpoints=True,
+        ) is True
+    with bind_job_tenant("beta", "federal_bond_risk"):
+        assert _pending_slice_id() == "pending_slice:beta"
+        assert await _load_pending_slice(db) is None
+        assert await _save_pending_slice(
+            db, [{"id": "202", "hits": []}], [], [], commit_checkpoints=True,
+        ) is True
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        loaded_alpha = await _load_pending_slice(db)
+        assert loaded_alpha is not None
+        assert [row["id"] for row in loaded_alpha[0]] == ["101"]
+        await _clear_pending_slice(db)
+        assert await _load_pending_slice(db) is None
+    with bind_job_tenant("beta", "federal_bond_risk"):
+        loaded_beta = await _load_pending_slice(db)
+        assert loaded_beta is not None
+        assert [row["id"] for row in loaded_beta[0]] == ["202"]
+    assert {doc["_id"] for doc in raw.federal_bond_risk_state.docs} == {
+        "pending_slice:alpha",
+        "pending_slice:beta",
+    }

@@ -48,6 +48,9 @@ AUDIT_INDEX = "idx_federal_bond_risk_audit"
 _ON = {"1", "true", "yes", "on"}
 ACTIVE_STATUSES = ("active", "monitoring", "alert", "reinstated")
 FL_FEDERAL_COURTS = frozenset(FL_FEDERAL_COURT_IDS)
+# CourtListener v4 supports ``entry_date_filed`` filtering/ordering only on
+# RECAP dockets (``r``) and RECAP documents (``rd``), not docket-only ``d``.
+FEDERAL_SEARCH_TYPES = ("r", "rd")
 BOND_PAGE = 200
 # Search already stops at 50 pages. Hydrate every seed from that window.
 # 3,000 is only a ceiling. Past it, the next scan continues where this one stopped.
@@ -1604,132 +1607,266 @@ async def _save_seed_offset(db, offset: int) -> None:
     )
 
 
-async def _collect_dockets(
-    client,
-    pause_s: float,
-    db=None,
-) -> tuple[list[DocketView], bool, int, list[tuple[str, str, str]], list[str], list[str], list[str], list[str], list[str]]:
-    """Search recent RECAP and docket pages, then hydrate the seed batch.
+_HIT_KEEP_KEYS = (
+    "id", "docket_id", "docketId", "court_id", "court",
+    "docketNumber", "docket_number", "caseName", "case_name",
+    "case_name_full", "pacer_case_id", "cause",
+    "entry_date_filed", "entryDateFiled",
+    "description", "short_description", "snippet", "_search_type",
+)
+_DOC_KEEP_KEYS = (
+    "id", "pacer_doc_id", "docket_entry_id", "docketEntryId",
+    "entry_id", "docket_entry", "entry_date_filed", "entryDateFiled",
+    "description", "short_description", "snippet",
+)
 
-    Search checkpoints and seed offsets are returned rather than committed here
-    so ``run_federal_bond_risk_scan`` only advances them once every match in
-    the slice has been stored.
+
+def _pending_slice_id() -> str:
+    """One durable seed snapshot per tenant for capped/in-progress slices."""
+    token = _tenant_scope_token()
+    return "pending_slice" if not token else f"pending_slice:{token}"
+
+
+def _compact_seed(seed: dict) -> dict:
+    """Keep only the search-hit fields ``_hydrate`` uses so snapshots stay small."""
+    compact_hits = []
+    for hit in seed.get("hits") or []:
+        if not isinstance(hit, dict):
+            continue
+        slim = {key: hit[key] for key in _HIT_KEEP_KEYS if key in hit and hit[key] is not None}
+        docs = hit.get("recap_documents")
+        if isinstance(docs, list):
+            slim["recap_documents"] = [
+                {key: doc[key] for key in _DOC_KEEP_KEYS if key in doc and doc[key] is not None}
+                for doc in docs
+                if isinstance(doc, dict)
+            ]
+        compact_hits.append(slim)
+    return {"id": str(seed.get("id") or ""), "hits": compact_hits}
+
+
+async def _load_pending_slice(db) -> Optional[tuple[list[dict], list[tuple[str, str, str]], list[str], bool]]:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return None
+    row = await collection.find_one({"_id": _pending_slice_id()}) or {}
+    seeds = [seed for seed in (row.get("seeds") or []) if isinstance(seed, dict) and seed.get("id")]
+    if not seeds:
+        return None
+    checkpoints = [
+        (str(cp.get("search_type") or ""), str(cp.get("day") or ""), str(cp.get("resume_url") or ""))
+        for cp in (row.get("pending_checkpoints") or [])
+        if isinstance(cp, dict) and cp.get("search_type")
+    ]
+    notes = [str(note) for note in (row.get("search_notes") or []) if note]
+    return seeds, checkpoints, notes, bool(row.get("commit_checkpoints", True))
+
+
+async def _save_pending_slice(
+    db,
+    seeds: list[dict],
+    pending_checkpoints: list[tuple[str, str, str]],
+    search_notes: list[str],
+    *,
+    commit_checkpoints: bool,
+) -> bool:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return False
+    try:
+        await collection.update_one(
+            {"_id": _pending_slice_id()},
+            {"$set": {
+                "seeds": [_compact_seed(seed) for seed in seeds],
+                "pending_checkpoints": [
+                    {"search_type": st, "day": day, "resume_url": resume_url}
+                    for st, day, resume_url in pending_checkpoints
+                ],
+                "search_notes": list(search_notes),
+                "commit_checkpoints": bool(commit_checkpoints),
+                "updated_at": _now(),
+            }},
+            upsert=True,
+        )
+        return True
+    except Exception as exc:
+        log.warning("Federal bond-risk pending slice was not saved: %s", type(exc).__name__)
+        return False
+
+
+async def _clear_pending_slice(db) -> None:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return
+    await collection.update_one(
+        {"_id": _pending_slice_id()},
+        {"$set": {
+            "seeds": [],
+            "pending_checkpoints": [],
+            "search_notes": [],
+            "commit_checkpoints": False,
+            "updated_at": _now(),
+        }},
+        upsert=True,
+    )
+
+
+@dataclass
+class _CollectedSlice:
+    views: list[DocketView]
+    batch_seeds: list[dict]
+    unhydrated_seeds: list[dict]
+    failed_seed_ids: set[str]
+    pending_checkpoints: list[tuple[str, str, str]]
+    commit_checkpoints: bool
+    from_pending_slice: bool
+    search_failures: list[str]
+    party_failures: list[str]
+    entry_failures: list[str]
+    brief_failures: list[str]
+    search_notes: list[str]
+
+
+async def _collect_dockets(client, pause_s: float, db=None) -> _CollectedSlice:
+    """Search recent RECAP docket/document pages (or resume a stored slice), then hydrate.
+
+    Search checkpoints and unfinished slices are persisted durably only after
+    all returned seeds and matches for the current scan have been processed.
 
     Caption surnames are not a filter. A lead-defendant caption with "et al."
     still has to be hydrated so co-defendant parties can be matched.
     """
     import asyncio
 
-    window = filing_window_start()
-    seeds: dict[str, dict] = {}
     failures: list[str] = []
-    successes = 0
     search_notes: list[str] = []
-    stuck: list[str] = []
     pending_checkpoints: list[tuple[str, str, str]] = []
-    for search_type in ("r", "rd", "d"):
-        cursor, resume = await _search_checkpoint(db, search_type)
-        result = await client.search_recent(
-            search_type=search_type,
-            query=BOND_RISK_QUERY,
-            courts=list(FL_FEDERAL_COURT_IDS),
-            entry_date_filed_after=window,
-            entry_date_filed_before=None if resume else (cursor or None),
-            start_url=resume or None,
-            page_size=20,
-            max_pages=MAX_SEARCH_PAGES,
-            pause_s=pause_s,
-            until_entry_before=window,
-        )
-        _stop_if_blocked(result)
-        if not result.get("success"):
-            detail = result.get("error") or f"HTTP {result.get('status_code') or 'error'}"
-            failures.append(f"{search_type} {detail}")
-            log.warning("Federal bond-risk search %s failed: %s", search_type, detail)
-            continue
-        successes += 1
-        if result.get("truncated"):
-            oldest = _oldest_entry_day(result.get("results") or [])
-            resume_url = str(result.get("resume_url") or "")
-            if resume_url and resume_url != resume:
-                pending_checkpoints.append((search_type, oldest or cursor, resume_url))
-                search_notes.append(
-                    f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest or 'the cutoff date'}. "
-                    "The next scan continues from the remaining search cursor."
-                )
-            elif oldest and (not cursor or oldest < cursor):
-                pending_checkpoints.append((search_type, oldest, ""))
-                search_notes.append(
-                    f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest}. "
-                    "The next scan continues with the older filings."
-                )
+    commit_checkpoints = True
+    from_pending_slice = False
+
+    saved_slice = await _load_pending_slice(db) if db is not None else None
+    if saved_slice is not None:
+        ordered_seeds = sorted(saved_slice[0], key=lambda seed: str(seed.get("id") or ""))
+        pending_checkpoints = list(saved_slice[1])
+        search_notes = list(saved_slice[2])
+        commit_checkpoints = saved_slice[3]
+        from_pending_slice = True
+    else:
+        window = filing_window_start()
+        seeds: dict[str, dict] = {}
+        successes = 0
+        stuck: list[str] = []
+        for search_type in FEDERAL_SEARCH_TYPES:
+            cursor, resume = await _search_checkpoint(db, search_type)
+            result = await client.search_recent(
+                search_type=search_type,
+                query=BOND_RISK_QUERY,
+                courts=list(FL_FEDERAL_COURT_IDS),
+                entry_date_filed_after=window,
+                entry_date_filed_before=None if resume else (cursor or None),
+                start_url=resume or None,
+                page_size=20,
+                max_pages=MAX_SEARCH_PAGES,
+                pause_s=pause_s,
+                until_entry_before=window,
+            )
+            _stop_if_blocked(result)
+            if not result.get("success"):
+                detail = result.get("error") or f"HTTP {result.get('status_code') or 'error'}"
+                failures.append(f"{search_type} {detail}")
+                log.warning("Federal bond-risk search %s failed: %s", search_type, detail)
+                continue
+            successes += 1
+            if result.get("truncated"):
+                oldest = _oldest_entry_day(result.get("results") or [])
+                resume_url = str(result.get("resume_url") or "")
+                if resume_url and resume_url != resume:
+                    pending_checkpoints.append((search_type, oldest or cursor, resume_url))
+                    search_notes.append(
+                        f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest or 'the cutoff date'}. "
+                        "The next scan continues from the remaining search cursor."
+                    )
+                elif oldest and (not cursor or oldest < cursor):
+                    pending_checkpoints.append((search_type, oldest, ""))
+                    search_notes.append(
+                        f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest}. "
+                        "The next scan continues with the older filings."
+                    )
+                else:
+                    stuck.append(search_type)
             else:
-                stuck.append(search_type)
-        else:
-            pending_checkpoints.append((search_type, "", ""))
-        for hit in result.get("results") or []:
-            if not isinstance(hit, dict):
-                continue
-            # dateFiled is the day the case was opened. A new warrant on an
-            # older case is entry_date_filed. Only an entry date outside the
-            # window drops the hit. A case date never does.
-            entry_day = _hit_entry_date(hit)
-            if entry_day and not filing_in_window(entry_day, window):
-                continue
-            docket_id = _hit_docket_id(hit, search_type)
-            if not str(docket_id).isdigit():
-                continue
-            court_id = _court_slug(hit)
-            if court_id and court_id not in FL_FEDERAL_COURTS:
-                continue
-            number = _first_text(hit, "docketNumber", "docket_number")
-            if number and _CIVIL_DOCKET.search(number) and not _CRIMINAL_DOCKET.search(number):
-                continue
-            key = docket_id or canonical_identifier(number) or ""
-            if not key:
-                continue
-            seed = seeds.setdefault(key, {"id": docket_id, "hits": []})
-            tagged = dict(hit)
-            tagged["_search_type"] = search_type
-            seed["hits"].append(tagged)
+                pending_checkpoints.append((search_type, "", ""))
+            for hit in result.get("results") or []:
+                if not isinstance(hit, dict):
+                    continue
+                # dateFiled is the day the case was opened. A new warrant on an
+                # older case is entry_date_filed. Only an entry date outside the
+                # window drops the hit. A case date never does.
+                entry_day = _hit_entry_date(hit)
+                if entry_day and not filing_in_window(entry_day, window):
+                    continue
+                docket_id = _hit_docket_id(hit, search_type)
+                if not str(docket_id).isdigit():
+                    continue
+                court_id = _court_slug(hit)
+                if court_id and court_id not in FL_FEDERAL_COURTS:
+                    continue
+                number = _first_text(hit, "docketNumber", "docket_number")
+                if number and _CIVIL_DOCKET.search(number) and not _CRIMINAL_DOCKET.search(number):
+                    continue
+                key = docket_id or canonical_identifier(number) or ""
+                if not key:
+                    continue
+                seed = seeds.setdefault(key, {"id": docket_id, "hits": []})
+                tagged = dict(hit)
+                tagged["_search_type"] = search_type
+                seed["hits"].append(tagged)
 
-    if successes == 0 and failures:
-        raise _ScanStop(
-            "CourtListener search failed for every source ("
-            + "; ".join(failures)
-            + "). No alerts were written.",
-            "search_failed",
-        )
-    if stuck:
-        raise _ScanStop(
-            "CourtListener search hit the 1,000-hit ceiling and the date window "
-            "could not move (" + ", ".join(stuck) + "). No alerts were written.",
-            "search_truncated",
-        )
+        if successes == 0 and failures:
+            raise _ScanStop(
+                "CourtListener search failed for every source ("
+                + "; ".join(failures)
+                + "). No alerts were written.",
+                "search_failed",
+            )
+        if stuck:
+            raise _ScanStop(
+                "CourtListener search hit the 1,000-hit ceiling and the date window "
+                "could not move (" + ", ".join(stuck) + "). No alerts were written.",
+                "search_truncated",
+            )
+        ordered_seeds = sorted(seeds.values(), key=lambda seed: str(seed.get("id") or ""))
+        commit_checkpoints = not bool(failures)
 
-    batch, next_offset, truncated = select_seed_batch(
-        list(seeds.values()),
-        await _seed_offset(db) if db is not None else 0,
-        HYDRATE_CEILING,
-    )
+    limit = max(int(HYDRATE_CEILING or 1), 1)
+    batch = ordered_seeds[:limit]
+    unhydrated_seeds = ordered_seeds[limit:]
 
     views: list[DocketView] = []
     party_failures: list[str] = []
     entry_failures: list[str] = []
     brief_failures: list[str] = []
+    failed_seed_ids: set[str] = set()
     entry_attempts = 0
     for seed in batch:
         if pause_s:
             await asyncio.sleep(pause_s)
         view, party_error, entry_error, brief_error = await _hydrate(client, seed, pause_s)
+        sid = str(seed.get("id") or "")
         if party_error:
             party_failures.append(party_error)
+            if sid:
+                failed_seed_ids.add(sid)
             continue
         entry_attempts += 1
         if entry_error:
             entry_failures.append(entry_error)
+            if sid:
+                failed_seed_ids.add(sid)
         if brief_error:
             brief_failures.append(brief_error)
+            if sid:
+                failed_seed_ids.add(sid)
         if view and (view.events or view.seen_filing_ids) and is_fl_federal_criminal(view.court_id, view.docket_number):
             views.append(view)
     if batch and party_failures and len(party_failures) == len(batch):
@@ -1747,16 +1884,19 @@ async def _collect_dockets(
             + "). No alerts were written.",
             "entry_hydration_failed",
         )
-    return (
-        views,
-        truncated,
-        next_offset,
-        pending_checkpoints,
-        failures,
-        party_failures,
-        entry_failures,
-        brief_failures,
-        search_notes,
+    return _CollectedSlice(
+        views=views,
+        batch_seeds=batch,
+        unhydrated_seeds=unhydrated_seeds,
+        failed_seed_ids=failed_seed_ids,
+        pending_checkpoints=pending_checkpoints,
+        commit_checkpoints=commit_checkpoints,
+        from_pending_slice=from_pending_slice,
+        search_failures=failures,
+        party_failures=party_failures,
+        entry_failures=entry_failures,
+        brief_failures=brief_failures,
+        search_notes=search_notes,
     )
 
 
@@ -3047,17 +3187,7 @@ async def run_federal_bond_risk_scan(
                 "slack_pending": slack_pending,
             }
         try:
-            (
-                dockets,
-                hydrate_truncated,
-                next_seed_offset,
-                pending_checkpoints,
-                search_failures,
-                party_failures,
-                entry_failures,
-                brief_failures,
-                search_notes,
-            ) = await _collect_dockets(client, pause_s, db)
+            collected = await _collect_dockets(client, pause_s, db)
         except _ScanStop as stop:
             await retry_pending_notifications(
                 db, skip_source_ids=attempted_notifications, statuses={"withdrawn"},
@@ -3067,7 +3197,13 @@ async def run_federal_bond_risk_scan(
             stopped["slack_sent"] = slack_sent
             stopped["slack_pending"] = slack_pending
             return stopped
-        seeds_truncated = hydrate_truncated or bool(search_notes)
+        dockets = collected.views
+        search_failures = collected.search_failures
+        party_failures = collected.party_failures
+        entry_failures = collected.entry_failures
+        brief_failures = collected.brief_failures
+        search_notes = collected.search_notes
+        seeds_truncated = bool(collected.unhydrated_seeds) or bool(search_notes)
         if seeds_truncated:
             base["truncated"] = True
 
@@ -3092,6 +3228,7 @@ async def run_federal_bond_risk_scan(
         confirmed = 0
         possible = len(mid_scan_unlinked)
         rows_capped = False
+        capped_docket_ids: set[str] = set()
         for decision, docket in decisions:
             source_id = _source_id(docket, decision)
             if loaded_clients and not await _bond_is_active(
@@ -3108,6 +3245,7 @@ async def run_federal_bond_risk_scan(
             if not existing and written >= MAX_ROWS:
                 rows_capped = True
                 base["truncated"] = True
+                capped_docket_ids.add(str(docket.docket_id))
                 continue
             outcome = await _store_decision(
                 db, decision, docket, require_active_record=loaded_clients,
@@ -3128,19 +3266,41 @@ async def run_federal_bond_risk_scan(
         attempted_notifications.update(withdrawn_ids)
         written += len(withdrawn_ids)
         possible += len(withdrawn_ids)
-        # Only advance search/hydration checkpoints once every search source and
-        # match in this slice has succeeded and been stored; otherwise a capped
-        # or partially failed run re-reads this slice so nothing is skipped.
+        # Persist any capped, failed-hydration, or unhydrated seeds as a durable
+        # snapshot so subsequent scans drain the exact slice without losing
+        # older hits if newer filings arrive; only advance live search cursors
+        # once the captured slice is drained and all search sources succeeded.
+        retry_ids = collected.failed_seed_ids | capped_docket_ids
+        retry_batch = [
+            seed for seed in collected.batch_seeds
+            if str(seed.get("id") or "") in retry_ids
+        ]
+        remaining_seeds = [*retry_batch, *collected.unhydrated_seeds]
         incomplete_coverage = bool(
             search_failures or party_failures or entry_failures or brief_failures
         )
-        if incomplete_coverage and (seeds_truncated or pending_checkpoints or search_failures):
+        if incomplete_coverage and (
+            seeds_truncated or collected.pending_checkpoints or search_failures
+        ):
             base["truncated"] = True
-        if db is not None and not rows_capped and not incomplete_coverage:
-            await _save_seed_offset(db, next_seed_offset)
-            if next_seed_offset == 0:
-                for search_type, day, resume_url in pending_checkpoints:
-                    await _save_search_checkpoint(db, search_type, day, resume_url)
+        if db is not None:
+            if remaining_seeds:
+                saved = await _save_pending_slice(
+                    db,
+                    remaining_seeds,
+                    collected.pending_checkpoints if collected.commit_checkpoints else [],
+                    search_notes,
+                    commit_checkpoints=collected.commit_checkpoints,
+                )
+                if not saved:
+                    incomplete_coverage = True
+                base["truncated"] = True
+            else:
+                if collected.from_pending_slice:
+                    await _clear_pending_slice(db)
+                if collected.commit_checkpoints and not incomplete_coverage:
+                    for search_type, day, resume_url in collected.pending_checkpoints:
+                        await _save_search_checkpoint(db, search_type, day, resume_url)
         # Re-check active bonds one more time before emitting CRM or Slack alerts
         # so a bond closed during decision persistence is withdrawn first.
         if loaded_clients:
@@ -3156,7 +3316,7 @@ async def run_federal_bond_risk_scan(
         if rows_capped:
             warnings.append(
                 "New matches exceeded the per-scan row cap. "
-                "The next scan continues from the same search slice until every match is stored."
+                "The remaining dockets from this search slice were saved for the next scan."
             )
         if seeds_truncated:
             warnings.append(
