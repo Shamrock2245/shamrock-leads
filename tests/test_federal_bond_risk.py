@@ -345,6 +345,56 @@ async def _scan(db, court, clients, notifier=None):
     )
 
 
+def test_search_query_covers_every_classified_phrase():
+    from dashboard.services.federal_bond_risk import BOND_RISK_QUERY, classify_bond_risk, search_phrases
+
+    examples = [
+        "Bond increased to $50,000",
+        "Bond reduced to $5,000",
+        "Bond set at $10,000",
+        "Appearance bond set",
+        "Order setting conditions of release",
+        "Conditions of release",
+        "Detention hearing",
+        "Failure to appear",
+        "Failed to appear",
+        "Arrest warrant issued",
+        "Bench warrant",
+        "Capias",
+        "Revocation of release",
+        "Bond revocation",
+        "Motion to revoke bond",
+        "Order modifying conditions of release",
+        "Amended conditions of release",
+    ]
+    phrases = search_phrases()
+    assert BOND_RISK_QUERY == " OR ".join(
+        f'"{phrase}"' if " " in phrase else phrase for phrase in phrases
+    )
+    for text in examples:
+        assert classify_bond_risk(text), text
+        assert any(phrase.lower() in text.lower() for phrase in phrases), text
+    for phrase in phrases:
+        assert classify_bond_risk(phrase), phrase
+
+
+def test_docket_number_strips_every_trailing_judge_initial():
+    from dashboard.services.federal_bond_risk import (
+        canonical_identifier,
+        is_fl_federal_criminal,
+        match_client,
+    )
+
+    base = canonical_identifier("2:24-cr-00123")
+    assert canonical_identifier("2:24-cr-00123-SPC") == base
+    assert canonical_identifier("2:24-cr-00123-JES-NPM") == base
+    assert canonical_identifier("9:20-mj-00015-AB-CD") == canonical_identifier("9:20-mj-00015")
+    assert is_fl_federal_criminal("flmd", "2:24-cr-00123-JES-NPM")
+    docket = _docket_for(DocketParty("Smith, John", frozenset()))
+    docket.docket_number = "2:24-cr-00123-JES-NPM"
+    assert match_client(_client(numbers=["2:24-cr-00123"]), docket) == ("confirmed", ("case_number",))
+
+
 def test_subjectless_actor_event_on_one_defendant_is_not_confirmed():
     from dashboard.services.federal_bond_risk import decide_matches
 

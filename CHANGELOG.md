@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk search phrases and docket numbers)
+
+### Fixed
+- **The CourtListener query includes every phrase the classifier matches.** "Bond increased", "bond reduced", "bond set", and "bond revocation" are searched, because the query is built from the same rules that classify a filing.
+- **Every trailing judge-initial block is removed from a docket number.** `2:24-cr-00123-JES-NPM` is the same case as `2:24-cr-00123`.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the classified examples against the search query, and a docket number with two judge-initial suffixes.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk cron failure, unnamed actor, search cursor)
 
 ### Fixed

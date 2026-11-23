@@ -60,12 +60,6 @@ SLACK_CLAIM_TTL = timedelta(minutes=30)
 MAX_SEARCH_PAGES = 50
 MAX_ENTRY_PAGES = 50
 
-BOND_RISK_QUERY = (
-    '"conditions of release" OR "detention hearing" OR "failure to appear" '
-    'OR "arrest warrant" OR "bench warrant" OR capias OR "revocation of release" '
-    'OR "revoke bond" OR "pretrial release"'
-)
-
 _SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
 _CAPTION_SPLIT = re.compile(r"\s+v(?:s\.?)?\s+", re.I)
 _CRIMINAL_DOCKET = re.compile(r"(?i)(?:\d{1,2}:)?\d{2}-(?:cr|mj)-")
@@ -100,6 +94,156 @@ _EVENT_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
     )),
 )
 _SET_SUPPRESSED_BY = {"revocation_of_release", "modification_of_release", "bond_conditions_changed"}
+
+
+def _match_paren(source: str, start: int) -> int:
+    depth = 0
+    index = start
+    while index < len(source):
+        if source[index] == "\\":
+            index += 2
+            continue
+        if source[index] == "(":
+            depth += 1
+        elif source[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    raise ValueError(source)
+
+
+def _split_top(source: str, sep: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    index = 0
+    while index < len(source):
+        if source.startswith(sep, index) and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+            index += len(sep)
+            continue
+        char = source[index]
+        if char == "\\":
+            buf.append(source[index:index + 2])
+            index += 2
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        buf.append(char)
+        index += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _expand_regex_literals(source: str) -> list[str]:
+    """Word sequences a regex alternative can match, with the operators removed."""
+    source = re.sub(r"\(\?[aiLmsux]+\)", "", source)
+    return [phrase for phrase in _expand_expr(source) if phrase]
+
+
+def _expand_expr(source: str) -> list[str]:
+    alternatives = _split_top(source, "|")
+    if len(alternatives) > 1:
+        phrases: list[str] = []
+        for alternative in alternatives:
+            phrases.extend(_expand_expr(alternative))
+        return phrases
+    return _expand_concat(source)
+
+
+def _expand_concat(source: str) -> list[str]:
+    pieces: list[list[str]] = []
+    index = 0
+    while index < len(source):
+        if source.startswith(r"\b", index):
+            index += 2
+            continue
+        if source.startswith(r"\s+", index):
+            pieces.append([" "])
+            index += 3
+            continue
+        if source.startswith(r"\s", index):
+            pieces.append([" "])
+            index += 2
+            continue
+        if source.startswith(r"\w*", index) or source.startswith(r"\w+", index):
+            # A stem such as revoc\w* is covered by the rule label when that label matches.
+            return []
+        if source[index] == "(":
+            end = _match_paren(source, index)
+            inner = source[index + 1:end]
+            optional = end + 1 < len(source) and source[end + 1] == "?"
+            if inner.startswith("?:"):
+                inner = inner[2:]
+            elif inner.startswith("?"):
+                return []
+            options = _expand_expr(inner)
+            if optional:
+                options = ["", *options]
+            pieces.append(options or [""])
+            index = end + 1 + (1 if optional else 0)
+            continue
+        if source[index] == "\\":
+            return []
+        end = index
+        while end < len(source) and source[end] not in "(|)\\":
+            end += 1
+        pieces.append([source[index:end]])
+        index = end
+    combos = [""]
+    for options in pieces:
+        combos = [left + right for left in combos for right in options]
+    phrases = []
+    for combo in combos:
+        text = re.sub(r"\s+", " ", combo).strip()
+        if text and re.search(r"[A-Za-z]", text) and "\\" not in text:
+            phrases.append(text)
+    return phrases
+
+
+def search_phrases() -> list[str]:
+    """Every literal the classifier can match, so the CourtListener query cannot drift."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for _event_type, label, pattern in _EVENT_RULES:
+        candidates = _expand_regex_literals(pattern.pattern)
+        if pattern.search(label):
+            candidates.append(label)
+        for phrase in candidates:
+            phrase = re.sub(r"\s+", " ", phrase).strip()
+            if not phrase or not pattern.search(phrase):
+                continue
+            extras = [phrase]
+            for suffix in ("ation", "ed", "ing"):
+                longer = f"{phrase}{suffix}"
+                matched = pattern.search(longer)
+                if not matched:
+                    continue
+                span = matched.group(0)
+                if span.lower().startswith(phrase.lower()) and len(span) > len(phrase):
+                    extras.append(re.sub(r"\s+", " ", span).strip())
+            for extra in extras:
+                key = extra.lower()
+                if len(re.sub(r"[^a-z0-9]", "", key)) < 3 or key in seen:
+                    continue
+                seen.add(key)
+                found.append(extra)
+    found.sort(key=lambda phrase: (-len(phrase), phrase.lower()))
+    return found
+
+
+def bond_risk_query() -> str:
+    parts = []
+    for phrase in search_phrases():
+        parts.append(f'"{phrase}"' if " " in phrase else phrase)
+    return " OR ".join(parts)
+
+
+BOND_RISK_QUERY = bond_risk_query()
 # These phrases can describe counsel, the government, or another person.
 # Without a named defendant they stay possible, even on a one-defendant docket.
 _ACTOR_SENSITIVE = frozenset({
@@ -321,7 +465,8 @@ def canonical_identifier(value: str) -> Optional[str]:
     if not raw or len(raw) > 80:
         return None
     compact = re.sub(r"\s+", "", raw.upper()).replace("–", "-").replace("—", "-")
-    compact = re.sub(r"-([A-Z]{2,4})$", "", compact)
+    # 2:24-cr-00123-JES-NPM and 2:24-cr-00123-SPC are the same case.
+    compact = re.sub(r"(?:-[A-Z]{2,4})+$", "", compact)
     if not re.search(r"\d", compact):
         return None
     alnum = re.sub(r"[^A-Z0-9]", "", compact)
