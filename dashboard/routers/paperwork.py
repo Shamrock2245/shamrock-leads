@@ -1846,9 +1846,14 @@ async def packet_builder_finalize(request: Request):
                 self_indemnitor=bool(ctx.get("self_indemnitor")),
                 template="docuseal",
             )
+            enforced_codes = set(HARD_FINALIZE_BLOCK_CODES)
+            if staff_test is not None and not identity_flags.get("enforce_identity"):
+                # Synthetic TEST-/PKT-TEST- staff smoke fixtures reuse placeholder DL
+                # stubs unless enforce_identity=True is explicitly requested.
+                enforced_codes -= {"identity_dl_collision", "identity_person_collision"}
             hard_blocks = [
                 issue for issue in preflight_report.get("blocking_issues", [])
-                if issue.get("code") in HARD_FINALIZE_BLOCK_CODES
+                if issue.get("code") in enforced_codes
             ]
             if hard_blocks:
                 return JSONResponse(
@@ -2732,6 +2737,15 @@ async def paperwork_preflight_check(request: Request):
         bond_case_id=body.get("bond_case_id"),
         packet_id=body.get("packet_id"),
     )
+    if "arrest_ambiguous" in (ctx.get("sources") or []):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Multiple arrest records match this booking — will not prefill",
+                "code": "ambiguous_identity",
+            },
+            status_code=409,
+        )
     if body.get("self_indemnitor"):
         pin = body.get("authorization_pin") or body.get("pin") or ""
         try:

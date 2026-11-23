@@ -54,6 +54,18 @@ def _is_truthy(val: Any) -> bool:
     return val is True or str(val or "").strip().lower() in ("true", "1", "yes")
 
 
+async def _consent_blocked(phone: str) -> bool:
+    try:
+        from dashboard.services.sms_consent_ledger import check_send_allowed
+        blocked = await check_send_allowed(phone, "review_harvester")
+        return bool(blocked)
+    except Exception as exc:
+        logger.error("[review-harvester] consent lookup failed: %s", type(exc).__name__)
+        if os.getenv("BB_OPTOUT_GATE_FAIL_CLOSED", "").lower() in ("1", "true", "yes"):
+            return True
+        return False
+
+
 def _has_negative_flag(bond: Dict[str, Any]) -> bool:
     status = str(bond.get("status") or "").strip().lower()
     if any(tok in status for tok in ("forfeit", "fta", "warrant", "estreature", "revoked", "surrender")):
@@ -107,7 +119,17 @@ class ReviewHarvesterService:
             return False
         try:
             delinquent = await self.db["payment_plans"].find_one(
-                {"$or": clauses, "delinquent": True}
+                {
+                    "$and": [
+                        {"$or": clauses},
+                        {
+                            "$or": [
+                                {"delinquent": True},
+                                {"status": {"$in": ["delinquent", "defaulted", "collections"]}},
+                            ]
+                        },
+                    ]
+                }
             )
             return delinquent is not None
         except Exception:
@@ -182,6 +204,12 @@ class ReviewHarvesterService:
         review_url = (
             str(config.get("review_url") or os.getenv("GOOGLE_REVIEW_URL") or DEFAULT_REVIEW_URL).strip()
         )
+        if not review_url.lower().startswith("https://") or re.search(r"\s", review_url):
+            return {
+                "skipped": True,
+                "reason": "invalid_review_url",
+                "mode": mode,
+            }
 
         if send_client and not config.get("ignore_quiet_hours"):
             et_hour = now.astimezone(ET_ZONE).hour
@@ -203,6 +231,7 @@ class ReviewHarvesterService:
             "skipped_window": 0,
             "skipped_ineligible": 0,
             "skipped_no_phone": 0,
+            "skipped_opt_out": 0,
             "skipped_dedup": 0,
             "errors": 0,
             "mode": mode,
@@ -248,6 +277,10 @@ class ReviewHarvesterService:
                 results["skipped_no_phone"] += 1
                 continue
 
+            if await _consent_blocked(str(raw_phone)):
+                results["skipped_opt_out"] += 1
+                continue
+
             if phone_key in seen_cycle_phones or await self._recently_logged(
                 phone_key, mode=mode, dedup_cutoff=dedup_cutoff, review_cutoff=review_cutoff
             ):
@@ -267,7 +300,11 @@ class ReviewHarvesterService:
             try:
                 if send_client:
                     from dashboard.services.bb_client import send_message_universal
-                    send_res = await send_message_universal(str(raw_phone), message)
+                    send_res = await send_message_universal(
+                        str(raw_phone),
+                        message,
+                        purpose="review_harvester",
+                    )
                     if not send_res.get("success"):
                         results["errors"] += 1
                         continue
