@@ -2094,7 +2094,12 @@ def _stored_notification(row: dict) -> dict:
     })
 
 
-async def retry_pending_notifications(db) -> int:
+async def retry_pending_notifications(
+    db,
+    *,
+    skip_source_ids: Optional[set[str]] = None,
+    statuses: Optional[set[str]] = None,
+) -> int:
     """Write CRM notifications for any stored row (including withdrawn) whose write failed."""
     written = 0
     async for page in _each_page(db.docket_events, {"source": SOURCE}):
@@ -2102,6 +2107,10 @@ async def retry_pending_notifications(db) -> int:
             source_id = str(row.get("source_id") or "")
             status = str(row.get("match_status") or "")
             if not source_id or not status:
+                continue
+            if skip_source_ids and source_id in skip_source_ids:
+                continue
+            if statuses is not None and status not in statuses:
                 continue
             written_flag = row.get("notification_written")
             if written_flag is None:
@@ -2372,9 +2381,10 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
     return "new"
 
 
-async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
+async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> list[str]:
     """A stored confirmed or possible row whose bond is closed is not posted."""
     active = {client.bond_case_id for client in clients}
+    unlinked_ids: list[str] = []
     async for page in _each_page(
         db.docket_events,
         {"source": SOURCE, "match_status": {"$in": ["confirmed", "possible"]}},
@@ -2412,6 +2422,8 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
                     db, _downgrade_note(document, source_id), source_id, "withdrawn",
                     document["notification_revision"],
                 )
+                unlinked_ids.append(source_id)
+    return unlinked_ids
 
 
 async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[MatchDecision]) -> list[str]:
@@ -2688,13 +2700,14 @@ async def run_federal_bond_risk_scan(
 
             notifier = SlackNotifier()
         await retry_pending_audits(db)
-        await retry_pending_notifications(db)
+        attempted_notifications: set[str] = set()
         loaded_clients = clients is None
         if clients is None:
             clients = await load_active_clients(db)
         if loaded_clients:
-            await _unlink_inactive_clients(db, clients)
+            attempted_notifications.update(await _unlink_inactive_clients(db, clients) or [])
         if not clients:
+            await retry_pending_notifications(db, skip_source_ids=attempted_notifications)
             slack_sent, slack_pending, slack_attempts = await retry_pending_slack(db, notifier)
             return {
                 **base,
@@ -2715,6 +2728,9 @@ async def run_federal_bond_risk_scan(
                 search_notes,
             ) = await _collect_dockets(client, pause_s, db)
         except _ScanStop as stop:
+            await retry_pending_notifications(
+                db, skip_source_ids=attempted_notifications, statuses={"withdrawn"},
+            )
             slack_sent, slack_pending, _attempts = await retry_pending_slack(db, notifier)
             stopped = _scan_stopped(base, stop)
             stopped["slack_sent"] = slack_sent
@@ -2744,6 +2760,7 @@ async def run_federal_bond_risk_scan(
                 base["truncated"] = True
                 continue
             outcome = await _store_decision(db, decision, docket)
+            attempted_notifications.add(source_id)
             if outcome in {"duplicate", "retry_slack"}:
                 continue
             written += 1
@@ -2754,17 +2771,23 @@ async def run_federal_bond_risk_scan(
         withdrawn_ids: list[str] = []
         for docket, group in by_docket.values():
             withdrawn_ids.extend(await _withdraw_stale_confirmations(db, docket, group))
+        attempted_notifications.update(withdrawn_ids)
         written += len(withdrawn_ids)
         possible += len(withdrawn_ids)
         # Only advance search/hydration checkpoints once every match in this slice
-        # has been stored; otherwise a capped run re-reads this slice and finishes it.
-        if db is not None and not rows_capped:
+        # has been hydrated and stored; otherwise a capped or failed-hydration run
+        # re-reads this slice so no docket is skipped.
+        hydration_incomplete = bool(party_failures or entry_failures or brief_failures)
+        if hydration_incomplete and (seeds_truncated or pending_checkpoints):
+            base["truncated"] = True
+        if db is not None and not rows_capped and not hydration_incomplete:
             await _save_seed_offset(db, next_seed_offset)
             if next_seed_offset == 0:
                 for search_type, day, resume_url in pending_checkpoints:
                     await _save_search_checkpoint(db, search_type, day, resume_url)
-        # Slack runs only after this scan's evidence has been written, so a
-        # failed earlier post cannot repeat a link that was just withdrawn.
+        # Notification and Slack retries run only after this scan's evidence has
+        # been reconciled, so an outdated pre-downgrade alert is never sent.
+        await retry_pending_notifications(db, skip_source_ids=attempted_notifications)
         slack_sent, slack_pending, _slack_attempts = await retry_pending_slack(db, notifier)
         warnings = []
         if rows_capped:

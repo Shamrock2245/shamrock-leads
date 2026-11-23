@@ -3199,3 +3199,177 @@ async def test_corrected_filing_without_risk_phrase_withdraws_stale_link(monkeyp
     by_filing = {row["filing_id"]: row for row in db.docket_events.docs}
     assert by_filing["entry:99"]["match_status"] == "withdrawn"
     assert by_filing["entry:99"]["auto_linked"] is False
+
+
+@pytest.mark.asyncio
+async def test_partial_hydration_failure_holds_search_checkpoint(monkeypatch):
+    _enable(monkeypatch)
+
+    class _PartialOutage(_CourtListener):
+        def __init__(self):
+            super().__init__(parties=[{"name": "Smith, John"}])
+            self.r_starts = []
+            self.parties_error_ids = {3002}
+            self.parties_error = {"success": False, "error": "HTTP 503", "status_code": 503, "results": []}
+
+        async def search_recent(self, **kwargs):
+            self.calls.append(("search_recent", kwargs))
+            if kwargs["search_type"] != "r":
+                return {"success": True, "results": [], "truncated": False}
+            start_url = kwargs.get("start_url") or ""
+            self.r_starts.append(start_url)
+            if not start_url:
+                return {
+                    "success": True,
+                    "truncated": True,
+                    "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=slice2",
+                    "results": [
+                        _window_hit(3001, "2026-11-20", "Detention hearing", "2:24-cr-00301"),
+                        _window_hit(3002, "2026-11-20", "Detention hearing", "2:24-cr-00302"),
+                    ],
+                }
+            assert start_url.endswith("cursor=slice2")
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [
+                    _window_hit(3003, "2026-11-19", "Detention hearing", "2:24-cr-00303"),
+                ],
+            }
+
+    court = _PartialOutage()
+    db = _DB()
+
+    first = await _scan(db, court, [_client()])
+    assert first["success"] is True
+    assert first["rows_written"] == 1
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"3001"}
+
+    # Recover party hydration on Scan 2: slice 1 must be retried so 3002 is not skipped.
+    court.parties_error_ids = set()
+    second = await _scan(db, court, [_client()])
+    assert second["rows_written"] == 1
+    assert court.r_starts == ["", ""]
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"3001", "3002"}
+
+    # Now all dockets in slice 1 hydrated cleanly, so Scan 3 advances to slice 2.
+    third = await _scan(db, court, [_client()])
+    assert third["rows_written"] == 1
+    assert court.r_starts[-1].endswith("cursor=slice2")
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"3001", "3002", "3003"}
+
+    # Same hold applies to partial entry hydration failures.
+    class _PartialEntry(_PartialOutage):
+        def __init__(self):
+            super().__init__()
+            self.parties_error_ids = set()
+            self.parties_error = None
+            self.entries_error_ids = {3002}
+            self.entries_error = {"success": False, "error": "HTTP 503", "status_code": 503, "results": []}
+
+        async def search_recent(self, **kwargs):
+            if kwargs["search_type"] != "r":
+                return {"success": True, "results": [], "truncated": False}
+            start_url = kwargs.get("start_url") or ""
+            self.r_starts.append(start_url)
+            if not start_url:
+                return {
+                    "success": True,
+                    "truncated": True,
+                    "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=slice2",
+                    "results": [
+                        _window_hit(3001, "2026-11-20", "Detention hearing", "2:24-cr-00301"),
+                        _hit(id=3002, docket_id=3002, docketNumber="2:24-cr-00302", recap_documents=[]),
+                    ],
+                }
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [
+                    _window_hit(3003, "2026-11-19", "Detention hearing", "2:24-cr-00303"),
+                ],
+            }
+
+        async def list_docket_entries(self, docket_id, **kwargs):
+            if docket_id in self.entries_error_ids:
+                return self.entries_error
+            if docket_id == 3001:
+                return {"success": True, "truncated": False, "results": []}
+            today = datetime.now(timezone.utc).date().isoformat()
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [{"id": 70, "description": "Arrest warrant issued", "date_filed": today}],
+            }
+
+    e_court = _PartialEntry()
+    e_db = _DB()
+    e1 = await _scan(e_db, e_court, [_client()])
+    assert e1["success"] is True
+    assert e1["rows_written"] == 1
+    assert {row["docket_id"] for row in e_db.docket_events.docs} == {"3001"}
+    e_court.entries_error_ids = set()
+    e2 = await _scan(e_db, e_court, [_client()])
+    assert e2["rows_written"] == 1
+    assert e_court.r_starts == ["", ""]
+    assert {row["docket_id"] for row in e_db.docket_events.docs} == {"3001", "3002"}
+
+
+@pytest.mark.asyncio
+async def test_failed_confirmed_notification_is_not_replayed_after_downgrade_or_closure(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
+
+    # Case A: bond closes before the failed confirmed notification is retried.
+    db_a = _DB()
+    db_a.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db_a.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    real_update_a = db_a.notifications.update_one
+
+    async def fail_all(filt, update, upsert=False):
+        raise RuntimeError("transient notification failure")
+
+    db_a.notifications.update_one = fail_all
+    court_a = _CourtListener(
+        hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    first_a = await run_federal_bond_risk_scan(db_a, client=court_a, notifier=_Notifier(), pause_s=0)
+    assert first_a["confirmed"] == 1
+    assert db_a.notifications.docs == []
+
+    db_a.active_bonds.docs[0]["status"] = "exonerated"
+    db_a.notifications.update_one = real_update_a
+    second_a = await run_federal_bond_risk_scan(db_a, client=_CourtListener(hits=[]), notifier=_Notifier(), pause_s=0)
+    assert second_a["skipped"] == "no_active_clients"
+    assert len(db_a.notifications.docs) == 1
+    assert db_a.notifications.docs[0]["metadata"]["match_status"] == "withdrawn"
+
+    # Case B: party gains a conflicting DOB before the failed confirmed notification is retried.
+    db_b = _DB()
+    real_update_b = db_b.notifications.update_one
+    db_b.notifications.update_one = fail_all
+    court_b = _CourtListener(
+        hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    first_b = await _scan(db_b, court_b, [_client(dobs=["1985-01-15"])])
+    assert first_b["confirmed"] == 1
+    assert db_b.notifications.docs == []
+
+    court_b.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985\nDOB: 02/02/1990"}]
+    db_b.notifications.update_one = real_update_b
+    second_b = await _scan(db_b, court_b, [_client(dobs=["1985-01-15"])])
+    assert second_b["rows_written"] == 1
+    assert len(db_b.notifications.docs) == 1
+    assert db_b.notifications.docs[0]["metadata"]["match_status"] == "possible"
