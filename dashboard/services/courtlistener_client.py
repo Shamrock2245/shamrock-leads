@@ -296,13 +296,15 @@ ANONYMOUS_V4_REJECTED = (
 )
 
 # Field selection keeps docket, entry, and party payloads small. Entry
-# responses otherwise nest RECAP plain_text.
+# responses otherwise nest RECAP plain_text. A party's date of birth lives
+# on the docket-specific party type, not on the legacy Party.extra_info
+# field and not on a flat date_of_birth.
 DOCKET_BRIEF_FIELDS = (
     "id,court_id,docket_number,case_name,case_name_full,date_filed,"
     "date_last_filing,cause,nature_of_suit,pacer_case_id,assigned_to_str"
 )
 DOCKET_ENTRY_FIELDS = "id,date_filed,description,entry_number,recap_documents__id"
-DOCKET_PARTY_FIELDS = "id,name,extra_info"
+DOCKET_PARTY_FIELDS = "id,name,party_types"
 
 
 def courts_for_state(state: str) -> list:
@@ -775,6 +777,7 @@ class CourtListenerClient:
         params: Optional[dict] = {
             "docket": int(docket_id),
             "fields": DOCKET_PARTY_FIELDS,
+            "filter_nested_results": "true",
             "page_size": max(1, min(int(page_size or 20), 20)),
         }
         url = "/parties/"

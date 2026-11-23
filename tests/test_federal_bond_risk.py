@@ -391,8 +391,10 @@ async def test_upgrade_and_downgrade_write_audit_events(monkeypatch):
 
     court.parties = [{
         "name": "Smith, John",
-        "date_of_birth": "1985-01-15",
-        "extra_info": "DOB: 02/02/1990",
+        "party_types": [
+            {"docket_id": 1001, "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "extra_info": "DOB: 02/02/1990"},
+        ],
     }]
     await _scan(db, court, [_client(dobs=["1985-01-15"])])
     downgraded = [row for row in db.audit_events.docs if row["reason"] == "identity_no_longer_confirms"]
@@ -507,6 +509,168 @@ async def test_failed_match_audit_is_written_on_the_next_scan(monkeypatch):
     assert db.audit_events.docs[0]["actor"] == "system"
     assert db.audit_events.docs[0]["reason"] == "match_recorded"
     assert db.docket_events.docs[0]["audit_pending"] == []
+
+
+@pytest.mark.asyncio
+async def test_party_type_dob_for_this_docket_confirms_the_client(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{
+            "name": "Smith, John",
+            "extra_info": "DOB: 03/03/1970",
+            "party_types": [
+                {
+                    "docket": "https://www.courtlistener.com/api/rest/v4/dockets/9999/",
+                    "docket_id": 9999,
+                    "name": "Defendant",
+                    "extra_info": "DOB: 02/02/1990",
+                },
+                {
+                    "docket": "https://www.courtlistener.com/api/rest/v4/dockets/1001/",
+                    "docket_id": 1001,
+                    "name": "Defendant",
+                    "extra_info": "DOB: 01/15/1985",
+                },
+            ],
+        }],
+    )
+    db = _DB()
+    result = await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert result["confirmed"] == 1
+    assert db.docket_events.docs[0]["auto_linked"] is True
+    assert db.docket_events.docs[0]["confirmations"] == ["dob"]
+
+    other = _CourtListener(
+        hits=[_hit()],
+        parties=[{
+            "name": "Smith, John",
+            "extra_info": "DOB: 01/15/1985",
+            "party_types": [
+                {"docket_id": 9999, "extra_info": "DOB: 01/15/1985"},
+                {"docket_id": 1001, "extra_info": ""},
+            ],
+        }],
+    )
+    other_db = _DB()
+    await _scan(other_db, other, [_client(dobs=["1985-01-15"])])
+    assert other_db.docket_events.docs[0]["match_status"] == "possible"
+    assert other_db.docket_events.docs[0]["auto_linked"] is False
+
+
+@pytest.mark.asyncio
+async def test_upgrade_keeps_an_earlier_pending_audit(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
+    db = _DB()
+    real_insert = db.audit_events.insert_one
+    state = {"calls": 0}
+
+    async def fail_until_retry(doc):
+        state["calls"] += 1
+        if state["calls"] <= 3:
+            raise RuntimeError("audit down")
+        return await real_insert(doc)
+
+    db.audit_events.insert_one = fail_until_retry
+    await _scan(db, court, [_client()])
+    original = db.docket_events.docs[0]["audit_pending"][0]["event_id"]
+    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    pending_ids = [item["event_id"] for item in db.docket_events.docs[0]["audit_pending"]]
+    assert original in pending_ids
+    assert len(pending_ids) == 2
+    assert db.audit_events.docs == []
+    await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert len(db.docket_events.docs) == 1
+    assert {row["event_id"] for row in db.audit_events.docs} == set(pending_ids)
+    assert db.docket_events.docs[0]["audit_pending"] == []
+
+
+@pytest.mark.asyncio
+async def test_each_match_transition_notifies_once(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
+    db = _DB()
+    client = _client(dobs=["1985-01-15"])
+    await _scan(db, court, [client])
+    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    await _scan(db, court, [client])
+    court.parties = [{
+        "name": "Smith, John",
+        "party_types": [
+            {"docket_id": 1001, "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "extra_info": "DOB: 02/02/1990"},
+        ],
+    }]
+    await _scan(db, court, [client])
+    keys = [row["claim_key"] for row in db.notifications.docs]
+    assert len(keys) == 3
+    assert len(set(keys)) == 3
+    assert any(key.endswith(":possible:0") for key in keys)
+    assert any(key.endswith(":confirmed:1") for key in keys)
+    assert any(key.endswith(":possible:2") for key in keys)
+    await _scan(db, court, [client])
+    assert len(db.notifications.docs) == 3
+
+
+@pytest.mark.asyncio
+async def test_possible_row_is_withdrawn_when_its_candidate_bond_closes(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, run_federal_bond_risk_scan
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-open",
+        "status": "active",
+        "Bond_Case_ID": "bond-open",
+        "Defendant_ID": "def-open",
+        "defendant_name": "John Smith",
+    })
+    db.docket_events.docs.extend([
+        {
+            "_id": "possible-closed",
+            "source": SOURCE,
+            "source_id": "fl-federal:9:warrant:entry:1:bond-closed",
+            "slack_delivered": False,
+            "title": "Federal bond risk needs review — Warrant",
+            "description": "Possible match for Pat Sample.",
+            "court_name": "M.D. Florida",
+            "docket_number": "9:20-cr-00001",
+            "event_type": "warrant",
+            "filing_id": "entry:1",
+            "match_status": "possible",
+            "auto_linked": False,
+            "bond_case_id": "",
+            "candidate_bond_case_id": "bond-closed",
+        },
+        {
+            "_id": "possible-open",
+            "source": SOURCE,
+            "source_id": "fl-federal:9:warrant:entry:2:bond-open",
+            "slack_delivered": True,
+            "title": "Federal bond risk needs review — Warrant",
+            "description": "Possible match for John Smith.",
+            "match_status": "possible",
+            "auto_linked": False,
+            "bond_case_id": "",
+            "candidate_bond_case_id": "bond-open",
+            "event_type": "warrant",
+            "filing_id": "entry:2",
+        },
+    ])
+    notifier = _Notifier()
+    await run_federal_bond_risk_scan(
+        db, client=_CourtListener(hits=[]), notifier=notifier, pause_s=0,
+    )
+    closed = next(row for row in db.docket_events.docs if row["_id"] == "possible-closed")
+    opened = next(row for row in db.docket_events.docs if row["_id"] == "possible-open")
+    assert closed["match_status"] == "withdrawn"
+    assert closed["auto_linked"] is False
+    assert opened["match_status"] == "possible"
+    assert notifier.calls
+    assert notifier.calls[0]["details"]["match_status"] == "withdrawn"
+    assert notifier.calls[0]["details"]["auto_linked"] is False
 
 
 @pytest.mark.asyncio
@@ -1535,6 +1699,8 @@ async def test_parties_follow_the_next_page(monkeypatch):
     assert found["pages_fetched"] == 2
     assert [row["name"] for row in found["results"]] == ["Smith, John", "Roe, Jane"]
     assert calls[0][1]["fields"] == DOCKET_PARTY_FIELDS
+    assert "party_types" in calls[0][1]["fields"]
+    assert calls[0][1]["filter_nested_results"] == "true"
     assert calls[0][1]["page_size"] == 20
 
 
@@ -1761,8 +1927,10 @@ async def test_later_conflicting_party_dobs_downgrade_a_confirmed_link(monkeypat
 
     court.parties = [{
         "name": "Smith, John",
-        "date_of_birth": "1985-01-15",
-        "extra_info": "DOB: 02/02/1990",
+        "party_types": [
+            {"docket_id": 1001, "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "extra_info": "DOB: 02/02/1990"},
+        ],
     }]
     second = await _scan(db, court, [client])
     assert second["rows_written"] == 1
@@ -1816,8 +1984,10 @@ async def test_failed_slack_retry_uses_the_downgraded_wording(monkeypatch):
 
     court.parties = [{
         "name": "Smith, John",
-        "date_of_birth": "1985-01-15",
-        "extra_info": "DOB: 02/02/1990",
+        "party_types": [
+            {"docket_id": 1001, "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "extra_info": "DOB: 02/02/1990"},
+        ],
     }]
     second = await _scan(db, court, [client], notifier)
     assert second["slack_sent"] == 1

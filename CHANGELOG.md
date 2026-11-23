@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk party DOB, audit merge, claim revision)
+
+### Fixed
+- **A party's date of birth is read from its docket-specific party type.** The party request asks for `party_types`. `extra_info` on another docket, and the legacy flat party field, do not confirm the client.
+- **A later match transition keeps audits that are still unwritten.** The new row merges the previous `audit_pending` list instead of replacing it.
+- **Each match transition has its own notification claim.** `possible`, then `confirmed`, then `possible` again produces three staff notifications. A repeat of the same transition still writes one.
+- **A possible match is withdrawn when its candidate bond closes.** Exonerated, forfeited, and surrendered bonds are reconciled for both confirmed and possible rows, so a Slack retry does not post the stale review.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a docket-specific party DOB, an upgrade that keeps an older pending audit, a repeated possible transition, and a possible row whose candidate bond has closed.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk open bonds, audit retry, full link scan)
 
 ### Fixed

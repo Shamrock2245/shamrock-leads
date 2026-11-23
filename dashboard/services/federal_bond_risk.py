@@ -253,6 +253,59 @@ def extract_labeled_dobs(text: str) -> set[str]:
     return found
 
 
+def _dobs_from_extra(value) -> set[str]:
+    """Dates of birth inside one PACER extra_info blob."""
+    if isinstance(value, dict):
+        found = set()
+        for key in _DOB_FIELDS:
+            norm = normalize_dob(str(value.get(key) or ""))
+            if norm:
+                found.add(norm)
+        found |= extract_labeled_dobs(" ".join(str(item) for item in value.values() if item))
+        return found
+    return extract_labeled_dobs(str(value or ""))
+
+
+def _party_type_docket_id(party_type: dict) -> str:
+    explicit = str(party_type.get("docket_id") or "").strip()
+    if explicit:
+        return explicit
+    docket = party_type.get("docket")
+    if isinstance(docket, dict):
+        nested = str(docket.get("id") or "").strip()
+        if nested:
+            return nested
+        docket = docket.get("url") or docket.get("resource_uri") or ""
+    match = re.search(r"/dockets/(\d+)/?", str(docket or ""))
+    return match.group(1) if match else ""
+
+
+def party_dobs_for_docket(party: dict, docket_id: str) -> set[str]:
+    """Dates of birth on this party's type for this docket.
+
+    CourtListener nests that text on ``party_types[].extra_info``. A type for
+    another docket is ignored. The flat ``Party.extra_info`` field is used
+    only when the response has no party types at all.
+    """
+    types = party.get("party_types") or []
+    if isinstance(types, dict):
+        types = [types]
+    wanted = str(docket_id or "").strip()
+    found: set[str] = set()
+    saw_type = False
+    for party_type in types:
+        if not isinstance(party_type, dict):
+            continue
+        saw_type = True
+        type_docket = _party_type_docket_id(party_type)
+        if wanted and type_docket != wanted:
+            continue
+        found |= _dobs_from_extra(party_type.get("extra_info"))
+    if saw_type:
+        return found
+    return _dobs_from_extra(party.get("extra_info"))
+
+
 def canonical_identifier(value: str) -> Optional[str]:
     """Case or agency number. Requires a digit and at least 5 alphanumeric characters."""
     raw = str(value or "").strip()
@@ -1207,10 +1260,7 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         if not party_name:
             continue
         names.append(party_name)
-        party_dobs = extract_labeled_dobs(str(party.get("extra_info") or ""))
-        labeled = normalize_dob(str(party.get("date_of_birth") or ""))
-        if labeled:
-            party_dobs.add(labeled)
+        party_dobs = party_dobs_for_docket(party, docket_id)
         party_rows.append(DocketParty(name=party_name, dobs=frozenset(party_dobs)))
     view = DocketView(
         docket_id=docket_id,
@@ -1435,10 +1485,19 @@ async def _claim_insert(db, document: dict) -> str:
     return "exists"
 
 
-def _notification_claim_key(source_id: str, status: str) -> str:
+def _notification_claim_key(source_id: str, status: str, revision: int = 0) -> str:
+    """One key per transition. A later return to the same status is a new key."""
     token = _tenant_scope_token()
     prefix = f"{token}:" if token else ""
-    return f"{prefix}{source_id}:{status}"
+    return f"{prefix}{source_id}:{status}:{int(revision or 0)}"
+
+
+def _next_notification_revision(existing: Optional[dict], new_status: str) -> int:
+    stored = int((existing or {}).get("notification_revision") or 0)
+    prior = str((existing or {}).get("match_status") or "")
+    if prior and prior != new_status:
+        return stored + 1
+    return stored
 
 
 async def _mark_notification(db, source_id: str, status: str) -> None:
@@ -1448,9 +1507,9 @@ async def _mark_notification(db, source_id: str, status: str) -> None:
     )
 
 
-async def _ensure_notification(db, note: dict, source_id: str, status: str) -> bool:
+async def _ensure_notification(db, note: dict, source_id: str, status: str, revision: int = 0) -> bool:
     """Insert the CRM notification once. Overlapping scans share one row."""
-    claim_key = _notification_claim_key(source_id, status)
+    claim_key = _notification_claim_key(source_id, status, revision)
     stored = dict(note)
     stored["type"] = "federal_bond_risk"
     stored["claim_key"] = claim_key
@@ -1492,6 +1551,27 @@ def _audit_payload(source_id: str, before: dict, after: dict, reason: str, evide
     }
 
 
+def _pending_audits(*sources) -> list[dict]:
+    """Pending audits from each source, one copy of each event id."""
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for source in sources:
+        if isinstance(source, list):
+            rows = source
+        else:
+            rows = (source or {}).get("audit_pending") or []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            event_id = str(item.get("event_id") or "")
+            if event_id:
+                if event_id in seen:
+                    continue
+                seen.add(event_id)
+            merged.append(item)
+    return merged
+
+
 def _queue_match_audit(
     document: dict,
     source_id: str,
@@ -1499,12 +1579,11 @@ def _queue_match_audit(
     after: dict,
     reason: str,
     evidence: dict,
+    prior: Optional[dict] = None,
 ) -> dict:
-    """Keep the audit on the row that this transition is about to commit."""
+    """Keep this audit, and any still-unwritten earlier audits, on the row."""
     payload = _audit_payload(source_id, before, after, reason, evidence)
-    pending = [item for item in (document.get("audit_pending") or []) if isinstance(item, dict)]
-    pending.append(payload)
-    document["audit_pending"] = pending
+    document["audit_pending"] = _pending_audits(prior, document, [payload])
     return payload
 
 
@@ -1712,6 +1791,7 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
     source_id = _source_id(docket, decision)
     existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
     document = _event_document(decision, docket, source_id)
+    document["notification_revision"] = _next_notification_revision(existing, decision.status)
     note = _notification(decision, docket, source_id)
     upgrade = bool(
         existing
@@ -1728,9 +1808,11 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         document["detected_at"] = existing.get("detected_at") or document["detected_at"]
         document["upgraded_at"] = _now()
         document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
+        document["match_history"] = list(existing.get("match_history") or [])
         audit = _queue_match_audit(
             document, source_id, _match_state(existing), _match_state(document),
             "possible_upgraded_to_confirmed", _match_evidence(document, "possible_upgraded_to_confirmed"),
+            prior=existing,
         )
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "possible"},
@@ -1739,13 +1821,16 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         if not getattr(result, "matched_count", 0):
             return "duplicate"
         await _flush_match_audit(db, source_id, audit)
-        await _ensure_notification(db, note, source_id, decision.status)
+        await _ensure_notification(
+            db, note, source_id, decision.status, document["notification_revision"],
+        )
         return "upgraded"
     if downgrade:
         document = _with_downgrade_audit(existing, document, "identity_no_longer_confirms")
         audit = _queue_match_audit(
             document, source_id, _match_state(existing), _match_state(document),
             "identity_no_longer_confirms", _match_evidence(document, "identity_no_longer_confirms"),
+            prior=existing,
         )
         result = await db.docket_events.update_one(
             {"_id": existing.get("_id"), "match_status": "confirmed"},
@@ -1754,20 +1839,27 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         if not getattr(result, "matched_count", 0):
             return "duplicate"
         await _flush_match_audit(db, source_id, audit)
-        await _ensure_notification(db, _downgrade_note(document, source_id), source_id, decision.status)
+        await _ensure_notification(
+            db, _downgrade_note(document, source_id), source_id, decision.status,
+            document["notification_revision"],
+        )
         return "downgraded"
     if existing:
         if (
             not existing.get("notification_written")
             or existing.get("notification_status") != decision.status
         ):
-            await _ensure_notification(db, note, source_id, decision.status)
+            await _ensure_notification(
+                db, note, source_id, decision.status,
+                _next_notification_revision(existing, decision.status),
+            )
         if not existing.get("slack_delivered"):
             return "retry_slack"
         return "duplicate"
     audit = _queue_match_audit(
         document, source_id, {}, _match_state(document),
         "match_recorded", _match_evidence(document, "match_recorded"),
+        prior=existing,
     )
     claimed = await _claim_insert(db, document)
     if claimed != "inserted":
@@ -1775,11 +1867,16 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         if winner and winner.get("match_status") == "confirmed" and decision.status != "confirmed":
             return await _store_decision(db, decision, docket)
         if winner and not winner.get("notification_written"):
-            await _ensure_notification(db, note, source_id, decision.status)
+            await _ensure_notification(
+                db, note, source_id, decision.status,
+                _next_notification_revision(winner, decision.status),
+            )
         if winner and not winner.get("slack_delivered"):
             return "retry_slack"
         return "duplicate"
-    await _ensure_notification(db, note, source_id, decision.status)
+    await _ensure_notification(
+        db, note, source_id, decision.status, document["notification_revision"],
+    )
     await _flush_match_audit(db, source_id, audit)
     log.info(
         "Federal bond-risk %s court=%s event=%s filing=%s auto_linked=%s",
@@ -1790,14 +1887,18 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
 
 
 async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
-    """A stored link whose bond is not an open liability is not posted as confirmed."""
+    """A stored confirmed or possible row whose bond is closed is not posted."""
     active = {client.bond_case_id for client in clients}
-    async for page in _each_page(db.docket_events, {"source": SOURCE, "auto_linked": True}):
+    async for page in _each_page(
+        db.docket_events,
+        {"source": SOURCE, "match_status": {"$in": ["confirmed", "possible"]}},
+    ):
         for row in page:
-            bond = str(row.get("bond_case_id") or "")
-            if bond and bond in active:
-                continue
-            if row.get("match_status") not in {"confirmed", "possible"}:
+            bonds = [
+                str(row.get("bond_case_id") or "").strip(),
+                str(row.get("candidate_bond_case_id") or "").strip(),
+            ]
+            if any(bond in active for bond in bonds if bond):
                 continue
             source_id = str(row.get("source_id") or "")
             prior_status = row.get("match_status")
@@ -1808,10 +1909,12 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
             document["defendant_id"] = ""
             document["matched_defendant_id"] = None
             document["confirmations"] = []
+            document["notification_revision"] = _next_notification_revision(row, "withdrawn")
             document = _with_downgrade_audit(row, document, "client_no_longer_active")
             audit = _queue_match_audit(
                 document, source_id, _match_state(row), _match_state(document),
                 "client_no_longer_active", _match_evidence(document, "client_no_longer_active"),
+                prior=row,
             )
             result = await db.docket_events.update_one(
                 {"_id": row.get("_id"), "match_status": prior_status},
@@ -1821,6 +1924,7 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
                 await _flush_match_audit(db, source_id, audit)
                 await _ensure_notification(
                     db, _downgrade_note(document, source_id), source_id, "withdrawn",
+                    document["notification_revision"],
                 )
 
 
@@ -1848,10 +1952,12 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
             document["defendant_id"] = ""
             document["matched_defendant_id"] = None
             document["confirmations"] = []
+            document["notification_revision"] = _next_notification_revision(row, "withdrawn")
             document = _with_downgrade_audit(row, document, "identity_no_longer_matches")
             audit = _queue_match_audit(
                 document, source_id, _match_state(row), _match_state(document),
                 "identity_no_longer_matches", _match_evidence(document, "identity_no_longer_matches"),
+                prior=row,
             )
             result = await db.docket_events.update_one(
                 {"_id": row.get("_id"), "match_status": prior_status},
@@ -1860,7 +1966,10 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
             if not getattr(result, "matched_count", 0):
                 continue
             await _flush_match_audit(db, source_id, audit)
-            await _ensure_notification(db, _downgrade_note(document, source_id), source_id, "withdrawn")
+            await _ensure_notification(
+                db, _downgrade_note(document, source_id), source_id, "withdrawn",
+                document["notification_revision"],
+            )
             withdrawn.append(source_id)
     return withdrawn
 
