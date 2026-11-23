@@ -176,6 +176,7 @@ class _DB:
         self.arrests = _Collection()
         self.docket_events = _Collection()
         self.notifications = _Collection()
+        self.audit_events = _Collection()
         self.federal_bond_risk_state = _Collection()
 
     def __getitem__(self, name: str):
@@ -202,6 +203,8 @@ class _CourtListener:
         self.search_errors = search_errors or {}
         self.parties_error = parties_error
         self.parties_error_ids = parties_error_ids
+        self.entries_error = None
+        self.entries_error_ids = None
         self.calls = []
 
     async def search_limited(self, **kwargs):
@@ -247,6 +250,10 @@ class _CourtListener:
     async def list_docket_entries(self, docket_id: int, **kwargs):
         self.calls.append(("entries", docket_id))
         assert int(kwargs.get("max_pages") or 1) <= 3
+        if self.entries_error and (
+            self.entries_error_ids is None or docket_id in self.entries_error_ids
+        ):
+            return self.entries_error
         return {"success": True, "status_code": 200, "results": self.entries}
 
     async def close(self):
@@ -290,6 +297,132 @@ async def _scan(db, court, clients, notifier=None):
         pause_s=0,
         clients=clients,
     )
+
+
+def test_subjectless_filing_on_several_defendants_is_not_confirmed():
+    from dashboard.services.federal_bond_risk import decide_matches
+
+    filing = DocketEvent("warrant", "Warrant", "entry:1")
+    multi = _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        DocketParty("Roe, Jane", frozenset({"1990-02-02"})),
+        events=[filing],
+    )
+    client = _client(name="John Smith", dobs=["1985-01-15"])
+    rows = decide_matches([client], multi)
+    assert rows[0].status == "possible"
+    assert rows[0].confirmations == ()
+    named = DocketEvent("warrant", "Warrant", "entry:2", ("John Smith",))
+    linked = decide_matches([client], _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        DocketParty("Roe, Jane", frozenset({"1990-02-02"})),
+        events=[named],
+    ))
+    assert linked[0].status == "confirmed"
+
+
+def test_two_bonds_for_one_defendant_are_not_an_ambiguous_match():
+    from dashboard.services.federal_bond_risk import decide_matches
+
+    docket = _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        events=[DocketEvent("warrant", "Warrant", "entry:1", ("John Smith",))],
+    )
+    same_person = [
+        _client(dobs=["1985-01-15"], bond="bond-a", defendant="def-1"),
+        _client(dobs=["1985-01-15"], bond="bond-b", defendant="def-1"),
+    ]
+    rows = decide_matches(same_person, docket)
+    assert [row.status for row in rows] == ["confirmed", "confirmed"]
+    assert all(not row.ambiguous for row in rows)
+    two_people = [
+        _client(name="John Smith", dobs=["1985-01-15"], bond="bond-a", defendant="def-a"),
+        _client(name="Jane Roe", dobs=["1990-02-02"], bond="bond-b", defendant="def-b"),
+    ]
+    mixed = _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        DocketParty("Roe, Jane", frozenset({"1990-02-02"})),
+        events=[DocketEvent("warrant", "Warrant", "entry:9")],
+    )
+    # Subjectless on two defendants stays possible, so ambiguity is tested
+    # with a filing that names both people.
+    both = _docket_for(
+        DocketParty("Smith, John", frozenset({"1985-01-15"})),
+        DocketParty("Roe, Jane", frozenset({"1990-02-02"})),
+        events=[DocketEvent("warrant", "Warrant", "entry:9", ("John Smith", "Jane Roe"))],
+    )
+    ambiguous = decide_matches(two_people, both)
+    assert {row.status for row in ambiguous} == {"possible"}
+    assert all(row.ambiguous for row in ambiguous)
+    assert decide_matches(two_people, mixed)[0].status == "possible"
+
+
+@pytest.mark.asyncio
+async def test_upgrade_and_downgrade_write_audit_events(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John"}],
+    )
+    db = _DB()
+    client = _client()
+    await _scan(db, court, [client])
+    recorded = [row for row in db.audit_events.docs if row["reason"] == "match_recorded"]
+    assert recorded
+    assert recorded[0]["actor"] == "system"
+    assert recorded[0]["new_state"]["match_status"] == "possible"
+    assert recorded[0]["evidence"]["filing_id"]
+
+    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    upgraded = [row for row in db.audit_events.docs if row["reason"] == "possible_upgraded_to_confirmed"]
+    assert upgraded[0]["actor"] == "system"
+    assert upgraded[0]["old_state"]["match_status"] == "possible"
+    assert upgraded[0]["old_state"]["auto_linked"] is False
+    assert upgraded[0]["new_state"]["match_status"] == "confirmed"
+    assert upgraded[0]["new_state"]["auto_linked"] is True
+
+    court.parties = [{
+        "name": "Smith, John",
+        "date_of_birth": "1985-01-15",
+        "extra_info": "DOB: 02/02/1990",
+    }]
+    await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    downgraded = [row for row in db.audit_events.docs if row["reason"] == "identity_no_longer_confirms"]
+    assert downgraded[0]["old_state"]["auto_linked"] is True
+    assert downgraded[0]["new_state"]["match_status"] == "possible"
+    assert downgraded[0]["new_state"]["auto_linked"] is False
+
+
+@pytest.mark.asyncio
+async def test_docket_entry_outage_is_not_an_empty_success(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    court.entries_error = {"success": False, "error": "HTTP 503", "status_code": 503, "results": []}
+    db = _DB()
+    result = await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert result["success"] is False
+    assert result["skipped"] == "entry_hydration_failed"
+    assert "503" in result["warning"]
+    assert db.docket_events.docs == []
+
+    partial = _CourtListener(
+        hits=[
+            _hit(id=1001, docket_id=1001),
+            _hit(id=1002, docket_id=1002, docketNumber="2:24-cr-00456", recap_documents=[]),
+        ],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    partial.entries_error = {"success": False, "error": "bad_json", "status_code": 200, "results": []}
+    partial.entries_error_ids = {1002}
+    partial_db = _DB()
+    kept = await _scan(partial_db, partial, [_client(dobs=["1985-01-15"])])
+    assert kept["success"] is True
+    assert kept["rows_written"] == 1
+    assert "1002" in kept["warning"]
 
 
 def test_full_name_and_event_rules():

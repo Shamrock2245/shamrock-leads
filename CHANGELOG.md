@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk audit, entry failures, subjectless filings)
+
+### Fixed
+- **Match upgrades, downgrades, and withdrawals write an append-only audit event.** The actor is `system`. The record has the before and after state, the reason, and the filing evidence. `match_history` on the row is not the only copy.
+- **A docket-entry outage is not an empty success.** If every docket's entry list fails, the scan returns `success: false` and `skipped: entry_hydration_failed`. A partial failure names those dockets. A failed docket brief is named in the warning.
+- **A filing that names nobody is not confirmed on a multi-defendant docket.** It stays `possible`. A filing that names the client can still confirm.
+- **Two bonds for the same defendant are one person.** They do not make the match ambiguous. Two different defendants on one filing still do.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the audit on upgrade and downgrade, an entry-list failure, a subjectless filing beside a named one, and two bonds for one defendant.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk Slack retry and immutable id)
 
 ### Fixed

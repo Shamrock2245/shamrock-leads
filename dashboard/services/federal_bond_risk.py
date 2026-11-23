@@ -570,8 +570,36 @@ def _filing_affects_client(event: DocketEvent, client: ClientIdentity) -> bool:
     )
 
 
+def _person_key(client: ClientIdentity) -> tuple:
+    """One person, even when that person has more than one active bond."""
+    if client.defendant_id:
+        return ("defendant", client.defendant_id)
+    if client.names:
+        parts = name_parts(client.names[0])
+        if parts:
+            return ("name", parts[0], parts[2])
+    return ("bond", client.bond_case_id)
+
+
+def _docket_people(docket: DocketView) -> set[tuple]:
+    """Defendant-side people. The United States is not a defendant."""
+    found: set[tuple] = set()
+    for party in docket.parties:
+        label = " ".join(_tokens(party.name))
+        if label in {"UNITED STATES", "UNITED STATES OF AMERICA", "USA"}:
+            continue
+        parts = name_parts(party.name)
+        if parts:
+            found.add((parts[0], parts[2]))
+    return found
+
+
 def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[MatchDecision]:
-    """One decision per client per event. Two confirmed hits on one event are not linked."""
+    """One decision per client per event. Two confirmed people on one event are not linked.
+
+    A filing that names nobody, on a docket with more than one defendant, is
+    not confirmed. Several bonds for the same defendant are still one person.
+    """
     decisions: list[MatchDecision] = []
     for event in docket.events:
         group: list[MatchDecision] = []
@@ -581,6 +609,13 @@ def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[Ma
             status, confirmations = match_client(client, docket)
             if not status:
                 continue
+            if (
+                status == "confirmed"
+                and not event.affected_names
+                and len(_docket_people(docket)) > 1
+            ):
+                status = "possible"
+                confirmations = ()
             group.append(MatchDecision(
                 client=client,
                 status=status,
@@ -590,7 +625,8 @@ def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[Ma
                 filing_id=event.filing_id,
             ))
         confirmed = [row for row in group if row.status == "confirmed"]
-        if len(confirmed) > 1:
+        people = {_person_key(row.client) for row in confirmed}
+        if len(people) > 1:
             for row in group:
                 if row.status == "confirmed":
                     row.status = "possible"
@@ -816,7 +852,9 @@ class _ScanStop(Exception):
 
 def _scan_stopped(base: dict, stop: _ScanStop) -> dict:
     payload = {**base, "skipped": stop.skipped, "warning": stop.warning, "rows_written": 0}
-    if stop.skipped in {"search_failed", "index_unavailable", "party_hydration_failed"}:
+    if stop.skipped in {
+        "search_failed", "index_unavailable", "party_hydration_failed", "entry_hydration_failed",
+    }:
         payload["success"] = False
     return payload
 
@@ -981,7 +1019,7 @@ async def _save_seed_offset(db, offset: int) -> None:
     )
 
 
-async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[DocketView], bool, list[str]]:
+async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[DocketView], bool, list[str], list[str], list[str]]:
     """Search recent RECAP and docket pages, then hydrate the seed batch.
 
     Caption surnames are not a filter. A lead-defendant caption with "et al."
@@ -1053,13 +1091,21 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
 
     views: list[DocketView] = []
     party_failures: list[str] = []
+    entry_failures: list[str] = []
+    brief_failures: list[str] = []
+    entry_attempts = 0
     for seed in batch:
         if pause_s:
             await asyncio.sleep(pause_s)
-        view, party_error = await _hydrate(client, seed, pause_s)
+        view, party_error, entry_error, brief_error = await _hydrate(client, seed, pause_s)
         if party_error:
             party_failures.append(party_error)
             continue
+        entry_attempts += 1
+        if entry_error:
+            entry_failures.append(entry_error)
+        if brief_error:
+            brief_failures.append(brief_error)
         if view and view.events and is_fl_federal_criminal(view.court_id, view.docket_number):
             views.append(view)
     if batch and party_failures and len(party_failures) == len(batch):
@@ -1069,12 +1115,19 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
             + "). No alerts were written.",
             "party_hydration_failed",
         )
+    if entry_attempts and len(entry_failures) == entry_attempts:
+        raise _ScanStop(
+            "CourtListener docket entries failed for every docket ("
+            + "; ".join(entry_failures[:8])
+            + "). No alerts were written.",
+            "entry_hydration_failed",
+        )
     if db is not None:
         await _save_seed_offset(db, next_offset)
-    return views, truncated, party_failures
+    return views, truncated, party_failures, entry_failures, brief_failures
 
 
-async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[DocketView], str]:
+async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[DocketView], str, str, str]:
     hits = seed.get("hits") or []
     first = hits[0] if hits else {}
     docket_id = str(seed.get("id") or "")
@@ -1082,11 +1135,14 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
     parties: list[dict] = []
     entries: list[dict] = []
     if not str(docket_id).isdigit():
-        return None, ""
+        return None, "", "", ""
     brief_res = await client.get_docket_brief(int(docket_id))
     _stop_if_blocked(brief_res)
+    brief_error = ""
     if not brief_res.get("success"):
-        log.warning("Docket %s brief unavailable: %s", docket_id, brief_res.get("error"))
+        detail = brief_res.get("error") or f"HTTP {brief_res.get('status_code') or 'error'}"
+        log.warning("Docket %s brief unavailable: %s", docket_id, detail)
+        brief_error = f"{docket_id} {detail}"
     else:
         data = brief_res.get("data") or {}
         brief = data if isinstance(data, dict) else {}
@@ -1098,17 +1154,22 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         # Without parties we cannot see a docket DOB, so we do not guess.
         detail = party_res.get("error") or f"HTTP {party_res.get('status_code') or 'error'}"
         log.warning("Docket %s parties unavailable: %s", docket_id, detail)
-        return None, f"{docket_id} {detail}"
+        return None, f"{docket_id} {detail}", "", ""
     parties = [row for row in (party_res.get("results") or []) if isinstance(row, dict)]
     entry_res = await client.list_docket_entries(
         int(docket_id), page_size=20, max_pages=MAX_ENTRY_PAGES, pause_s=pause_s,
     )
     _stop_if_blocked(entry_res)
+    entry_error = ""
     if entry_res.get("success"):
         entries = [
             row for row in (entry_res.get("results") or [])
             if isinstance(row, dict) and filing_in_window(str(row.get("date_filed") or ""))
         ]
+    else:
+        detail = entry_res.get("error") or f"HTTP {entry_res.get('status_code') or 'error'}"
+        log.warning("Docket %s entries unavailable: %s", docket_id, detail)
+        entry_error = f"{docket_id} {detail}"
 
     court_id = _court_slug(brief) or _court_slug(first)
     docket_number = _first_text(brief, "docket_number") or _first_text(first, "docketNumber", "docket_number")
@@ -1178,7 +1239,7 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
                 str(doc.get(key) or "") for key in ("description", "short_description", "snippet")
             )
             _attach_document(view, doc, blob, doc_to_entry, text_to_entry, party_names)
-    return view, ""
+    return view, "", entry_error, brief_error
 
 
 def _attach_document(
@@ -1390,6 +1451,61 @@ async def _ensure_notification(db, note: dict, source_id: str, status: str) -> b
     return False
 
 
+async def _write_match_audit(
+    db,
+    source_id: str,
+    before: dict,
+    after: dict,
+    reason: str,
+    evidence: dict,
+) -> None:
+    """Append-only audit. The mutable docket row is not the record of the change."""
+    collection = getattr(db, "audit_events", None)
+    if collection is None:
+        return
+    now = _now()
+    try:
+        await collection.insert_one({
+            "event_id": str(uuid.uuid4()),
+            "event_type": "federal_bond_risk_match_changed",
+            "action": "federal_bond_risk_match_changed",
+            "entity_type": "docket_event",
+            "entity_id": source_id,
+            "actor": "system",
+            "agent_name": "federal_bond_risk",
+            "source": SOURCE,
+            "reason": reason,
+            "old_state": before,
+            "new_state": after,
+            "evidence": evidence,
+            "timestamp": now,
+            "created_at": now,
+        })
+    except Exception as exc:
+        log.warning("Federal bond-risk audit was not written: %s", type(exc).__name__)
+
+
+def _match_state(row: dict) -> dict:
+    return {
+        "match_status": row.get("match_status") or "",
+        "auto_linked": bool(row.get("auto_linked")),
+        "bond_case_id": row.get("bond_case_id") or "",
+        "defendant_id": row.get("defendant_id") or row.get("matched_defendant_id") or "",
+        "confirmations": list(row.get("confirmations") or []),
+    }
+
+
+def _match_evidence(row: dict, reason: str) -> dict:
+    return {
+        "reason": reason,
+        "docket_id": row.get("docket_id") or "",
+        "docket_number": row.get("docket_number") or "",
+        "filing_id": row.get("filing_id") or "",
+        "event_type": row.get("event_type") or "",
+        "confirmations": list(row.get("confirmations") or []),
+    }
+
+
 def _downgrade_copy(name: str, event_label: str) -> tuple[str, str]:
     title = f"Federal bond risk link withdrawn — {event_label}"
     message = (
@@ -1506,6 +1622,10 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
+        await _write_match_audit(
+            db, source_id, _match_state(existing), _match_state(document),
+            "possible_upgraded_to_confirmed", _match_evidence(document, "possible_upgraded_to_confirmed"),
+        )
         await _ensure_notification(db, note, source_id, decision.status)
         return "upgraded"
     if downgrade:
@@ -1516,6 +1636,10 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
         )
         if not getattr(result, "matched_count", 0):
             return "duplicate"
+        await _write_match_audit(
+            db, source_id, _match_state(existing), _match_state(document),
+            "identity_no_longer_confirms", _match_evidence(document, "identity_no_longer_confirms"),
+        )
         await _ensure_notification(db, _downgrade_note(document, source_id), source_id, decision.status)
         return "downgraded"
     if existing:
@@ -1538,6 +1662,10 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
             return "retry_slack"
         return "duplicate"
     await _ensure_notification(db, note, source_id, decision.status)
+    await _write_match_audit(
+        db, source_id, {}, _match_state(document),
+        "match_recorded", _match_evidence(document, "match_recorded"),
+    )
     log.info(
         "Federal bond-risk %s court=%s event=%s filing=%s auto_linked=%s",
         decision.status, docket.court_id, decision.event_type, decision.filing_id,
@@ -1572,6 +1700,10 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
             {"$set": _mutable_update(document)},
         )
         if getattr(result, "matched_count", 0) and source_id:
+            await _write_match_audit(
+                db, source_id, _match_state(row), _match_state(document),
+                "client_no_longer_active", _match_evidence(document, "client_no_longer_active"),
+            )
             await _ensure_notification(
                 db, _downgrade_note(document, source_id), source_id, "withdrawn",
             )
@@ -1607,6 +1739,10 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
         )
         if not getattr(result, "matched_count", 0):
             continue
+        await _write_match_audit(
+            db, source_id, _match_state(row), _match_state(document),
+            "identity_no_longer_matches", _match_evidence(document, "identity_no_longer_matches"),
+        )
         await _ensure_notification(db, _downgrade_note(document, source_id), source_id, "withdrawn")
         withdrawn.append(source_id)
     return withdrawn
@@ -1804,7 +1940,7 @@ async def run_federal_bond_risk_scan(
                 "slack_pending": slack_pending,
             }
         try:
-            dockets, seeds_truncated, party_failures = await _collect_dockets(client, pause_s, db)
+            dockets, seeds_truncated, party_failures, entry_failures, brief_failures = await _collect_dockets(client, pause_s, db)
         except _ScanStop as stop:
             slack_sent, slack_pending, _attempts = await retry_pending_slack(db, notifier)
             stopped = _scan_stopped(base, stop)
@@ -1857,6 +1993,16 @@ async def run_federal_bond_risk_scan(
             warnings.append(
                 "CourtListener party list failed for "
                 f"{len(party_failures)} docket(s): " + "; ".join(party_failures[:8])
+            )
+        if entry_failures:
+            warnings.append(
+                "CourtListener docket entries failed for "
+                f"{len(entry_failures)} docket(s): " + "; ".join(entry_failures[:8])
+            )
+        if brief_failures:
+            warnings.append(
+                "CourtListener docket brief failed for "
+                f"{len(brief_failures)} docket(s): " + "; ".join(brief_failures[:8])
             )
         return {
             **base,
