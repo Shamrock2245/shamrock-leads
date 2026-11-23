@@ -9,9 +9,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Filing text matching requires one contiguous ordered name.** `"John Doe; Jane Smith"` no longer matches `"John Smith"` across unrelated parties, preventing cross-party auto-links and keeping unnamed actor-sensitive filings as `possible`.
 - **Checkpointed search slices stay pinned until every new match in the slice is stored.** When `MAX_ROWS` caps a run or hydration pages through a slice, neither the search checkpoint nor the seed cursor advances past unwritten rows.
 - **CourtListener search expands classifier stems and fails cron on auth/rate-limit outages.** `BOND_RISK_QUERY` includes `bond revocation`, `revocation of pretrial release`, and `modify`/`modifying`/`modified` release phrases; `unauthorized` and `rate_limited` stops report `success: false` so cron escalates them.
+- **Withdrawn rows retry missed CRM notifications and corrected entries withdraw stale links.** `retry_pending_notifications` retries unwritten CRM notifications across all statuses including `withdrawn`, and `DocketView.seen_filing_ids` tracks every hydrated entry and RECAP document so corrected filings that no longer match a risk phrase still withdraw stale auto-links.
 
 ### Tests
-- `tests/test_federal_bond_risk.py` covers contiguous ordered name matching, `MAX_ROWS` and `HYDRATE_CEILING` checkpoint retention across slices, stem query coverage, and cron escalation for `unauthorized` and `rate_limited`.
+- `tests/test_federal_bond_risk.py` covers contiguous ordered name matching, `MAX_ROWS` and `HYDRATE_CEILING` checkpoint retention across slices, stem query coverage, cron escalation for `unauthorized` and `rate_limited`, withdrawn notification retries, and stale-link withdrawal after entry correction.
 
 ## [Unreleased] — 2026-11-23 (Federal bond-risk search phrases and docket numbers)
 

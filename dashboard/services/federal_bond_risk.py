@@ -626,6 +626,7 @@ class DocketView:
     parties: list[DocketParty] = field(default_factory=list)
     numbers: set[str] = field(default_factory=set)
     events: list[DocketEvent] = field(default_factory=list)
+    seen_filing_ids: set[str] = field(default_factory=set)
     absolute_url: str = ""
 
     def identifier_pool(self) -> set[str]:
@@ -1518,7 +1519,7 @@ async def _collect_dockets(
             entry_failures.append(entry_error)
         if brief_error:
             brief_failures.append(brief_error)
-        if view and view.events and is_fl_federal_criminal(view.court_id, view.docket_number):
+        if view and (view.events or view.seen_filing_ids) and is_fl_federal_criminal(view.court_id, view.docket_number):
             views.append(view)
     if batch and party_failures and len(party_failures) == len(batch):
         raise _ScanStop(
@@ -1652,6 +1653,8 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
                 doc_to_entry[doc_id] = str(entry_token)
         if description and filing.startswith("entry:"):
             text_to_entry.setdefault(_norm_filing_text(description), filing)
+        if filing:
+            view.seen_filing_ids.add(filing)
         _extend_events(view, description, filing, [party.name for party in view.parties])
     for hit in hits:
         party_names = [party.name for party in view.parties]
@@ -1686,12 +1689,16 @@ def _attach_document(
     else:
         linked_filing = f"entry:{linked}"
     if linked_filing:
+        view.seen_filing_ids.add(linked_filing)
         _extend_events(view, blob, linked_filing, party_names)
         return
     doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
     if not doc_id and blob.strip():
         doc_id = hashlib.sha256(_norm_filing_text(blob).encode()).hexdigest()[:12]
-    _extend_events(view, blob, f"doc:{doc_id}" if doc_id else "", party_names)
+    filing_id = f"doc:{doc_id}" if doc_id else ""
+    if filing_id:
+        view.seen_filing_ids.add(filing_id)
+    _extend_events(view, blob, filing_id, party_names)
 
 
 def _event_document(decision: MatchDecision, docket: DocketView, source_id: str) -> dict:
@@ -1731,6 +1738,7 @@ def _event_document(decision: MatchDecision, docket: DocketView, source_id: str)
         "alert_complete": False,
         "slack_attempts": 0,
         "notification_written": False,
+        "notification_status": "",
     }
 
 
@@ -1864,9 +1872,24 @@ def _next_notification_revision(existing: Optional[dict], new_status: str) -> in
     return stored
 
 
-async def _mark_notification(db, source_id: str, status: str) -> None:
+async def _mark_notification(db, source_id: str, status: str, revision: int = 0) -> None:
+    revision = int(revision or 0)
+    version: dict = (
+        {"$or": [
+            {"notification_revision": 0},
+            {"notification_revision": {"$exists": False}},
+            {"notification_revision": None},
+        ]}
+        if revision == 0
+        else {"notification_revision": revision}
+    )
+    status_match: dict = {"$or": [
+        {"match_status": status},
+        {"match_status": {"$exists": False}},
+        {"match_status": None},
+    ]}
     await db.docket_events.update_one(
-        {"source": SOURCE, "source_id": source_id},
+        {"source": SOURCE, "source_id": source_id, "$and": [status_match, version]},
         {"$set": {"notification_written": True, "notification_status": status}},
     )
 
@@ -1887,10 +1910,10 @@ async def _ensure_notification(db, note: dict, source_id: str, status: str, revi
         if not _duplicate_key(exc):
             log.warning("Federal bond-risk notification was not written: %s", type(exc).__name__)
             return False
-        await _mark_notification(db, source_id, status)
+        await _mark_notification(db, source_id, status, revision)
         return True
     if getattr(result, "upserted_id", None) or getattr(result, "matched_count", 0):
-        await _mark_notification(db, source_id, status)
+        await _mark_notification(db, source_id, status, revision)
         return True
     return False
 
@@ -2030,6 +2053,67 @@ async def retry_pending_audits(db) -> int:
                 await _clear_pending_audit(db, str(row.get("source_id") or ""), str(item.get("event_id") or ""))
             if failed:
                 return written
+    return written
+
+
+def _stored_notification(row: dict) -> dict:
+    """Build a CRM notification from a stored alert, including withdrawn rows."""
+    source_id = str(row.get("source_id") or "")
+    status = str(row.get("match_status") or "possible")
+    if status == "withdrawn" or row.get("downgrade_reason"):
+        return _downgrade_note(row, source_id)
+    confirmed = status == "confirmed" and bool(row.get("auto_linked"))
+    return redact_internal_keys({
+        "notification_id": uuid.uuid4().hex[:12],
+        "type": "federal_bond_risk",
+        "icon": "⚖️",
+        "priority": "critical" if confirmed else "high",
+        "color": "#dc2626" if confirmed else "#f59e0b",
+        "title": row.get("title") or "Federal bond risk",
+        "message": row.get("description") or "",
+        "entity_id": row.get("bond_case_id") or row.get("candidate_bond_case_id") or "",
+        "entity_type": "federal_bond_risk",
+        "metadata": {
+            "match_status": status,
+            "auto_linked": confirmed,
+            "ambiguous": bool(row.get("ambiguous")),
+            "confirmations": list(row.get("confirmations") or []),
+            "court_id": row.get("court_id") or "",
+            "court_name": row.get("court_name") or "",
+            "docket_number": row.get("docket_number") or "",
+            "docket_id": row.get("docket_id") or "",
+            "event_type": row.get("event_type") or "",
+            "filing_id": row.get("filing_id") or "",
+            "source_id": source_id,
+            "absolute_url": row.get("absolute_url") or "",
+            "candidate_bond_case_id": row.get("candidate_bond_case_id") or row.get("bond_case_id") or "",
+        },
+        "read": False,
+        "dismissed": False,
+        "created_at": _now(),
+    })
+
+
+async def retry_pending_notifications(db) -> int:
+    """Write CRM notifications for any stored row (including withdrawn) whose write failed."""
+    written = 0
+    async for page in _each_page(db.docket_events, {"source": SOURCE}):
+        for row in page:
+            source_id = str(row.get("source_id") or "")
+            status = str(row.get("match_status") or "")
+            if not source_id or not status:
+                continue
+            written_flag = row.get("notification_written")
+            if written_flag is None:
+                continue
+            if written_flag is True and str(row.get("notification_status") or "") == status:
+                continue
+            revision = int(row.get("notification_revision") or 0)
+            if not await _ensure_notification(
+                db, _stored_notification(row), source_id, status, revision,
+            ):
+                return written
+            written += 1
     return written
 
 
@@ -2331,8 +2415,10 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> None:
 
 
 async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[MatchDecision]) -> list[str]:
-    """A filing seen again that no longer matches must not stay auto-linked."""
-    filing_ids = {event.filing_id for event in docket.events if event.filing_id}
+    """A filing seen again that no longer matches (or was corrected) must not stay auto-linked."""
+    filing_ids = {fid for fid in docket.seen_filing_ids if fid} | {
+        event.filing_id for event in docket.events if event.filing_id
+    }
     if not filing_ids:
         return []
     still_open = {_source_id(docket, decision) for decision in decisions}
@@ -2602,6 +2688,7 @@ async def run_federal_bond_risk_scan(
 
             notifier = SlackNotifier()
         await retry_pending_audits(db)
+        await retry_pending_notifications(db)
         loaded_clients = clients is None
         if clients is None:
             clients = await load_active_clients(db)

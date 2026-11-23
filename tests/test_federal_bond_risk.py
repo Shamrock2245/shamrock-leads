@@ -3079,3 +3079,123 @@ async def test_unauthorized_and_rate_limit_scans_raise_from_cron(monkeypatch):
 
     with pytest.raises(RuntimeError, match="rate_limited"):
         await _run_with({"success": False, "error": "ReadTimeout", "results": []})
+
+
+@pytest.mark.asyncio
+async def test_failed_withdrawal_notification_is_retried_on_next_scan(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
+    from dashboard.services.federal_bond_risk import SOURCE
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    first = await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+    assert first["confirmed"] == 1
+    assert len(db.notifications.docs) == 1
+
+    # Bond closes -> _unlink_inactive_clients withdraws the row, and notification write fails once.
+    db.active_bonds.docs[0]["status"] = "exonerated"
+    real_update = db.notifications.update_one
+
+    async def failing_update(filt, update, upsert=False):
+        raise RuntimeError("transient notification failure")
+
+    db.notifications.update_one = failing_update
+    closed = await run_federal_bond_risk_scan(db, client=_CourtListener(hits=[]), notifier=_Notifier(), pause_s=0)
+    assert closed["skipped"] == "no_active_clients"
+    assert db.docket_events.docs[0]["match_status"] == "withdrawn"
+    assert db.docket_events.docs[0]["notification_written"] is False
+    assert len(db.notifications.docs) == 1
+
+    # Next scan restores notifications.update_one and retries the withdrawn notification once.
+    db.notifications.update_one = real_update
+    resumed = await run_federal_bond_risk_scan(db, client=_CourtListener(hits=[]), notifier=_Notifier(), pause_s=0)
+    assert resumed["skipped"] == "no_active_clients"
+    assert db.docket_events.docs[0]["notification_written"] is True
+    assert db.docket_events.docs[0]["notification_status"] == "withdrawn"
+    assert len(db.notifications.docs) == 2
+    assert db.notifications.docs[-1]["metadata"]["match_status"] == "withdrawn"
+    assert db.docket_events.docs[0]["source"] == SOURCE
+
+    # Repeating again is a no-op (still 2 notifications total).
+    again = await run_federal_bond_risk_scan(db, client=_CourtListener(hits=[]), notifier=_Notifier(), pause_s=0)
+    assert again["skipped"] == "no_active_clients"
+    assert len(db.notifications.docs) == 2
+
+
+@pytest.mark.asyncio
+async def test_corrected_filing_without_risk_phrase_withdraws_stale_link(monkeypatch):
+    _enable(monkeypatch)
+    today = datetime.now(timezone.utc).date().isoformat()
+    client = _client(name="John Smith", dobs=["1985-01-15"])
+
+    class _CorrectedCourt(_CourtListener):
+        def __init__(self):
+            super().__init__(
+                hits=[_hit(recap_documents=[])],
+                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+            )
+            self.stage = 1
+
+        async def list_docket_entries(self, docket_id, **kwargs):
+            self.calls.append(("entries", kwargs))
+            if self.stage == 1:
+                rows = [
+                    {"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": today},
+                    {"id": 99, "description": "Detention hearing", "date_filed": today},
+                ]
+            elif self.stage == 2:
+                rows = [
+                    {"id": 42, "description": "Status conference", "date_filed": today},
+                    {"id": 99, "description": "Detention hearing", "date_filed": today},
+                ]
+            else:
+                rows = [
+                    {"id": 42, "description": "Status conference", "date_filed": today},
+                    {"id": 99, "description": "Status conference", "date_filed": today},
+                ]
+            return {"success": True, "truncated": False, "results": rows}
+
+    court = _CorrectedCourt()
+    db = _DB()
+    notifier = _Notifier()
+
+    scan1 = await _scan(db, court, [client], notifier)
+    assert scan1["confirmed"] == 2
+    by_filing = {row["filing_id"]: row for row in db.docket_events.docs}
+    assert by_filing["entry:42"]["auto_linked"] is True
+    assert by_filing["entry:99"]["auto_linked"] is True
+
+    # entry:42 is corrected to a benign status conference while entry:99 keeps the docket hydrated.
+    court.stage = 2
+    scan2 = await _scan(db, court, [client], notifier)
+    assert scan2["rows_written"] == 1
+    by_filing = {row["filing_id"]: row for row in db.docket_events.docs}
+    assert by_filing["entry:42"]["match_status"] == "withdrawn"
+    assert by_filing["entry:42"]["auto_linked"] is False
+    assert by_filing["entry:42"]["bond_case_id"] == ""
+    assert by_filing["entry:99"]["match_status"] == "confirmed"
+    assert by_filing["entry:99"]["auto_linked"] is True
+
+    # Now entry:99 is also corrected (0 classified events on the docket); seen_filing_ids still withdraws it.
+    court.stage = 3
+    scan3 = await _scan(db, court, [client], notifier)
+    assert scan3["rows_written"] == 1
+    by_filing = {row["filing_id"]: row for row in db.docket_events.docs}
+    assert by_filing["entry:99"]["match_status"] == "withdrawn"
+    assert by_filing["entry:99"]["auto_linked"] is False
