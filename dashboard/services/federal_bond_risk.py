@@ -509,9 +509,11 @@ def match_client(client: ClientIdentity, docket: DocketView) -> tuple[Optional[s
     """
     if not any(full_name_equal(name, other) for name in client.names for other in docket.names):
         return None, ()
+    # Held dates that disagree cannot confirm, including through a case number.
+    if client.dob_conflict:
+        return "possible", ()
     party_dobs = party_dobs_for_client(client, docket)
-    # Bond, defendant, and arrest dates that disagree are not a usable DOB.
-    usable_dobs = set() if client.dob_conflict else set(client.dobs)
+    usable_dobs = set(client.dobs)
     if party_dobs is not None and len(party_dobs) > 1:
         # The matched party has more than one date of birth. One overlap does
         # not confirm, and a case number does not paper over that conflict.
@@ -1793,6 +1795,11 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
     document = _event_document(decision, docket, source_id)
     document["notification_revision"] = _next_notification_revision(existing, decision.status)
     note = _notification(decision, docket, source_id)
+    restore = bool(
+        existing
+        and existing.get("match_status") == "withdrawn"
+        and decision.status in {"confirmed", "possible"}
+    )
     upgrade = bool(
         existing
         and existing.get("match_status") == "possible"
@@ -1825,6 +1832,39 @@ async def _store_decision(db, decision: MatchDecision, docket: DocketView) -> st
             db, note, source_id, decision.status, document["notification_revision"],
         )
         return "upgraded"
+    if restore:
+        document["detected_at"] = existing.get("detected_at") or document["detected_at"]
+        document["slack_attempts"] = 0
+        document["slack_claim"] = False
+        document["slack_delivered"] = False
+        document["alert_complete"] = False
+        history = list(existing.get("match_history") or [])
+        history.append({
+            "at": _now(),
+            "from": "withdrawn",
+            "to": decision.status,
+            "reason": "withdrawn_restored",
+            "auto_linked": bool(existing.get("auto_linked")),
+            "bond_case_id": existing.get("prior_bond_case_id") or existing.get("bond_case_id") or "",
+            "matched_defendant_id": existing.get("prior_matched_defendant_id") or existing.get("matched_defendant_id"),
+        })
+        document["match_history"] = history
+        audit = _queue_match_audit(
+            document, source_id, _match_state(existing), _match_state(document),
+            "withdrawn_restored", _match_evidence(document, "withdrawn_restored"),
+            prior=existing,
+        )
+        result = await db.docket_events.update_one(
+            {"_id": existing.get("_id"), "match_status": "withdrawn"},
+            {"$set": _mutable_update(document)},
+        )
+        if not getattr(result, "matched_count", 0):
+            return "duplicate"
+        await _flush_match_audit(db, source_id, audit)
+        await _ensure_notification(
+            db, note, source_id, decision.status, document["notification_revision"],
+        )
+        return "restored"
     if downgrade:
         document = _with_downgrade_audit(existing, document, "identity_no_longer_confirms")
         audit = _queue_match_audit(
@@ -1974,8 +2014,29 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
     return withdrawn
 
 
-async def _record_slack(db, source_id: str, delivered: bool, attempts: int) -> None:
-    """Store whether Slack accepted this alert. Incomplete until delivery is true."""
+def _slack_version_filter(source_id: str, match_status: str, revision: int) -> dict:
+    """The claim and the delivery stamp both name this match version."""
+    revision = int(revision or 0)
+    if revision == 0:
+        version: dict = {"$or": [
+            {"notification_revision": 0},
+            {"notification_revision": {"$exists": False}},
+            {"notification_revision": None},
+        ]}
+    else:
+        version = {"notification_revision": revision}
+    return {
+        "source": SOURCE,
+        "source_id": source_id,
+        "match_status": match_status,
+        "$and": [version],
+    }
+
+
+async def _record_slack(
+    db, source_id: str, delivered: bool, attempts: int, *, match_status: str, revision: int,
+) -> None:
+    """Store whether Slack accepted this version. A newer transition is left unsent."""
     now = _now()
     fields = {
         "slack_delivered": delivered,
@@ -1987,28 +2048,47 @@ async def _record_slack(db, source_id: str, delivered: bool, attempts: int) -> N
     if delivered:
         fields["slack_delivered_at"] = now
     await db.docket_events.update_one(
-        {"source": SOURCE, "source_id": source_id},
+        {
+            **_slack_version_filter(source_id, match_status, revision),
+            "slack_delivered": {"$ne": True},
+        },
         {"$set": fields},
     )
 
 
-async def _claim_slack_delivery(db, source_id: str) -> bool:
-    """One scan owns this undelivered post. A claim older than 30 minutes can be taken again."""
+async def _claim_slack_delivery(db, source_id: str, *, match_status: str, revision: int = 0) -> Optional[dict]:
+    """Claim one undelivered version and return that stored row.
+
+    A claim older than 30 minutes can be taken again. The filter names the
+    match status and revision that were read, so a downgrade that lands first
+    is not posted from the earlier snapshot.
+    """
     cutoff = (datetime.now(timezone.utc) - SLACK_CLAIM_TTL).isoformat()
     result = await db.docket_events.update_one(
         {
-            "source": SOURCE,
-            "source_id": source_id,
+            **_slack_version_filter(source_id, match_status, revision),
             "slack_delivered": {"$ne": True},
-            "$or": [
-                {"slack_claim": {"$ne": True}},
-                {"slack_claim_at": {"$lt": cutoff}},
-                {"slack_claim_at": {"$exists": False}},
+            "$and": [
+                *_slack_version_filter(source_id, match_status, revision)["$and"],
+                {"$or": [
+                    {"slack_claim": {"$ne": True}},
+                    {"slack_claim_at": {"$lt": cutoff}},
+                    {"slack_claim_at": {"$exists": False}},
+                ]},
             ],
         },
         {"$set": {"slack_claim": True, "slack_claim_at": _now()}},
     )
-    return getattr(result, "matched_count", 0) == 1
+    if getattr(result, "matched_count", 0) != 1:
+        return None
+    fresh = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+    if not fresh:
+        return None
+    if str(fresh.get("match_status") or "") != match_status:
+        return None
+    if int(fresh.get("notification_revision") or 0) != int(revision or 0):
+        return None
+    return fresh
 
 
 def _alert_stored(row: dict, notifier) -> bool:
@@ -2056,13 +2136,21 @@ async def retry_pending_slack(db, notifier, limit: int = 200) -> tuple[int, int,
             pending += 1
             continue
         source_id = str(row.get("source_id") or "")
-        if not source_id or not await _claim_slack_delivery(db, source_id):
+        match_status = str(row.get("match_status") or "")
+        revision = int(row.get("notification_revision") or 0)
+        claimed = await _claim_slack_delivery(
+            db, source_id, match_status=match_status, revision=revision,
+        ) if source_id else None
+        if not claimed:
             pending += 1
             continue
         attempted += 1
-        delivered = _alert_stored(row, notifier)
-        attempts = int(row.get("slack_attempts") or 0) + 1
-        await _record_slack(db, source_id, delivered, attempts)
+        delivered = _alert_stored(claimed, notifier)
+        attempts = int(claimed.get("slack_attempts") or 0) + 1
+        await _record_slack(
+            db, source_id, delivered, attempts,
+            match_status=match_status, revision=revision,
+        )
         if delivered:
             sent += 1
         else:

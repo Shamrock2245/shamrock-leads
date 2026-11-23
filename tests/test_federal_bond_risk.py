@@ -77,6 +77,10 @@ def _match(doc: dict, filt: dict | None) -> bool:
             if not any(_match(doc, sub) for sub in expected):
                 return False
             continue
+        if key == "$and":
+            if not all(_match(doc, sub) for sub in expected):
+                return False
+            continue
         value, present = _stored(doc, key)
         if isinstance(expected, dict) and "$in" in expected:
             if value not in expected["$in"]:
@@ -432,6 +436,149 @@ async def test_docket_entry_outage_is_not_an_empty_success(monkeypatch):
     assert kept["success"] is True
     assert kept["rows_written"] == 1
     assert "1002" in kept["warning"]
+
+
+@pytest.mark.asyncio
+async def test_reinstated_bond_restores_the_withdrawn_row(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import run_federal_bond_risk_scan
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "status": "active",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "date_of_birth": "1985-01-15",
+    })
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    notifier = _Notifier()
+    first = await run_federal_bond_risk_scan(db, client=court, notifier=notifier, pause_s=0)
+    assert first["confirmed"] == 1
+    assert db.docket_events.docs[0]["auto_linked"] is True
+    assert db.docket_events.docs[0]["bond_case_id"] == "bond-1"
+
+    db.active_bonds.docs[0]["status"] = "exonerated"
+    await run_federal_bond_risk_scan(db, client=court, notifier=notifier, pause_s=0)
+    withdrawn = db.docket_events.docs[0]
+    assert withdrawn["match_status"] == "withdrawn"
+    assert withdrawn["auto_linked"] is False
+    assert withdrawn["bond_case_id"] == ""
+
+    db.active_bonds.docs[0]["status"] = "reinstated"
+    restored = await run_federal_bond_risk_scan(db, client=court, notifier=notifier, pause_s=0)
+    row = db.docket_events.docs[0]
+    assert restored["confirmed"] == 1
+    assert len(db.docket_events.docs) == 1
+    assert row["match_status"] == "confirmed"
+    assert row["auto_linked"] is True
+    assert row["bond_case_id"] == "bond-1"
+    assert row["matched_defendant_id"] == "def-1"
+    assert row["confirmations"] == ["dob"]
+    assert row["match_history"][-1]["from"] == "withdrawn"
+    assert row["match_history"][-1]["to"] == "confirmed"
+    assert any(event["reason"] == "withdrawn_restored" for event in db.audit_events.docs)
+    assert notifier.calls[-1]["details"]["match_status"] == "confirmed"
+    assert notifier.calls[-1]["details"]["auto_linked"] is True
+    assert notifier.calls[-1]["details"]["bond_case_id"] == "bond-1"
+
+
+@pytest.mark.asyncio
+async def test_slack_posts_the_claimed_row_not_the_snapshot(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, retry_pending_slack
+
+    db = _DB()
+    db.docket_events.docs.append({
+        "_id": "race",
+        "source": SOURCE,
+        "source_id": "fl-federal:1:warrant:entry:1:bond-1",
+        "slack_delivered": False,
+        "slack_claim": False,
+        "title": "Federal bond risk linked — Warrant",
+        "description": "Confirmed for John Smith.",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "notification_revision": 1,
+        "bond_case_id": "bond-1",
+        "event_type": "warrant",
+        "filing_id": "entry:1",
+        "court_name": "M.D. Florida",
+        "docket_number": "2:24-cr-00123",
+    })
+
+    class _DowngradeDuringClaim(_Collection):
+        async def update_one(self, filt, update, upsert=False):
+            if update.get("$set", {}).get("slack_claim") is True:
+                self.docs[0]["match_status"] = "possible"
+                self.docs[0]["auto_linked"] = False
+                self.docs[0]["notification_revision"] = 2
+                self.docs[0]["title"] = "Federal bond risk needs review — Warrant"
+                self.docs[0]["description"] = "Possible match for John Smith."
+                self.docs[0]["slack_claim"] = False
+                self.docs[0]["slack_delivered"] = False
+            return await super().update_one(filt, update, upsert=upsert)
+
+    db.docket_events = _DowngradeDuringClaim()
+    db.docket_events.docs.append({
+        "_id": "race",
+        "source": SOURCE,
+        "source_id": "fl-federal:1:warrant:entry:1:bond-1",
+        "slack_delivered": False,
+        "slack_claim": False,
+        "title": "Federal bond risk linked — Warrant",
+        "description": "Confirmed for John Smith.",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "notification_revision": 1,
+        "bond_case_id": "bond-1",
+        "event_type": "warrant",
+        "filing_id": "entry:1",
+        "court_name": "M.D. Florida",
+        "docket_number": "2:24-cr-00123",
+    })
+    raced = _Notifier()
+    sent, pending, attempted = await retry_pending_slack(db, raced)
+    assert sent == 0 and attempted == 0
+    assert raced.calls == []
+    assert db.docket_events.docs[0]["match_status"] == "possible"
+
+    class _RewriteDuringClaim(_Collection):
+        async def update_one(self, filt, update, upsert=False):
+            if update.get("$set", {}).get("slack_claim") is True:
+                self.docs[0]["title"] = "Claimed title"
+                self.docs[0]["description"] = "Posted from the claimed row."
+            return await super().update_one(filt, update, upsert=upsert)
+
+    fresh = _DB()
+    fresh.docket_events = _RewriteDuringClaim()
+    fresh.docket_events.docs.append({
+        "_id": "current",
+        "source": SOURCE,
+        "source_id": "fl-federal:1:warrant:entry:2:bond-1",
+        "slack_delivered": False,
+        "slack_claim": False,
+        "title": "Old snapshot title",
+        "description": "Old snapshot body.",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "notification_revision": 1,
+        "bond_case_id": "bond-1",
+        "event_type": "warrant",
+        "filing_id": "entry:2",
+        "court_name": "M.D. Florida",
+        "docket_number": "2:24-cr-00123",
+    })
+    posted = _Notifier()
+    sent, _pending, attempted = await retry_pending_slack(fresh, posted)
+    assert sent == 1 and attempted == 1
+    assert posted.calls[0]["title"] == "Claimed title"
+    assert posted.calls[0]["message"] == "Posted from the claimed row."
+    assert posted.calls[0]["details"]["match_status"] == "confirmed"
 
 
 @pytest.mark.asyncio
@@ -1640,6 +1787,29 @@ def test_conflicting_client_dobs_do_not_auto_confirm():
     assert match_client(agreed, docket) == ("confirmed", ("dob",))
 
 
+def test_dob_conflict_blocks_case_number_confirmation():
+    docket = _docket_for(DocketParty("Smith, John", frozenset()))
+    conflicted = ClientIdentity(
+        bond_case_id="bond-1",
+        defendant_id="def-1",
+        names=("John Smith",),
+        dobs=frozenset({"1985-01-15", "1990-02-02"}),
+        numbers=frozenset({"2:24-cr-00123"}),
+        status="active",
+        dob_conflict=True,
+    )
+    assert match_client(conflicted, docket) == ("possible", ())
+    agreed = ClientIdentity(
+        bond_case_id="bond-1",
+        defendant_id="def-1",
+        names=("John Smith",),
+        dobs=frozenset({"1985-01-15"}),
+        numbers=frozenset({"2:24-cr-00123"}),
+        status="active",
+    )
+    assert match_client(agreed, docket) == ("confirmed", ("case_number",))
+
+
 @pytest.mark.asyncio
 async def test_top_level_recap_document_is_classified(monkeypatch):
     _enable(monkeypatch)
@@ -1729,7 +1899,9 @@ async def test_abandoned_slack_claim_can_be_taken_again(monkeypatch):
         "bond_case_id": "bond-1",
         "slack_attempts": 1,
     })
-    assert await _claim_slack_delivery(db, "fl-federal:1:warrant:entry:9:bond-1") is True
+    assert await _claim_slack_delivery(
+        db, "fl-federal:1:warrant:entry:9:bond-1", match_status="confirmed", revision=0,
+    )
     db.docket_events.docs[0]["slack_claim"] = True
     db.docket_events.docs[0]["slack_claim_at"] = stale
     db.docket_events.docs[0]["slack_delivered"] = False
@@ -2279,6 +2451,11 @@ async def test_pending_slack_retries_outside_the_search_and_claims_once(monkeypa
         "source_id": "fl-federal:9:warrant:entry:2:bond-9",
         "slack_delivered": False,
         "slack_claim": False,
+        "match_status": "confirmed",
     })
-    assert await _claim_slack_delivery(db, "fl-federal:9:warrant:entry:2:bond-9") is True
-    assert await _claim_slack_delivery(db, "fl-federal:9:warrant:entry:2:bond-9") is False
+    assert await _claim_slack_delivery(
+        db, "fl-federal:9:warrant:entry:2:bond-9", match_status="confirmed", revision=0,
+    )
+    assert not await _claim_slack_delivery(
+        db, "fl-federal:9:warrant:entry:2:bond-9", match_status="confirmed", revision=0,
+    )

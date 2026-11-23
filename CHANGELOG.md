@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk restore, DOB conflict, Slack claim)
+
+### Fixed
+- **A reinstated bond restores its withdrawn alert.** When the filing matches again, the stored row returns to the current confirmed or possible state, with the bond attachment, an audit row, and a Slack post of that restored state.
+- **Conflicting held dates of birth cannot confirm through a case number.** The row stays `possible` for staff review.
+- **Slack posts the row version the claim acquired.** The claim names the match status and revision. The post uses the document read after that claim, so a downgrade that lands first is not announced as still linked.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a withdrawn row restored after reinstatement, a date-of-birth conflict with a matching case number, and a Slack post that uses the claimed document.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk party DOB, audit merge, claim revision)
 
 ### Fixed
