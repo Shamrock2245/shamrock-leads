@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk contiguous names, capped slice checkpoints, and query stems)
+
+### Fixed
+- **Filing text matching requires one contiguous ordered name.** `"John Doe; Jane Smith"` no longer matches `"John Smith"` across unrelated parties, preventing cross-party auto-links and keeping unnamed actor-sensitive filings as `possible`.
+- **Checkpointed search slices stay pinned until every new match in the slice is stored.** When `MAX_ROWS` caps a run or hydration pages through a slice, neither the search checkpoint nor the seed cursor advances past unwritten rows.
+- **CourtListener search expands classifier stems and fails cron on auth/rate-limit outages.** `BOND_RISK_QUERY` includes `bond revocation`, `revocation of pretrial release`, and `modify`/`modifying`/`modified` release phrases; `unauthorized` and `rate_limited` stops report `success: false` so cron escalates them.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers contiguous ordered name matching, `MAX_ROWS` and `HYDRATE_CEILING` checkpoint retention across slices, stem query coverage, and cron escalation for `unauthorized` and `rate_limited`.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk search phrases and docket numbers)
 
 ### Fixed

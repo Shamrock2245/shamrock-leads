@@ -362,12 +362,18 @@ def test_search_query_covers_every_classified_phrase():
         "Bench warrant",
         "Capias",
         "Revocation of release",
+        "Revocation of pretrial release",
         "Bond revocation",
         "Motion to revoke bond",
+        "Motion to modify release",
+        "Order modifying the release",
+        "Modified release",
         "Order modifying conditions of release",
         "Amended conditions of release",
     ]
     phrases = search_phrases()
+    assert "bond revocation" in {phrase.lower() for phrase in phrases}
+    assert "revocation of pretrial release" in {phrase.lower() for phrase in phrases}
     assert BOND_RISK_QUERY == " OR ".join(
         f'"{phrase}"' if " " in phrase else phrase for phrase in phrases
     )
@@ -2872,3 +2878,204 @@ async def test_pending_slack_retries_outside_the_search_and_claims_once(monkeypa
     assert not await _claim_slack_delivery(
         db, "fl-federal:9:warrant:entry:2:bond-9", match_status="confirmed", revision=0,
     )
+
+
+def test_name_in_text_requires_contiguous_ordered_name():
+    from dashboard.services.federal_bond_risk import (
+        _events_from_text,
+        _name_in_text,
+        decide_matches,
+        parties_affected_by_text,
+    )
+
+    assert _name_in_text("John Smith", "Arrest warrant issued for John Doe; Jane Smith") is False
+    assert _name_in_text("John Smith", "Arrest warrant issued for John Doe, Jane Smith") is False
+    assert _name_in_text("John Smith", "Order as to Doe, John; Smith, Jane") is False
+    assert _name_in_text("John Smith", "Order as to Doe, John, Smith, Jane") is False
+    assert _name_in_text("John Smith", "United States v. John Smith") is True
+    assert _name_in_text("John Smith", "John v. Smith") is False
+    assert _name_in_text("John Smith", "John and Smith") is False
+    assert _name_in_text("John Smith", "Arrest warrant for John. Smith appeared.") is False
+    assert _name_in_text("John Smith", "Arrest warrant for John Smith") is True
+    assert _name_in_text("John Smith", "Arrest warrant for John A. Smith") is True
+    assert _name_in_text("John Smith", "Arrest warrant for Smith, John") is True
+    assert _name_in_text("John A. Smith", "Arrest warrant for Smith, John B.") is False
+    assert _name_in_text("John A. Smith", "Arrest warrant for Smith, John A.") is True
+    assert _name_in_text("John De La Cruz", "Arrest warrant for De La Cruz, John") is True
+    assert _name_in_text("John De La Cruz", "Arrest warrant for John De La Cruz") is True
+    assert _name_in_text("John De La Cruz", "John Doe; Jane De La Cruz") is False
+    assert _name_in_text("John Smith", "Arrest warrant issued for Jane Smith, John Doe") is False
+    assert _name_in_text("John Smith", "Jane Smith, John") is False
+    assert _name_in_text("John Smith", "Smith, John Doe") is False
+    assert _name_in_text("John Smith", "Arrest warrant as to Smith, John") is True
+    assert _name_in_text("John Smith", "ORDER as to Smith, John denying Motion") is True
+    assert _name_in_text("John De La Cruz", "Arrest warrant as to De La Cruz, John") is True
+    assert _name_in_text("John De La Cruz", "Jane De La Cruz, John Doe") is False
+
+    # Multi-party docket where only two *other* defendants' tokens overlap John Smith.
+    text = "Arrest warrant issued for John Doe; Jane Smith"
+    assert parties_affected_by_text(text, ["Smith, John", "Doe, John", "Smith, Jane"]) == (
+        "Doe, John",
+        "Smith, Jane",
+    )
+    # Single-defendant docket with an unrelated cross-token mention stays possible, not confirmed.
+    events = _events_from_text(text, "entry:99", ["Smith, John"])
+    assert events and events[0].affected_names == ()
+    decisions = decide_matches(
+        [_client(name="John Smith", dobs=["1985-01-15"])],
+        _docket_for(DocketParty("Smith, John", frozenset({"1985-01-15"})), events=events),
+    )
+    assert decisions[0].status == "possible"
+    assert decisions[0].confirmations == ()
+
+
+@pytest.mark.asyncio
+async def test_truncated_search_holds_checkpoint_until_capped_rows_are_stored(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.MAX_ROWS", 2)
+
+    class _SliceSearch(_CourtListener):
+        def __init__(self):
+            super().__init__(parties=[{"name": "Smith, John"}])
+            self.r_starts = []
+
+        async def search_recent(self, **kwargs):
+            self.calls.append(("search_recent", kwargs))
+            if kwargs["search_type"] != "r":
+                return {"success": True, "results": [], "truncated": False}
+            start_url = kwargs.get("start_url") or ""
+            self.r_starts.append(start_url)
+            if not start_url:
+                return {
+                    "success": True,
+                    "truncated": True,
+                    "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=slice2",
+                    "results": [
+                        _window_hit(1001, "2026-11-20", "Detention hearing", "2:24-cr-00101"),
+                        _window_hit(1002, "2026-11-20", "Detention hearing", "2:24-cr-00102"),
+                        _window_hit(1003, "2026-11-20", "Detention hearing", "2:24-cr-00103"),
+                    ],
+                }
+            assert start_url.endswith("cursor=slice2")
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [
+                    _window_hit(1004, "2026-11-19", "Detention hearing", "2:24-cr-00104"),
+                ],
+            }
+
+    court = _SliceSearch()
+    db = _DB()
+
+    first = await _scan(db, court, [_client()])
+    assert first["rows_written"] == 2
+    assert first["truncated"] is True
+    assert "row cap" in first["warning"]
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002"}
+
+    # Slice 1 had 1 unwritten match remaining, so Scan 2 re-reads slice 1 before advancing.
+    second = await _scan(db, court, [_client()])
+    assert second["rows_written"] == 1
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002", "1003"}
+    assert court.r_starts == ["", ""]
+
+    # Now slice 1 is completely stored, so Scan 3 advances to cursor=slice2.
+    third = await _scan(db, court, [_client()])
+    assert third["rows_written"] == 1
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"1001", "1002", "1003", "1004"}
+    assert court.r_starts[-1].endswith("cursor=slice2")
+
+
+@pytest.mark.asyncio
+async def test_truncated_search_holds_checkpoint_while_hydration_batch_remains(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.HYDRATE_CEILING", 1)
+
+    class _PagedHydration(_CourtListener):
+        def __init__(self):
+            super().__init__(parties=[{"name": "Smith, John"}])
+            self.r_starts = []
+
+        async def search_recent(self, **kwargs):
+            self.calls.append(("search_recent", kwargs))
+            if kwargs["search_type"] != "r":
+                return {"success": True, "results": [], "truncated": False}
+            start_url = kwargs.get("start_url") or ""
+            self.r_starts.append(start_url)
+            if not start_url:
+                return {
+                    "success": True,
+                    "truncated": True,
+                    "resume_url": "https://www.courtlistener.com/api/rest/v4/search/?cursor=slice2",
+                    "results": [
+                        _window_hit(2001, "2026-11-20", "Detention hearing", "2:24-cr-00201"),
+                        _window_hit(2002, "2026-11-20", "Detention hearing", "2:24-cr-00202"),
+                    ],
+                }
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [
+                    _window_hit(2003, "2026-11-19", "Detention hearing", "2:24-cr-00203"),
+                ],
+            }
+
+    court = _PagedHydration()
+    db = _DB()
+
+    s1 = await _scan(db, court, [_client()])
+    assert s1["rows_written"] == 1
+    s2 = await _scan(db, court, [_client()])
+    assert s2["rows_written"] == 1
+    assert court.r_starts == ["", ""]
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"2001", "2002"}
+
+    s3 = await _scan(db, court, [_client()])
+    assert s3["rows_written"] == 1
+    assert {row["docket_id"] for row in db.docket_events.docs} == {"2001", "2002", "2003"}
+    assert court.r_starts[-1].endswith("cursor=slice2")
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_and_rate_limit_scans_raise_from_cron(monkeypatch):
+    from dashboard.cron import _run_federal_bond_risk
+
+    _enable(monkeypatch)
+    monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
+
+    class _Blocked:
+        def __init__(self, res):
+            self.res = res
+
+        async def search_recent(self, **_kwargs):
+            return self.res
+
+        async def close(self):
+            return None
+
+    async def _run_with(res):
+        db = _DB()
+        monkeypatch.setattr("dashboard.extensions.get_db", lambda: db)
+        monkeypatch.setattr(
+            "dashboard.services.federal_bond_risk.load_active_clients",
+            lambda _db: _async_val([_client()]),
+        )
+        monkeypatch.setattr(
+            "dashboard.services.federal_bond_risk._unlink_inactive_clients",
+            lambda _db, _clients: _async_val(None),
+        )
+        monkeypatch.setattr(
+            "dashboard.services.courtlistener_client.CourtListenerClient",
+            lambda api_token=None: _Blocked(res),
+        )
+        await _run_federal_bond_risk()
+
+    async def _async_val(val):
+        return val
+
+    with pytest.raises(RuntimeError, match="unauthorized"):
+        await _run_with({"success": False, "status_code": 401, "error": "unauthorized", "results": []})
+
+    with pytest.raises(RuntimeError, match="rate_limited"):
+        await _run_with({"success": False, "error": "ReadTimeout", "results": []})

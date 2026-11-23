@@ -75,7 +75,7 @@ _EVENT_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
     ("failure_to_appear", "Failure to appear", re.compile(r"failure\s+to\s+appear|\bfailed\s+to\s+appear\b|\bfta\b", re.I)),
     ("warrant", "Warrant", re.compile(r"arrest\s+warrant|bench\s+warrant|warrant\s+(?:issued|for\s+arrest)|\bcapias\b", re.I)),
     ("revocation_of_release", "Revocation of release", re.compile(
-        r"revoc\w*\s+(?:of\s+)?(?:pretrial\s+)?release|revoke\s+(?:the\s+)?(?:bond|release|pretrial)|bond\s+revoc|motion\s+to\s+revoke\s+bond",
+        r"revoc\w*\s+(?:of\s+)?(?:pretrial\s+)?release|revoke\s+(?:the\s+)?(?:bond|release|pretrial)|bond\s+revoc\w*|motion\s+to\s+revoke\s+bond",
         re.I,
     )),
     ("modification_of_release", "Modification of release", re.compile(
@@ -142,7 +142,12 @@ def _split_top(source: str, sep: str) -> list[str]:
 def _expand_regex_literals(source: str) -> list[str]:
     """Word sequences a regex alternative can match, with the operators removed."""
     source = re.sub(r"\(\?[aiLmsux]+\)", "", source)
-    return [phrase for phrase in _expand_expr(source) if phrase]
+    out: list[str] = []
+    for phrase in _expand_expr(source):
+        cleaned = re.sub(r"\s+", " ", phrase).strip()
+        if cleaned and re.search(r"[A-Za-z]", cleaned):
+            out.append(cleaned)
+    return out
 
 
 def _expand_expr(source: str) -> list[str]:
@@ -153,6 +158,12 @@ def _expand_expr(source: str) -> list[str]:
             phrases.extend(_expand_expr(alternative))
         return phrases
     return _expand_concat(source)
+
+
+_STEM_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    "revoc": ("revocation",),
+    "modif": ("modify", "modifying", "modified", "modification"),
+}
 
 
 def _expand_concat(source: str) -> list[str]:
@@ -171,7 +182,16 @@ def _expand_concat(source: str) -> list[str]:
             index += 2
             continue
         if source.startswith(r"\w*", index) or source.startswith(r"\w+", index):
-            # A stem such as revoc\w* is covered by the rule label when that label matches.
+            if pieces and len(pieces[-1]) == 1:
+                stem_match = re.search(r"([A-Za-z]+)$", pieces[-1][0])
+                if stem_match:
+                    stem = stem_match.group(1).lower()
+                    expanded = _STEM_EXPANSIONS.get(stem)
+                    if expanded:
+                        prefix = pieces[-1][0][:stem_match.start(1)]
+                        pieces[-1] = [f"{prefix}{word}" for word in expanded]
+                        index += 3
+                        continue
             return []
         if source[index] == "(":
             end = _match_paren(source, index)
@@ -199,8 +219,8 @@ def _expand_concat(source: str) -> list[str]:
         combos = [left + right for left in combos for right in options]
     phrases = []
     for combo in combos:
-        text = re.sub(r"\s+", " ", combo).strip()
-        if text and re.search(r"[A-Za-z]", text) and "\\" not in text:
+        text = re.sub(r"\s+", " ", combo)
+        if text.strip() and "\\" not in text:
             phrases.append(text)
     return phrases
 
@@ -217,21 +237,11 @@ def search_phrases() -> list[str]:
             phrase = re.sub(r"\s+", " ", phrase).strip()
             if not phrase or not pattern.search(phrase):
                 continue
-            extras = [phrase]
-            for suffix in ("ation", "ed", "ing"):
-                longer = f"{phrase}{suffix}"
-                matched = pattern.search(longer)
-                if not matched:
-                    continue
-                span = matched.group(0)
-                if span.lower().startswith(phrase.lower()) and len(span) > len(phrase):
-                    extras.append(re.sub(r"\s+", " ", span).strip())
-            for extra in extras:
-                key = extra.lower()
-                if len(re.sub(r"[^a-z0-9]", "", key)) < 3 or key in seen:
-                    continue
-                seen.add(key)
-                found.append(extra)
+            key = phrase.lower()
+            if len(re.sub(r"[^a-z0-9]", "", key)) < 3 or key in seen:
+                continue
+            seen.add(key)
+            found.append(phrase)
     found.sort(key=lambda phrase: (-len(phrase), phrase.lower()))
     return found
 
@@ -340,6 +350,20 @@ def name_parts(value: str) -> Optional[tuple[str, tuple[str, ...], str]]:
     return first, middles, surname
 
 
+def _middles_compatible(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    if len(left) != len(right):
+        return False
+    for x, y in zip(left, right):
+        if x == y:
+            continue
+        if len(x) == 1 and y.startswith(x):
+            continue
+        if len(y) == 1 and x.startswith(y):
+            continue
+        return False
+    return True
+
+
 def full_name_equal(left: str, right: str) -> bool:
     """Exact first and last name. Middles may be absent. Conflicting middles fail."""
     a = name_parts(left)
@@ -349,16 +373,7 @@ def full_name_equal(left: str, right: str) -> bool:
     if a[0] != b[0] or a[2] != b[2]:
         return False
     if a[1] and b[1]:
-        if len(a[1]) != len(b[1]):
-            return False
-        for x, y in zip(a[1], b[1]):
-            if x == y:
-                continue
-            if len(x) == 1 and y.startswith(x):
-                continue
-            if len(y) == 1 and x.startswith(y):
-                continue
-            return False
+        return _middles_compatible(a[1], b[1])
     return True
 
 
@@ -724,12 +739,96 @@ def parties_named_in_filing(text: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(found))
 
 
+_NAME_SEGMENT_SPLIT = re.compile(
+    r"[;\n\r:()\[\]/|&]+"
+    r"|\s+vs?\.?\s+"
+    r"|\s+(?:and|or)\s+"
+    r"|\s+[-–—]+\s+"
+    r"|(?<!\b[A-Za-z])(?<!\bSt)(?<!\bJr)(?<!\bSr)\.(?=\s|$)",
+    re.I,
+)
+_NON_MIDDLE_TOKENS = frozenset({
+    "AND", "OR", "VS", "V", "FOR", "TO", "BY", "OF", "IN", "ON", "AT",
+    "WITH", "FROM", "RE", "AS", "THE", "PER", "DEFENDANT", "PLAINTIFF",
+    "COUNSEL", "ATTORNEY", "JUDGE", "COURT", "WARRANT", "BOND", "ORDER",
+    "MOTION", "UNITED", "STATES", "AMERICA", "USA", "ET", "AL",
+})
+_COMMA_NAME_LEAD_INS = frozenset({
+    "TO", "FOR", "DEFENDANT", "DEFENDANTS", "DEF", "RE", "BY", "OF",
+    "AGAINST", "CONCERNING", "REGARDING", "AS", "ON", "PER",
+    "MOVANT", "PETITIONER", "RESPONDENT",
+})
+_COMMA_NAME_TRAILERS = frozenset({
+    "DENYING", "GRANTING", "GRANTED", "DENIES", "GRANTS", "MOTION",
+    "ORDERING", "SETTING", "MODIFYING", "MODIFY", "MODIFICATION",
+    "ENTERED", "ISSUED", "FILED", "ORDERED", "REGARDING", "CONCERNING",
+    "PURSUANT", "UNDER", "UPON", "FAILED", "APPEARED", "SIGNED",
+    "WAIVED", "REVOKED", "MODIFIED", "SET", "HELD", "WAS", "IS",
+    "HAS", "HAD", "DETAINED", "RELEASED", "ARRESTED",
+})
+
+
 def _name_in_text(name: str, text: str) -> bool:
+    """True only when ``name`` appears as one contiguous ordered sequence."""
     parts = name_parts(name)
-    if not parts:
+    if not parts or not text:
         return False
-    tokens = set(_tokens(text))
-    return parts[0] in tokens and parts[2] in tokens
+    first, middles, last = parts
+    last_seq = tuple(last.split())
+    last_len = len(last_seq)
+
+    for segment in _NAME_SEGMENT_SPLIT.split(text):
+        if not segment.strip():
+            continue
+        comma_pieces = segment.split(",")
+        for chunk in comma_pieces:
+            toks = _tokens(chunk)
+            for i, tok in enumerate(toks):
+                if tok != first:
+                    continue
+                if i + 1 + last_len <= len(toks) and tuple(toks[i + 1 : i + 1 + last_len]) == last_seq:
+                    return True
+                if middles:
+                    mid_len = len(middles)
+                    j = i + 1 + mid_len
+                    if (
+                        j + last_len <= len(toks)
+                        and tuple(toks[j : j + last_len]) == last_seq
+                        and _middles_compatible(middles, tuple(toks[i + 1 : j]))
+                    ):
+                        return True
+                elif (
+                    i + 2 + last_len <= len(toks)
+                    and tuple(toks[i + 2 : i + 2 + last_len]) == last_seq
+                    and toks[i + 1] not in _NON_MIDDLE_TOKENS
+                ):
+                    return True
+        for k in range(len(comma_pieces) - 1):
+            left_toks = _tokens(comma_pieces[k])
+            right_toks = _tokens(comma_pieces[k + 1])
+            if not (
+                len(left_toks) >= last_len
+                and tuple(left_toks[-last_len:]) == last_seq
+                and (len(left_toks) == last_len or left_toks[-last_len - 1] in _COMMA_NAME_LEAD_INS)
+                and right_toks
+                and right_toks[0] == first
+            ):
+                continue
+            tail = right_toks[1:]
+            if not tail or tail[0] in _COMMA_NAME_TRAILERS:
+                return True
+            if middles:
+                mid_len = len(middles)
+                if (
+                    len(tail) >= mid_len
+                    and _middles_compatible(middles, tuple(tail[:mid_len]))
+                    and (len(tail) == mid_len or tail[mid_len] in _COMMA_NAME_TRAILERS)
+                ):
+                    return True
+                continue
+            if len(tail[0]) == 1 and (len(tail) == 1 or tail[1] in _COMMA_NAME_TRAILERS):
+                return True
+    return False
 
 
 def parties_affected_by_text(text: str, party_names: list[str]) -> tuple[str, ...]:
@@ -1085,6 +1184,7 @@ def _scan_stopped(base: dict, stop: _ScanStop) -> dict:
     if stop.skipped in {
         "search_failed", "search_truncated", "index_unavailable",
         "party_hydration_failed", "entry_hydration_failed",
+        "unauthorized", "rate_limited",
     }:
         payload["success"] = False
     return payload
@@ -1292,8 +1392,16 @@ async def _save_seed_offset(db, offset: int) -> None:
     )
 
 
-async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[DocketView], bool, list[str], list[str], list[str], list[str]]:
+async def _collect_dockets(
+    client,
+    pause_s: float,
+    db=None,
+) -> tuple[list[DocketView], bool, int, list[tuple[str, str, str]], list[str], list[str], list[str], list[str]]:
     """Search recent RECAP and docket pages, then hydrate the seed batch.
+
+    Search checkpoints and seed offsets are returned rather than committed here
+    so ``run_federal_bond_risk_scan`` only advances them once every match in
+    the slice has been stored.
 
     Caption surnames are not a filter. A lead-defendant caption with "et al."
     still has to be hydrated so co-defendant parties can be matched.
@@ -1306,6 +1414,7 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
     successes = 0
     search_notes: list[str] = []
     stuck: list[str] = []
+    pending_checkpoints: list[tuple[str, str, str]] = []
     for search_type in ("r", "rd", "d"):
         cursor, resume = await _search_checkpoint(db, search_type)
         result = await client.search_recent(
@@ -1331,13 +1440,13 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
             oldest = _oldest_entry_day(result.get("results") or [])
             resume_url = str(result.get("resume_url") or "")
             if resume_url and resume_url != resume:
-                await _save_search_checkpoint(db, search_type, oldest or cursor, resume_url)
+                pending_checkpoints.append((search_type, oldest or cursor, resume_url))
                 search_notes.append(
                     f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest or 'the cutoff date'}. "
                     "The next scan continues from the remaining search cursor."
                 )
             elif oldest and (not cursor or oldest < cursor):
-                await _save_search_checkpoint(db, search_type, oldest, "")
+                pending_checkpoints.append((search_type, oldest, ""))
                 search_notes.append(
                     f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest}. "
                     "The next scan continues with the older filings."
@@ -1345,7 +1454,7 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
             else:
                 stuck.append(search_type)
         else:
-            await _save_search_checkpoint(db, search_type, "", "")
+            pending_checkpoints.append((search_type, "", ""))
         for hit in result.get("results") or []:
             if not isinstance(hit, dict):
                 continue
@@ -1426,9 +1535,16 @@ async def _collect_dockets(client, pause_s: float, db=None) -> tuple[list[Docket
             + "). No alerts were written.",
             "entry_hydration_failed",
         )
-    if db is not None:
-        await _save_seed_offset(db, next_offset)
-    return views, truncated or bool(search_notes), party_failures, entry_failures, brief_failures, search_notes
+    return (
+        views,
+        truncated,
+        next_offset,
+        pending_checkpoints,
+        party_failures,
+        entry_failures,
+        brief_failures,
+        search_notes,
+    )
 
 
 async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[DocketView], str, str, str]:
@@ -2501,13 +2617,23 @@ async def run_federal_bond_risk_scan(
                 "slack_pending": slack_pending,
             }
         try:
-            dockets, seeds_truncated, party_failures, entry_failures, brief_failures, search_notes = await _collect_dockets(client, pause_s, db)
+            (
+                dockets,
+                hydrate_truncated,
+                next_seed_offset,
+                pending_checkpoints,
+                party_failures,
+                entry_failures,
+                brief_failures,
+                search_notes,
+            ) = await _collect_dockets(client, pause_s, db)
         except _ScanStop as stop:
             slack_sent, slack_pending, _attempts = await retry_pending_slack(db, notifier)
             stopped = _scan_stopped(base, stop)
             stopped["slack_sent"] = slack_sent
             stopped["slack_pending"] = slack_pending
             return stopped
+        seeds_truncated = hydrate_truncated or bool(search_notes)
         if seeds_truncated:
             base["truncated"] = True
 
@@ -2522,10 +2648,12 @@ async def run_federal_bond_risk_scan(
         written = 0
         confirmed = 0
         possible = 0
+        rows_capped = False
         for decision, docket in decisions:
             source_id = _source_id(docket, decision)
             existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
             if not existing and written >= MAX_ROWS:
+                rows_capped = True
                 base["truncated"] = True
                 continue
             outcome = await _store_decision(db, decision, docket)
@@ -2541,10 +2669,22 @@ async def run_federal_bond_risk_scan(
             withdrawn_ids.extend(await _withdraw_stale_confirmations(db, docket, group))
         written += len(withdrawn_ids)
         possible += len(withdrawn_ids)
+        # Only advance search/hydration checkpoints once every match in this slice
+        # has been stored; otherwise a capped run re-reads this slice and finishes it.
+        if db is not None and not rows_capped:
+            await _save_seed_offset(db, next_seed_offset)
+            if next_seed_offset == 0:
+                for search_type, day, resume_url in pending_checkpoints:
+                    await _save_search_checkpoint(db, search_type, day, resume_url)
         # Slack runs only after this scan's evidence has been written, so a
         # failed earlier post cannot repeat a link that was just withdrawn.
         slack_sent, slack_pending, _slack_attempts = await retry_pending_slack(db, notifier)
         warnings = []
+        if rows_capped:
+            warnings.append(
+                "New matches exceeded the per-scan row cap. "
+                "The next scan continues from the same search slice until every match is stored."
+            )
         if seeds_truncated:
             warnings.append(
                 "Matching dockets remain after this hydration batch. "
