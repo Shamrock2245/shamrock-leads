@@ -5595,3 +5595,297 @@ async def test_unlinked_rd_hit_defers_doc_id_until_entry_hydration_recovers(monk
     assert all(row["match_status"] != "withdrawn" for row in db.docket_events.docs)
 
 
+@pytest.mark.asyncio
+async def test_docket_monitor_rotates_bond_batch_across_quota_truncated_scans(monkeypatch):
+    import time
+    from dashboard.services.docket_monitor import DocketMonitor
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_HOUR,
+        _courtlistener_account_key,
+        _request_quota_id,
+    )
+
+    _enable(monkeypatch)
+    now = time.time()
+    account_key = _courtlistener_account_key(api_token="test-token")
+    quota_id = _request_quota_id(account_key)
+    queried_names = []
+
+    class _Response:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"results": []}
+
+    class _DMHTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            queried_names.append(((params or {}).get("q") or "", (params or {}).get("type") or ""))
+            return _Response()
+
+    db = _DB()
+    for idx in range(1, 5):
+        db.active_bonds.docs.append({
+            "_id": f"bond-{idx}",
+            "Bond_Case_ID": f"bond-{idx}",
+            "Defendant_ID": f"def-{idx}",
+            "defendant_name": f"Client {idx}",
+            "status": "active",
+        })
+
+    # Seed 47/50 hourly requests -> 3 remaining slots: bond-1 finishes (r+o = 2 slots),
+    # bond-2 starts r (slot 3) and stops before o; cursor stays on bond-1 so bond-2 is not skipped.
+    db.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 20.0] * (MAX_REQUESTS_PER_HOUR - 3),
+        "quota_revision": 0,
+    })
+    dm = DocketMonitor(db, courtlistener_token="test-token", pause_s=0)
+    dm._client = _DMHTTP()
+    res1 = await dm.scan_active_bonds(limit=10)
+    assert res1["quota_exhausted"] is True
+    assert res1["bonds_scanned"] == 1
+    assert queried_names == [('"Client 1"', "r"), ('"Client 1"', "o"), ('"Client 2"', "r")]
+
+    # Give 4 slots -> resumes at bond-2 and bond-3, stops before bond-4.
+    queried_names.clear()
+    db.federal_bond_risk_state.docs[0]["timestamps"] = [now - 20.0] * (MAX_REQUESTS_PER_HOUR - 4)
+    res2 = await dm.scan_active_bonds(limit=10)
+    assert res2["quota_exhausted"] is True
+    assert res2["bonds_scanned"] == 2
+    assert queried_names == [
+        ('"Client 2"', "r"), ('"Client 2"', "o"),
+        ('"Client 3"', "r"), ('"Client 3"', "o"),
+    ]
+
+    # Reset quota -> finishes bond-4, wraps cursor back to None, and next scan starts at bond-1.
+    queried_names.clear()
+    db.federal_bond_risk_state.docs[0]["timestamps"] = []
+    res3 = await dm.scan_active_bonds(limit=10)
+    assert res3["quota_exhausted"] is False
+    assert res3["bonds_scanned"] == 1
+    assert queried_names == [('"Client 4"', "r"), ('"Client 4"', "o")]
+
+    queried_names.clear()
+    res4 = await dm.scan_active_bonds(limit=10)
+    assert res4["quota_exhausted"] is False
+    assert res4["bonds_scanned"] == 4
+    assert queried_names[0] == ('"Client 1"', "r")
+
+
+@pytest.mark.asyncio
+async def test_delayed_reserved_dispatch_preserves_spacing_for_following_sleeper(monkeypatch):
+    import asyncio
+    from dashboard.services.federal_bond_risk import (
+        DEFAULT_PAUSE_S,
+        MAX_REQUESTS_PER_MINUTE,
+        _courtlistener_account_key,
+        _request_quota_id,
+        build_courtlistener_request_gate,
+    )
+
+    _enable(monkeypatch)
+    clock = [1000.0]
+
+    class _FakeTime:
+        @staticmethod
+        def time():
+            return clock[0]
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.time", _FakeTime)
+
+    db = _DB()
+    quota_id = _request_quota_id(_courtlistener_account_key(api_token="test-token"))
+    seed = [990.0] * MAX_REQUESTS_PER_MINUTE
+    db.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": list(seed),
+        "quota_revision": 0,
+    })
+
+    dispatches = []
+    sleep_log = []
+    a_started_sleep = asyncio.Event()
+    b_reserved = asyncio.Event()
+    a_resume = asyncio.Event()
+
+    async def scripted_sleep(seconds):
+        sleep_log.append((clock[0], seconds))
+        if not a_started_sleep.is_set() and abs(seconds - 50.0) < 0.01:
+            a_started_sleep.set()
+            await a_resume.wait()
+            # Simulate Sleeper A waking 10s late at 1060.0 (instead of 1050.0).
+            clock[0] = 1060.0
+            return
+        if not b_reserved.is_set() and abs(seconds - 62.0) < 0.01:
+            b_reserved.set()
+            a_resume.set()
+            clock[0] += float(seconds)
+            return
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", scripted_sleep)
+
+    async def _worker(label, gate):
+        allowed = await gate(0, 0.0)
+        assert allowed is True
+        dispatches.append((label, clock[0]))
+
+    gate_a = build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+    gate_b = build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+
+    task_a = asyncio.create_task(_worker("A", gate_a))
+    await a_started_sleep.wait()
+    task_b = asyncio.create_task(_worker("B", gate_b))
+    await asyncio.gather(task_a, task_b)
+
+    assert dispatches == [("A", pytest.approx(1060.0)), ("B", pytest.approx(1072.0))]
+    assert abs(dispatches[1][1] - dispatches[0][1]) >= DEFAULT_PAUSE_S - 1e-6
+    assert db.federal_bond_risk_state.docs[0]["timestamps"][-2:] == [
+        pytest.approx(1060.0),
+        pytest.approx(1072.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retry_quota_denial_and_downstream_dossier_quota_return_429(monkeypatch):
+    import asyncio
+    import time
+    from dashboard.routers.court_dockets import _make_cl_client, court_intel_bp
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_MINUTE,
+        _courtlistener_account_key,
+        _request_quota_id,
+    )
+
+    _enable(monkeypatch)
+    now = time.time()
+    quota_id = _request_quota_id(_courtlistener_account_key(api_token="test-token"))
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    class _Response:
+        def __init__(self, status_code, payload, headers=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    # Case A: live-search gets 503 on 5th slot in 1m window -> retry denied by quota -> HTTP 429 (not 502).
+    db_a = _DB()
+    db_a.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 5.0] * (MAX_REQUESTS_PER_MINUTE - 1),
+        "quota_revision": 0,
+    })
+    calls_a = []
+
+    class _HTTP503:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_a.append(url)
+            return _Response(503, {"detail": "unavailable"})
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db_a)
+    client_a = _make_cl_client()
+    client_a._in_maintenance_window = lambda: False
+    client_a._client = _HTTP503()
+
+    app = FastAPI()
+    app.include_router(court_intel_bp)
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", lambda: client_a)
+        res_ls = TestClient(app).get("/api/court-intel/live-search?q=forfeiture&state=FL")
+        assert res_ls.status_code == 429
+        assert res_ls.json()["skipped"] == "quota_exhausted"
+    assert len(calls_a) == 1
+
+    # Case B1: case-dossier consumes 5th slot on /clusters/, then /dockets/ is blocked -> HTTP 429 (not 200).
+    db_b1 = _DB()
+    db_b1.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 5.0] * (MAX_REQUESTS_PER_MINUTE - 1),
+        "quota_revision": 0,
+    })
+    calls_b1 = []
+
+    class _HTTPClusterOnly:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_b1.append(url)
+            return _Response(200, {
+                "id": 2812209,
+                "case_name": "State v. Doe",
+                "docket": "https://www.courtlistener.com/api/rest/v4/dockets/4214664/",
+                "sub_opinions": ["https://www.courtlistener.com/api/rest/v4/opinions/9969234/"],
+            })
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db_b1)
+    client_b1 = _make_cl_client()
+    client_b1._in_maintenance_window = lambda: False
+    client_b1._client = _HTTPClusterOnly()
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", lambda: client_b1)
+        res_dos1 = TestClient(app).get("/api/court-intel/case-dossier?cluster_id=2812209")
+        assert res_dos1.status_code == 429
+        assert res_dos1.json()["skipped"] == "quota_exhausted"
+    assert calls_b1 == ["/clusters/2812209/"]
+
+    # Case B2: case-dossier completes /clusters/ and /dockets/, then /opinions/ is blocked -> HTTP 429.
+    db_b2 = _DB()
+    db_b2.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 5.0] * (MAX_REQUESTS_PER_MINUTE - 2),
+        "quota_revision": 0,
+    })
+    calls_b2 = []
+
+    class _HTTPClusterAndDocket:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_b2.append(url)
+            if url.startswith("/clusters/"):
+                return _Response(200, {
+                    "id": 2812209,
+                    "case_name": "State v. Doe",
+                    "docket": "https://www.courtlistener.com/api/rest/v4/dockets/4214664/",
+                    "sub_opinions": ["https://www.courtlistener.com/api/rest/v4/opinions/9969234/"],
+                })
+            return _Response(200, {"id": 4214664, "court_id": "fla", "docket_number": "SC25-1"})
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db_b2)
+    client_b2 = _make_cl_client()
+    client_b2._in_maintenance_window = lambda: False
+    client_b2._client = _HTTPClusterAndDocket()
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", lambda: client_b2)
+        res_dos2 = TestClient(app).get("/api/court-intel/case-dossier?cluster_id=2812209")
+        assert res_dos2.status_code == 429
+        assert res_dos2.json()["skipped"] == "quota_exhausted"
+    assert calls_b2 == ["/clusters/2812209/", "/dockets/4214664/"]
+
+
+

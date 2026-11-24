@@ -335,6 +335,17 @@ def courts_for_states(states: list) -> list:
 class CourtListenerQuotaBlocked(Exception):
     """Raised when a caller-supplied request gate denies an HTTP attempt."""
 
+    def __init__(
+        self,
+        message: str = "quota_exhausted",
+        *,
+        upstream_status: Optional[int] = None,
+        upstream_error: Optional[str] = None,
+    ):
+        super().__init__(message)
+        self.upstream_status = upstream_status
+        self.upstream_error = upstream_error
+
 
 class CourtListenerClient:
     """Async client for CourtListener REST API v4.
@@ -394,7 +405,7 @@ class CourtListenerClient:
                             wait = max(wait, int(retry_after))
                         if self._request_gate is not None:
                             if not await self._check_request_gate(attempt + 1, wait):
-                                return resp
+                                raise CourtListenerQuotaBlocked("quota_exhausted", upstream_status=429)
                             log.warning("Rate limited (429), retry after %.1fs gate wait (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
                         else:
                             log.warning("Rate limited (429), retry in %.1fs (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
@@ -406,7 +417,7 @@ class CourtListenerClient:
                     wait = BACKOFF_BASE * (2 ** attempt)
                     if self._request_gate is not None:
                         if not await self._check_request_gate(attempt + 1, wait):
-                            return resp
+                            raise CourtListenerQuotaBlocked("quota_exhausted", upstream_status=resp.status_code)
                         log.warning("Server error %d, retry after %.1fs gate wait", resp.status_code, wait)
                     else:
                         log.warning("Server error %d, retry in %.1fs", resp.status_code, wait)
@@ -420,7 +431,7 @@ class CourtListenerClient:
                     wait = BACKOFF_BASE * (2 ** attempt)
                     if self._request_gate is not None:
                         if not await self._check_request_gate(attempt + 1, wait):
-                            raise
+                            raise CourtListenerQuotaBlocked("quota_exhausted", upstream_error=type(e).__name__) from e
                         log.warning("Connection error, retry after %.1fs gate wait: %s", wait, str(e)[:80])
                     else:
                         log.warning("Connection error, retry in %.1fs: %s", wait, str(e)[:80])
@@ -600,8 +611,8 @@ class CourtListenerClient:
         try:
             request_kwargs = {"params": params} if params else {}
             resp = await self._request_with_retry("get", url, **request_kwargs)
-        except CourtListenerQuotaBlocked:
-            return {
+        except CourtListenerQuotaBlocked as exc:
+            payload = {
                 "success": False,
                 "skipped": "quota_exhausted",
                 "error": "quota_exhausted",
@@ -609,6 +620,11 @@ class CourtListenerClient:
                 "results": [],
                 "data": None,
             }
+            if exc.upstream_status is not None:
+                payload["upstream_status_code"] = exc.upstream_status
+            if exc.upstream_error:
+                payload["upstream_error"] = exc.upstream_error
+            return payload
         except Exception as exc:
             log.warning("CourtListener request failed: %s", type(exc).__name__)
             return {
@@ -746,7 +762,11 @@ class CourtListenerClient:
             pages += 1
             if not last.get("success"):
                 if last.get("skipped") == "quota_exhausted":
-                    if pages > 1:
+                    if (
+                        pages > 1
+                        and not last.get("upstream_status_code")
+                        and not last.get("upstream_error")
+                    ):
                         return {
                             "success": True,
                             "status_code": 200,
@@ -757,8 +777,8 @@ class CourtListenerClient:
                             "resume_url": url,
                             "quota_exhausted": True,
                         }
-                    last["results"] = []
-                    last["pages_fetched"] = 0
+                    last["results"] = combined
+                    last["pages_fetched"] = pages - 1
                     return last
                 last["results"] = combined
                 last["pages_fetched"] = pages if not combined else pages - 1
@@ -983,6 +1003,8 @@ class CourtListenerClient:
         docket_data = {}
         if docket_id:
             docket_res = await self.get_docket(docket_id)
+            if docket_res.get("skipped") == "quota_exhausted":
+                return docket_res
             if docket_res.get("success"):
                 docket_data = docket_res["data"]
 
@@ -992,6 +1014,8 @@ class CourtListenerClient:
             first_op_id = self._extract_id_from_uri(sub_opinions[0])
             if first_op_id:
                 op_res = await self.get_opinion(first_op_id)
+                if op_res.get("skipped") == "quota_exhausted":
+                    return op_res
                 if op_res.get("success"):
                     opinion_data = op_res["data"]
 
@@ -1186,8 +1210,18 @@ class CourtListenerClient:
             docket_number=dnum,
             page_size=10,
         )
-        if s_res.get("skipped") == "quota_exhausted" and not dockets and not clusters:
-            return s_res
+        if s_res.get("skipped") == "quota_exhausted":
+            return {
+                "success": False,
+                "skipped": "quota_exhausted",
+                "error": "CourtListener request quota reached",
+                "docket_number": dnum,
+                "dockets": dockets,
+                "clusters": clusters,
+                "search_hits": [],
+                "warnings": errors,
+                "api_health": self.get_api_health(),
+            }
         if s_res.get("success"):
             search_hits = s_res.get("results") or []
 

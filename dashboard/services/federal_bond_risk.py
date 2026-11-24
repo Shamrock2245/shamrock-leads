@@ -1532,7 +1532,9 @@ def _stop_if_blocked(result: dict) -> None:
             result.get("status_code") == 429
             and result.get("skipped") != "quota_exhausted"
         )
+        or result.get("upstream_status_code") == 429
         or result.get("error") in {"ReadTimeout", "ConnectError"}
+        or result.get("upstream_error") in {"ReadTimeout", "ConnectError"}
     ):
         raise _ScanStop(
             "CourtListener rate limit or connection failure. Scan stopped with no alerts written.",
@@ -2328,6 +2330,89 @@ class _RequestQuota:
         log.warning("Federal bond-risk quota reserve_paced failed after CAS retries")
         return False, 0.0, 0.0
 
+    async def confirm_dispatch(
+        self,
+        db,
+        scheduled_ts: float,
+        *,
+        pause_s: float = DEFAULT_PAUSE_S,
+    ) -> tuple[float, float]:
+        """Revalidate spacing upon wakeup and update the reserved slot timestamp.
+
+        If an earlier task woke late and shifted its own timestamp forward,
+        any following task waking around its earlier reservation sees that
+        shift, pushes its own slot forward atomically, and sleeps the extra
+        delay before dispatching.
+        """
+        def _revalidate(stored: list[float], effective_now: float) -> tuple[float, float, list[float], bool]:
+            others = list(stored)
+            removed = False
+            idx = len(others) - 1
+            while idx >= 0:
+                if abs(float(others[idx]) - float(scheduled_ts)) < 1e-6:
+                    others.pop(idx)
+                    removed = True
+                    break
+                idx -= 1
+            if not removed:
+                others = sorted(others)
+            earliest = effective_now
+            if pause_s > 0:
+                prior = sorted(ts for ts in others if ts <= effective_now)
+                if prior:
+                    earliest = max(earliest, prior[-1] + float(pause_s))
+                while True:
+                    in_window = [ts for ts in prior if ts >= earliest - 60.0]
+                    if len(in_window) < self.minute_limit:
+                        break
+                    next_ready = in_window[-self.minute_limit] + 60.0
+                    if next_ready <= earliest:
+                        break
+                    earliest = next_ready
+            extra_wait = max(0.0, earliest - effective_now)
+            if extra_wait == 0.0 and abs(earliest - float(scheduled_ts)) <= 0.05:
+                return 0.0, float(scheduled_ts), stored, False
+            updated = sorted([*others, earliest])[-500:]
+            return extra_wait, earliest, updated, True
+
+        collection = _shared_quota_collection(db)
+        if collection is None:
+            actual_now = time.time()
+            effective_now = max(actual_now, float(scheduled_ts))
+            pruned = self._prune_values(self.timestamps, effective_now)
+            extra_wait, earliest, updated, changed = _revalidate(pruned, effective_now)
+            self.timestamps = updated
+            return (extra_wait, earliest) if changed else (0.0, float(scheduled_ts))
+
+        quota_id = _request_quota_id(self.account_key)
+        for _ in range(8):
+            actual_now = time.time()
+            effective_now = max(actual_now, float(scheduled_ts))
+            try:
+                row = await collection.find_one({"_id": quota_id}) or {}
+                rev = int(row.get("quota_revision") or 0)
+                stored = self._prune_values(row.get("timestamps") or [], effective_now)
+                extra_wait, earliest, updated, changed = _revalidate(stored, effective_now)
+                if not changed:
+                    self.timestamps = stored
+                    return 0.0, float(scheduled_ts)
+                res = await collection.update_one(
+                    _quota_rev_filter(quota_id, rev),
+                    {"$set": {
+                        "timestamps": updated,
+                        "quota_revision": rev + 1,
+                        "updated_at": _now(),
+                    }},
+                )
+                if getattr(res, "matched_count", 0) == 1:
+                    self.timestamps = updated
+                    return extra_wait, earliest
+            except Exception as exc:
+                log.warning("Federal bond-risk quota confirm_dispatch failed: %s", type(exc).__name__)
+                return 0.0, float(scheduled_ts)
+        log.warning("Federal bond-risk quota confirm_dispatch failed after CAS retries")
+        return 0.0, float(scheduled_ts)
+
     async def pace(
         self,
         pause_s: float,
@@ -2416,8 +2501,14 @@ def build_courtlistener_request_gate(
             return False
         if wait > 0:
             await asyncio.sleep(wait)
-            if time.time() > scheduled_ts + 0.05:
-                await active_quota.mark_dispatched(db, 1, scheduled_ts)
+            current_ts = scheduled_ts
+            for _ in range(8):
+                extra_wait, current_ts = await active_quota.confirm_dispatch(
+                    db, current_ts, pause_s=pause_s,
+                )
+                if extra_wait <= 0:
+                    break
+                await asyncio.sleep(extra_wait)
         return True
 
     return _gate

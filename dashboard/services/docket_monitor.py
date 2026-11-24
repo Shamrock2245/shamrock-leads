@@ -192,19 +192,67 @@ class DocketMonitor:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
+    def _cursor_id(self) -> str:
+        from dashboard.services.federal_bond_risk import _tenant_scope_token
+
+        token = _tenant_scope_token()
+        return "docket_monitor_cursor" if not token else f"docket_monitor_cursor:{token}"
+
+    async def _load_cursor(self):
+        collection = getattr(self.db, "federal_bond_risk_state", None) if self.db is not None else None
+        if collection is None:
+            return None
+        try:
+            row = await collection.find_one({"_id": self._cursor_id()}) or {}
+            val = row.get("last_bond_id")
+            return val if val not in (None, "") else None
+        except Exception as exc:
+            log.warning("[DocketMonitor] Cursor load failed: %s", type(exc).__name__)
+            return None
+
+    async def _save_cursor(self, last_bond_id) -> None:
+        collection = getattr(self.db, "federal_bond_risk_state", None) if self.db is not None else None
+        if collection is None:
+            return
+        try:
+            await collection.update_one(
+                {"_id": self._cursor_id()},
+                {"$set": {
+                    "last_bond_id": last_bond_id,
+                    "updated_at": datetime.now(timezone.utc).isoformat() + "Z",
+                }},
+                upsert=True,
+            )
+        except Exception as exc:
+            log.warning("[DocketMonitor] Cursor save failed: %s", type(exc).__name__)
+
+    async def _fetch_active_batch(self, limit: int, resume_after=None) -> list:
+        query: dict = {"status": {"$in": ["active", "monitoring", "alert"]}}
+        if resume_after is not None:
+            query["_id"] = {"$gt": resume_after}
+        cursor = self.db.active_bonds.find(
+            query,
+            {"Bond_Case_ID": 1, "defendant_name": 1, "Defendant_Name": 1,
+             "Defendant_ID": 1, "county": 1, "County": 1,
+             "case_number": 1, "bond_amount": 1, "Bond_Amount": 1, "status": 1},
+        )
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("_id", 1)
+        if hasattr(cursor, "limit"):
+            cursor = cursor.limit(limit)
+        return await cursor.to_list(length=limit)
+
     async def scan_active_bonds(self, limit: int = 100) -> dict:
-        """Main scan: iterate active bonds, search dockets, classify, store."""
+        """Main scan: iterate active bonds in rotating batches, search dockets, store."""
         start = datetime.now(timezone.utc)
         self._quota_exhausted = False
         log.info("[DocketMonitor] Starting active bond docket scan...")
         try:
-            cursor = self.db.active_bonds.find(
-                {"status": {"$in": ["active", "monitoring", "alert"]}},
-                {"Bond_Case_ID": 1, "defendant_name": 1, "Defendant_Name": 1,
-                 "Defendant_ID": 1, "county": 1, "County": 1,
-                 "case_number": 1, "bond_amount": 1, "Bond_Amount": 1, "status": 1},
-            ).limit(limit)
-            bonds = await cursor.to_list(length=limit)
+            resume_after = await self._load_cursor()
+            bonds = await self._fetch_active_batch(limit, resume_after=resume_after)
+            if not bonds and resume_after is not None:
+                await self._save_cursor(None)
+                bonds = await self._fetch_active_batch(limit, resume_after=None)
         except Exception as e:
             return {"success": False, "error": str(e)}
 
@@ -218,12 +266,17 @@ class DocketMonitor:
             }
 
         total_events, total_alerts, bonds_with, errors = 0, 0, 0, 0
+        bonds_scanned = 0
+        last_completed_id = None
         for bond in bonds:
             if self._quota_exhausted:
                 break
             try:
                 name = bond.get("defendant_name") or bond.get("Defendant_Name") or ""
                 if len(name) < 3:
+                    bonds_scanned += 1
+                    if bond.get("_id") is not None:
+                        last_completed_id = bond.get("_id")
                     continue
                 events = await self._search_dockets(
                     name, bond.get("case_number"), bond.get("county") or bond.get("County"),
@@ -245,16 +298,27 @@ class DocketMonitor:
                             await self._fire_alert(ev)
                 if self._quota_exhausted:
                     break
+                bonds_scanned += 1
+                if bond.get("_id") is not None:
+                    last_completed_id = bond.get("_id")
                 if self._request_gate is None:
                     await asyncio.sleep(1.0)
             except Exception as e:
                 errors += 1
                 log.warning("[DocketMonitor] Bond scan error: %s", str(e)[:100])
 
+        if self._quota_exhausted:
+            if last_completed_id is not None:
+                await self._save_cursor(last_completed_id)
+        elif len(bonds) >= limit and last_completed_id is not None:
+            await self._save_cursor(last_completed_id)
+        else:
+            await self._save_cursor(None)
+
         dur = (datetime.now(timezone.utc) - start).total_seconds()
-        log.info("[DocketMonitor] Done — %d bonds, %d events, %d alerts, %.1fs", len(bonds), total_events, total_alerts, dur)
+        log.info("[DocketMonitor] Done — %d/%d bonds, %d events, %d alerts, %.1fs", bonds_scanned, len(bonds), total_events, total_alerts, dur)
         return {
-            "success": True, "bonds_scanned": len(bonds), "bonds_with_events": bonds_with,
+            "success": True, "bonds_scanned": bonds_scanned, "bonds_with_events": bonds_with,
             "events_found": total_events, "alerts_created": total_alerts,
             "errors": errors, "duration_seconds": round(dur, 1),
             "quota_exhausted": self._quota_exhausted,
