@@ -3,6 +3,228 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk contiguous names, capped slice checkpoints, and query stems)
+
+### Fixed
+- **Filing text matching requires one contiguous ordered name.** `"John Doe; Jane Smith"` no longer matches `"John Smith"` across unrelated parties, preventing cross-party auto-links and keeping unnamed actor-sensitive filings as `possible`.
+- **Checkpointed search slices stay pinned until every new match in the slice is stored.** When `MAX_ROWS` caps a run or hydration pages through a slice, neither the search checkpoint nor the seed cursor advances past unwritten rows.
+- **CourtListener search expands classifier stems and fails cron on auth/rate-limit outages.** `BOND_RISK_QUERY` includes `bond revocation`, `revocation of pretrial release`, and `modify`/`modifying`/`modified` release phrases; `unauthorized` and `rate_limited` stops report `success: false` so cron escalates them.
+- **Withdrawn rows retry missed CRM notifications and corrected entries withdraw stale links.** `retry_pending_notifications` runs only after bond-status and court-evidence reconciliation (preventing stale pre-downgrade notifications from replaying) and retries unwritten notifications across all statuses including `withdrawn`; `DocketView.seen_filing_ids` tracks every hydrated entry and RECAP document so corrected filings withdraw stale auto-links; search checkpoints stay held whenever any docket hydration fails.
+- **Partial search-source outages escalate instead of passing silently.** When one or two of `r`/`rd`/`d` fail, `run_federal_bond_risk_scan` surfaces the failed sources in `warning`, sets `incomplete_coverage: true`, holds search/hydration checkpoints so no slice is skipped, and `_run_federal_bond_risk` in `dashboard/cron.py` raises on incomplete scans.
+- **Match-change audits record numeric confidence.** `_audit_payload` and `_match_state` compute `_match_confidence` (`1.0` dual-confirmed, `0.95` single-confirmed, `0.5` possible, `0.25` ambiguous possible, `0.0` withdrawn) across initial matches, upgrades, downgrades, restorations, and withdrawals.
+- **Active bond status is revalidated before storing or notifying any match.** `run_federal_bond_risk_scan` and `_store_decision` re-check `active_bonds` after search/hydration and immediately prior to persistence and alert retries, preventing a bond closed mid-scan from producing a stale auto-link, CRM notification, or Slack alert.
+- **Actor-sensitive filings require clause-level defendant attribution, notifications check current revision before inserting, and same-status evidence changes are persisted and audited.** `_actor_event_parties` only confirms `failure_to_appear`/`warrant`/`revocation_of_release`/`modification_of_release` when the actor-sensitive phrase itself identifies the defendant (keeping multi-clause counsel/government filings as `possible`), `_ensure_notification` atomically claims/verifies `(match_status, notification_revision)` on `docket_events` before inserting into `notifications` (rolling back if the revision advanced mid-flight), and `_store_decision` updates and audits `match_evidence_updated` whenever confirmations or confidence change under the same `match_status`.
+- **Recent-filing scans use only RECAP search types and durably persist capped or partial slices.** `FEDERAL_SEARCH_TYPES` restricts filing scans to `("r", "rd")` (removing docket-only `type=d` that lacks `entry_date_filed` metadata), and `run_federal_bond_risk_scan` persists unhydrated, failed-hydration, or `MAX_ROWS`-capped seeds into `federal_bond_risk_state` (`pending_slice`) so subsequent scans drain the exact snapshot before advancing or re-running live search cursors.
+- **Judge-initial normalization stays restricted to federal `cr`/`mj` docket numbers and failed scheduled scans alert `#alerts`.** `canonical_identifier` preserves trailing alphabetic suffixes on agency identifiers such as `AG-445566-FL` vs `AG-445566-JES`, and `_run_federal_bond_risk` posts an operational Slack alert via `SlackNotifier.notify_alert` before raising on failed, incomplete, or crashed scans.
+- **Partial entry-hydration outages preserve existing links and upgrades/restores clear stale downgrade and Slack-claim state.** `run_federal_bond_risk_scan` skips `_withdraw_stale_confirmations` for any docket in `failed_seed_ids`, `_store_decision` clears prior `downgrade_*`/`prior_*` fields and resets `slack_claim`/`slack_claim_at` on upgrade and restore, `_stored_notification` ignores stale downgrade markers when `match_status == "confirmed"`, and `_claim_slack_delivery` releases its claim if the row transitioned mid-claim.
+- **Withdrawals bind to monotonic `match_revision` and recheck live bond status.** Every match/evidence transition increments `match_revision` with a compare-and-set filter across `_id`, `match_status`, `notification_revision`, and `match_revision` so stale snapshots cannot withdraw refreshed `confirmed` rows, and `_unlink_inactive_bond_ids` re-verifies live `active_bonds` state immediately before withdrawing so mid-scan reinstatements or transient lookup errors never trigger false unlinks.
+- **Candidate-identity refreshes on `possible` rows and removed in-window filings are tracked and reconciled.** `_match_state` includes `candidate_bond_case_id`, `candidate_defendant_id`, and `defendant_name` so candidate relinks on `possible` matches update, re-notify staff, and audit; `DocketView` records `entries_complete`/`entry_window_start` and stored alerts retain `filing_date` so filings deleted or sealed within the active lookback window are withdrawn (`filing_removed_from_docket`) without touching older out-of-window rows.
+- **Enabling `SAAS_MULTI_TENANT` preserves existing Shamrock keys while isolating additional tenants.** `_tenant_scope_token()` keeps Shamrock (tenant #1) unprefixed so pre-tenancy backfilled `source_id`, `claim_key`, and state cursor documents remain continuous across the feature-flag transition without triggering duplicate alerts or re-scans, and `_notification_claim_key` avoids double-prefixing scoped `source_id` keys for additional tenants.
+- **CourtListener scans pace requests and enforce durable rolling quotas.** `run_federal_bond_risk_scan` defaults to `DEFAULT_PAUSE_S = 12.0` (`<= 5 req/min`), serializes overlapping scans with a tenant-scoped `scan_lease`, and reserves/reconciles rolling requests atomically via `quota_revision` compare-and-set in `federal_bond_risk_state` (`request_quota`) against `25/run`, `50/hr`, and `125/day` limits (deferring remaining seeds cleanly to `pending_slice` or skipping with `quota_exhausted` before hitting CourtListener).
+- **Docket party identity matching restricts confirmation to defendant-role parties.** `_hydrate` and `match_client` exclude explicit non-defendant CourtListener roles (`Witness`, `Victim`, `Attorney`, `Plaintiff`, `Surety`) for the docket while keeping missing or ambiguous `party_types` roles as `possible` for staff review.
+- **CourtListener request quotas and scan leases share one API-account bucket across tenants and reserve retry attempts before sending.** `_request_quota_id`, `_scan_lease_id`, and `_shared_quota_collection` key durable rate-limit coordination by hashed API credential rather than tenant slug so multiple tenants sharing `COURTLISTENER_API_TOKEN` never bypass shared limits or overlap scans, `CourtListenerClient._request_with_retry` consults its per-attempt `request_gate` prior to each initial or retry attempt on 429, 5xx, `ConnectError`, and `ReadTimeout`, and `_RequestQuota.mark_dispatched` updates reserved slot timestamps to actual HTTP dispatch time after pacing or retry backoff sleeps.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers contiguous ordered name matching, clause-scoped actor attribution, `MAX_ROWS` and `HYDRATE_CEILING` durable `pending_slice` snapshot draining (even when newer live search hits arrive), `("r", "rd")`-only filing searches, tenant-unique `pending_slice` state keys, single-tenant to `SAAS_MULTI_TENANT` key continuity for Shamrock plus isolation for secondary tenants, CourtListener inter-request pacing (`12s` default / `5 req/min`), per-run request budget `pending_slice` draining, atomic CAS `request_quota` reservation/reconciliation, shared per-API-account quota and scan-lease serialization across tenants under `SAAS_MULTI_TENANT`, pre-attempt retry quota reservation across 429/`ReadTimeout`/`503` responses, dispatch-time quota timestamp updates after rolling-window pacing and `Retry-After` sleeps, durable rolling `50/hr` and `125/day` quota deferral, defendant-role party filtering vs non-defendant exclusion and missing/ambiguous `possible` fallback, federal-docket-only judge-suffix normalization, partial hydration and partial search-source outage escalation + checkpoint holds, preserving existing links during partial entry-hydration outages, numeric `confidence` on match audits across all state transitions (including `match_evidence_updated`), candidate-identity refresh notifications/audits on `possible` matches, withdrawal of deleted/sealed in-window filings while preserving out-of-window rows, monotonic `match_revision` CAS rejection of stale withdrawals after evidence updates, live `active_bonds` reinstatement/error rechecks inside `_unlink_inactive_bond_ids`, revision-gated notification inserts/rollbacks, confirmed retry copy after restore/upgrade, immediate Slack claim release across match upgrades, live bond-closure revalidation across mid-scan and persistence-loop race windows, stem query coverage, cron `#alerts` outage notifications and exceptions for `unauthorized`, `rate_limited`, incomplete coverage, and crashes, reconciled-first notification retries, and stale-link withdrawal after entry correction.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk search phrases and docket numbers)
+
+### Fixed
+- **The CourtListener query includes every phrase the classifier matches.** "Bond increased", "bond reduced", "bond set", and "bond revocation" are searched, because the query is built from the same rules that classify a filing.
+- **Every trailing judge-initial block is removed from a docket number.** `2:24-cr-00123-JES-NPM` is the same case as `2:24-cr-00123`.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the classified examples against the search query, and a docket number with two judge-initial suffixes.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk cron failure, unnamed actor, search cursor)
+
+### Fixed
+- **A failed federal scan is not a completed cron cycle.** `search_failed`, a missing index, and a hydration outage raise. Flag off, no token, and maintenance still log and return.
+- **An FTA or warrant that names nobody stays possible.** On a one-defendant docket, "Counsel for the government failed to appear" is not auto-linked. A filing that names the defendant, and a case event such as a detention hearing, can still confirm.
+- **Hits that share the cutoff date are not skipped.** When the 1,000-hit page stops on one date, the next scan resumes from CourtListener's search cursor.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a failed scan versus flag-off, an unnamed failure to appear, and two hits on the same cutoff date.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk audit pull and entry window)
+
+### Fixed
+- **Clearing one pending audit does not erase a newer one.** The completed `event_id` is removed with `$pull`. The match update does not replace `audit_pending` or `match_history`.
+- **Docket entries are read through the 45-day lookback.** Paging stops when a filing is older than that window. If the safety ceiling is hit while newer filings may remain, that docket is not alerted.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a stale audit clear that leaves the newer payload, and a warrant past the second entry page.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk search ceiling and audit claim)
+
+### Fixed
+- **A search that hits the 1,000-hit ceiling continues on the next scan.** The oldest filing date becomes the next upper bound, so older warrant and release hits are not left behind the newest 50 pages. If that date cannot move, the scan fails instead of looking complete.
+- **A truncated party list does not match.** A truncated entry list is named in the warning, and the entries already read are still used.
+- **An audit event is claimed once.** The unique key is `(source, event_id)`, written with one upsert, so two scans cannot insert the same immutable audit.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the older search window, a ceiling that cannot move, a truncated party list, a truncated entry list, and two audit inserts that share one `event_id`.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk restore, DOB conflict, Slack claim)
+
+### Fixed
+- **A reinstated bond restores its withdrawn alert.** When the filing matches again, the stored row returns to the current confirmed or possible state, with the bond attachment, an audit row, and a Slack post of that restored state.
+- **Conflicting held dates of birth cannot confirm through a case number.** The row stays `possible` for staff review.
+- **Slack posts the row version the claim acquired.** The claim names the match status and revision. The post uses the document read after that claim, so a downgrade that lands first is not announced as still linked.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a withdrawn row restored after reinstatement, a date-of-birth conflict with a matching case number, and a Slack post that uses the claimed document.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk party DOB, audit merge, claim revision)
+
+### Fixed
+- **A party's date of birth is read from its docket-specific party type.** The party request asks for `party_types`. `extra_info` on another docket, and the legacy flat party field, do not confirm the client.
+- **A later match transition keeps audits that are still unwritten.** The new row merges the previous `audit_pending` list instead of replacing it.
+- **Each match transition has its own notification claim.** `possible`, then `confirmed`, then `possible` again produces three staff notifications. A repeat of the same transition still writes one.
+- **A possible match is withdrawn when its candidate bond closes.** Exonerated, forfeited, and surrendered bonds are reconciled for both confirmed and possible rows, so a Slack retry does not post the stale review.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a docket-specific party DOB, an upgrade that keeps an older pending audit, a repeated possible transition, and a possible row whose candidate bond has closed.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk open bonds, audit retry, full link scan)
+
+### Fixed
+- **Reinstated bonds stay in the federal scan.** They are open liabilities. A reinstated case is monitored, and an existing link is not withdrawn just because the status is no longer `active`.
+- **A failed match audit is retried.** If `audit_events` insert fails after the docket row is written, the audit payload stays on that row. The next scan writes it.
+- **Every stored auto-link is read in `_id` order.** Reconciliation no longer stops at an unsorted 500-row page, so an older confirmed row for a closed bond is still withdrawn and is not posted as current.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a reinstated bond, an audit insert that fails once, and a closed-bond link past the old 500-row read.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk audit, entry failures, subjectless filings)
+
+### Fixed
+- **Match upgrades, downgrades, and withdrawals write an append-only audit event.** The actor is `system`. The record has the before and after state, the reason, and the filing evidence. `match_history` on the row is not the only copy.
+- **A docket-entry outage is not an empty success.** If every docket's entry list fails, the scan returns `success: false` and `skipped: entry_hydration_failed`. A partial failure names those dockets. A failed docket brief is named in the warning.
+- **A filing that names nobody is not confirmed on a multi-defendant docket.** It stays `possible`. A filing that names the client can still confirm.
+- **Two bonds for the same defendant are one person.** They do not make the match ambiguous. Two different defendants on one filing still do.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the audit on upgrade and downgrade, an entry-list failure, a subjectless filing beside a named one, and two bonds for one defendant.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk Slack retry and immutable id)
+
+### Fixed
+- **Slack retries wait until this scan has reconciled the link.** A failed earlier post is not repeated as "confirmed" after the same run finds the match is only possible, withdrawn, or no longer an active client. The post uses the updated wording.
+- **Updates built from a stored row do not include `_id`.** Mongo rejects an update that tries to change `_id`. Withdrawal and downgrade writes send only mutable fields.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a failed confirmed Slack post that is retried only after the link is downgraded, and the test collection rejects an update that includes `_id`.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk downgrade of stale confirmed links)
+
+### Fixed
+- **A confirmed link is replaced when later evidence no longer confirms it.** If a later scan finds conflicting court-party dates of birth, the stored row becomes `possible`, `auto_linked` is cleared, and the previous bond attachment is kept on `match_history`. A filing seen again that no longer matches at all is marked `withdrawn` the same way. Staff get a new notification for the downgrade.
+
+### Tests
+- `tests/test_federal_bond_risk.py` confirms a link, then downgrades it when the party gains a second date of birth, then withdraws it when that date no longer matches.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk surnames, tenant cursor, party outages)
+
+### Fixed
+- **Multi-part surnames match in either order.** `John De La Cruz` and `De La Cruz, John` share the surname. Particles such as de, la, del, van, and von stay on the surname.
+- **The hydration cursor is one document per tenant.** With multi-tenant mode on, the cursor id includes the tenant, so a second agency does not collide on `_id` `seed_cursor`. Alert and notification claim keys are tenant-qualified the same way while that mode is on.
+- **A party-list outage is not an empty success.** If every docket's party request fails, the scan returns `success: false` and `skipped: party_hydration_failed`. A partial outage stays successful and names the dockets that failed.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a particle surname, two tenant cursors, a total party-list failure, and one docket whose party list fails beside a docket that still alerts.
+
+## [Unreleased] — 2026-11-22 (Main CI: review log collection and distinct test DLs)
+
+### Fixed
+- **`review_requests_log` is a known tenant-owned collection.** The review harvester from main opened that collection without registering it.
+- **The full write-bond golden uses a different driver license for each party.** The paperwork preflight blocks an indemnitor license that matches the defendant. The synthetic packet now keeps those licenses distinct.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk co-defendant, party DOB, notification claim)
+
+### Fixed
+- **Co-defendant captions are hydrated before a name filter.** "United States v. Lead Defendant et al." is no longer dropped because the caption surname is not one of ours. Parties are loaded first, then the client is matched.
+- **A matched party with more than one date of birth is not auto-confirmed.** One overlapping date, even with a case number, stays `possible` for staff review.
+- **CRM notifications are claimed with one upsert.** A unique `(type, claim_key)` index stops overlapping scans from inserting two Notification Center rows for the same alert and status.
+- **Failed Slack posts count toward the ten-post cap.** Both the pending-retry loop and the new-alert loop count a claimed attempt, whether Slack accepts it or not.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers an et al. caption, conflicting party dates of birth, one notification under a duplicate key, and a failed Slack attempt that blocks the next post in the same run.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk name boundary, hydration, notification, index)
+
+### Fixed
+- **An "as to" capture stops at the party name.** "ORDER as to John Smith denying Motion to Modify Conditions of Release" keeps John Smith. A capture that is not an exact docket party falls back to the known party named in that text.
+- **Hydration continues past the first 500 seeds.** The scan hydrates the seeds returned by the bounded search, up to a 3,000 ceiling. When seeds remain, the result is marked truncated and the next scan starts at the next docket instead of repeating the same batch.
+- **A CRM notification is retried after a partial write.** If the notification insert fails after the docket event is claimed, a later scan writes that notification without a second event.
+- **The scan stops when the unique alert index cannot be created or seen.** It does not continue and report a normal empty run.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the order-title capture, a second scan hydrating the docket left past the ceiling, a notification insert that fails once, and an index that cannot be created.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk identity paging and search failures)
+
+### Fixed
+- **Every related arrest and defendant row is loaded before matching.** The identity query no longer stops at four rows per defendant or lets one prolific defendant consume a shared page. An arrest that was left off that page can no longer hide a conflicting date of birth and allow an auto-link.
+- **A CourtListener search that fails on every source is a failed scan.** HTTP 403, 5xx, and malformed JSON now return `success: false` with a warning. An empty successful search is unchanged.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a conflicting arrest past the old four-row cap, a scan where every search source fails, and a scan where one source fails and another still returns a filing.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk remaining review findings)
+
+### Fixed
+- **Conflicting dates of birth are not a confirmation.** If the bond, defendant, and arrest records do not agree on a date of birth, matching one of those dates to the docket no longer auto-links the client.
+- **A top-level RECAP document (`type=rd`) is classified.** The search hit itself is a filing, not only the nested `recap_documents` on a docket hit.
+- **Docket parties are paged.** `/parties/` follows `next` until the cursor ends, with a ceiling of 50 pages.
+- **An abandoned Slack claim expires after 30 minutes.** A process that dies after claiming a post does not leave `slack_claim` true forever. Pending undelivered rows are still retried on their own, and the claim is taken before that retry. New alerts are still inserted with one upsert on the unique `(source, source_id)` index.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a conflicting client date of birth, a top-level RECAP hit, a second party page, and a stale Slack claim.
+
+## [Unreleased] — 2026-11-21 (Federal bond-risk party, window, and Slack claim)
+
+### Fixed
+- **A filing is tied to the party it names.** Text such as "warrant issued as to Jane Roe" is not auto-linked to another defendant on the same docket who matched separately.
+- **Every active bond is considered.** Active, monitoring, and alert bonds are read in `_id` order, one page after another, instead of stopping at the first 200.
+- **Search walks the whole 45-day filing window.** Pages continue until the cursor ends or a page is entirely older than the window. Fifty pages is only a safety ceiling.
+- **Slack delivery is claimed before a retry.** Overlapping scheduled and manual scans cannot both post the same undelivered alert. Pending `slack_delivered: false` rows are retried on their own, even when that filing is no longer in the search window.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a named-party filing, bond paging past 200, search pages through the window, and a Slack retry that is claimed once outside the search results.
+
+## [Unreleased] — 2026-11-21 (Federal bond-risk filing identity)
+
+### Fixed
+- **New filings on older federal cases are kept.** The scan filters RECAP hits on `entry_date_filed`, the docket-entry date, and no longer drops a docket because `dateFiled` (the day the case was opened) is outside the window. Search asks CourtListener for `entry_date_filed_after`, not the case-initiation `filed_after`. Docket entries are still kept or dropped by their own `date_filed`.
+- **A RECAP document and its docket entry are one filing.** The document's docket-entry id, or the entry's nested document id, is the canonical filing id. The same risk phrase no longer creates two CRM rows or two Slack posts.
+- **Each alert is claimed with one upsert.** A unique partial index on `(source, source_id)` for `courtlistener_federal_bond_risk` makes a concurrent cron run and manual scan insert one row. The loser does not add a second notification. Slack delivery is still recorded separately: `alert_complete` stays false until Slack accepts the post, and a later cycle retries that post without another CRM row. A full Slack batch no longer skips those retries.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers an old case with a new entry, one alert for a document and its entry, the atomic claim, and a Slack retry after the per-cycle cap.
+
+## [Unreleased] — 2026-11-20 (Federal bond-risk review fixes)
+
+### Fixed
+- **A date of birth confirms only the party it belongs to.** On a multi-defendant Florida federal docket, another defendant's date of birth no longer auto-links a name match. That row stays `possible` unless the matching party's own date of birth, or a case or agency number already on file, confirms it. The matching party's own conflicting date of birth still drops the row.
+- **Recent filings are read inside a bounded window.** Search walks at most three pages of RECAP and docket results filed inside the last 45 days, ordered by filing date, and docket entries walk at most two pages. 429 responses still back off, detail calls still select fields, and a further `next` URL is not requested.
+- **Each filing alerts on its own.** The dedupe key includes the docket entry id or RECAP document id, so two detention hearings on one docket each produce a staff row. The same filing does not alert twice.
+- **Slack delivery is part of completion.** The CRM row is written once with `slack_delivered` false. The alert stays incomplete until `SlackNotifier.notify_alert` returns success. A later cycle retries Slack only and does not insert another notification.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers party-linked dates of birth, bounded search and entry pages, distinct filings, and a Slack retry without a second CRM row.
+
+## [Unreleased] — 2026-11-19 (Florida federal bond-risk staff alerts)
+
+### Added
+- **Staff alert when an active client has a Florida federal criminal case with a bond-risk event.** `dashboard/services/federal_bond_risk.py` reuses the CourtListener v4 client for FLMD, FLSD, and FLND dockets, docket entries, and RECAP. Events are bond conditions set or changed, a detention hearing, failure to appear, a warrant, or revocation or modification of release.
+- **Matching fails closed.** A row is confirmed and auto-linked only when the full name matches and the docket's date of birth matches a date we hold, or a case or agency number we already hold matches the docket. Full name alone is `possible` for staff review and is not auto-linked. A conflicting date of birth, a surname-only caption, or two confirmed clients on the same event is not auto-linked.
+- **`FEDERAL_BOND_RISK_ALERTS` is off by default.** While it is off, the scan does not call CourtListener and does not write alerts. With the flag on and `COURTLISTENER_API_TOKEN` unset, the scan skips and `GET /api/docket-monitor/federal-bond-risk` (and the docket-monitor status payload) reports that anonymous v4 search and docket calls are rejected. Calls use field selection, back off on HTTP 429, and do not follow a second page.
+- **Staff see the alert in the CRM notification center** (`type: federal_bond_risk`), on the docket monitor feed (LINKED or REVIEW), and on Slack `#alerts` through `SlackNotifier.notify_alert`. Nothing is texted, emailed, or iMessaged.
+
+### Tests
+- `tests/test_federal_bond_risk.py` (on the CI list).
+
 ## [Unreleased] — 2026-11-21 (Surety confirm: send-state CAS, atomic audit; SSRF redirect tests)
 
 ### Fixed

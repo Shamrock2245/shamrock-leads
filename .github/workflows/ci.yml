@@ -258,6 +258,7 @@ jobs:
             tests/test_swipesimple_invoice_claims.py \
             tests/test_swipesimple_session_keepalive.py \
             tests/test_slack_alerts.py \
+            tests/test_federal_bond_risk.py \
             tests/test_payment_links.py \
             tests/test_surety_registry.py \
             tests/test_surety_onboarding.py \

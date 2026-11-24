@@ -270,6 +270,56 @@ def _strip_html_text(raw_html: str) -> str:
 BASE_URL = "https://www.courtlistener.com/api/rest/v4"
 
 
+def _entry_page_left_window(results: list, until_date: str) -> bool:
+    """True when this newest-first page has reached filings older than the window."""
+    if not until_date:
+        return False
+    for row in results or []:
+        if not isinstance(row, dict):
+            continue
+        day = str(row.get("date_filed") or "")[:10]
+        if len(day) == 10 and day[4] == "-" and day[7] == "-" and day < until_date:
+            return True
+    return False
+
+
+def _search_page_left_window(results: list, until_entry_before: Optional[str]) -> bool:
+    """True when every dated hit on the page is older than the filing window."""
+    if not until_entry_before:
+        return False
+    dates = []
+    for hit in results or []:
+        if not isinstance(hit, dict):
+            continue
+        raw = hit.get("entry_date_filed") or hit.get("entryDateFiled") or ""
+        day = str(raw).strip()[:10]
+        if len(day) == 10 and day[4] == "-" and day[7] == "-":
+            dates.append(day)
+    if not dates:
+        return False
+    return all(day < until_entry_before for day in dates)
+
+# Florida federal district courts. Criminal bond-risk scans stay inside this set.
+FL_FEDERAL_COURT_IDS = ("flmd", "flsd", "flnd")
+
+# CourtListener v4 returns 401 for anonymous search and docket calls.
+ANONYMOUS_V4_REJECTED = (
+    "COURTLISTENER_API_TOKEN is unset. Anonymous CourtListener v4 "
+    "search and docket calls are rejected (401)."
+)
+
+# Field selection keeps docket, entry, and party payloads small. Entry
+# responses otherwise nest RECAP plain_text. A party's date of birth lives
+# on the docket-specific party type, not on the legacy Party.extra_info
+# field and not on a flat date_of_birth.
+DOCKET_BRIEF_FIELDS = (
+    "id,court_id,docket_number,case_name,case_name_full,date_filed,"
+    "date_last_filing,cause,nature_of_suit,pacer_case_id,assigned_to_str"
+)
+DOCKET_ENTRY_FIELDS = "id,date_filed,description,entry_number,recap_documents__id"
+DOCKET_PARTY_FIELDS = "id,name,party_types"
+
+
 def courts_for_state(state: str) -> list:
     """Get court IDs for a specific state."""
     state = state.upper()
@@ -282,6 +332,10 @@ def courts_for_states(states: list) -> list:
     return [cid for cid, meta in SE_US_COURTS.items() if meta["state"] in states_upper]
 
 
+class CourtListenerQuotaBlocked(Exception):
+    """Raised when a caller-supplied request gate denies an HTTP attempt."""
+
+
 class CourtListenerClient:
     """Async client for CourtListener REST API v4.
 
@@ -290,8 +344,9 @@ class CourtListenerClient:
     and bail-relevant opinion filtering.
     """
 
-    def __init__(self, api_token: Optional[str] = None):
+    def __init__(self, api_token: Optional[str] = None, *, request_gate=None):
         self.api_token = api_token
+        self._request_gate = request_gate
         self._headers = {
             "User-Agent": "ShamrockLeads/1.0 (https://shamrockbailbonds.biz; admin@shamrockbailbonds.biz)",
         }
@@ -302,6 +357,15 @@ class CourtListenerClient:
         self._requests_made = 0
         self._errors = 0
         self._rate_limited = 0
+
+    def set_request_gate(self, gate) -> None:
+        """Install or clear an async callable ``gate(attempt, min_delay) -> bool`` that reserves capacity and awaits pacing/backoff before dispatch."""
+        self._request_gate = gate
+
+    async def _check_request_gate(self, attempt: int, min_delay: float = 0.0) -> bool:
+        if self._request_gate is None:
+            return True
+        return bool(await self._request_gate(attempt, min_delay))
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -316,23 +380,37 @@ class CourtListenerClient:
         client = await self._get_client()
         last_exc = None
         for attempt in range(MAX_RETRIES + 1):
+            if attempt == 0 and not await self._check_request_gate(0, 0.0):
+                raise CourtListenerQuotaBlocked("quota_exhausted")
             try:
                 self._requests_made += 1
                 resp = await getattr(client, method)(url, **kwargs)
                 if resp.status_code == 429:
                     self._rate_limited += 1
-                    wait = BACKOFF_BASE * (2 ** attempt)
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        wait = max(wait, int(retry_after))
-                    log.warning("Rate limited (429), retry in %.1fs (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
-                    await asyncio.sleep(wait)
-                    continue
+                    if attempt < MAX_RETRIES:
+                        wait = BACKOFF_BASE * (2 ** attempt)
+                        retry_after = resp.headers.get("Retry-After")
+                        if retry_after and retry_after.isdigit():
+                            wait = max(wait, int(retry_after))
+                        if self._request_gate is not None:
+                            if not await self._check_request_gate(attempt + 1, wait):
+                                return resp
+                            log.warning("Rate limited (429), retry after %.1fs gate wait (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
+                        else:
+                            log.warning("Rate limited (429), retry in %.1fs (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
+                            await asyncio.sleep(wait)
+                        continue
+                    return resp
                 if resp.status_code >= 500 and attempt < MAX_RETRIES:
                     self._errors += 1
                     wait = BACKOFF_BASE * (2 ** attempt)
-                    log.warning("Server error %d, retry in %.1fs", resp.status_code, wait)
-                    await asyncio.sleep(wait)
+                    if self._request_gate is not None:
+                        if not await self._check_request_gate(attempt + 1, wait):
+                            return resp
+                        log.warning("Server error %d, retry after %.1fs gate wait", resp.status_code, wait)
+                    else:
+                        log.warning("Server error %d, retry in %.1fs", resp.status_code, wait)
+                        await asyncio.sleep(wait)
                     continue
                 return resp
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
@@ -340,8 +418,13 @@ class CourtListenerClient:
                 last_exc = e
                 if attempt < MAX_RETRIES:
                     wait = BACKOFF_BASE * (2 ** attempt)
-                    log.warning("Connection error, retry in %.1fs: %s", wait, str(e)[:80])
-                    await asyncio.sleep(wait)
+                    if self._request_gate is not None:
+                        if not await self._check_request_gate(attempt + 1, wait):
+                            raise
+                        log.warning("Connection error, retry after %.1fs gate wait: %s", wait, str(e)[:80])
+                    else:
+                        log.warning("Connection error, retry in %.1fs: %s", wait, str(e)[:80])
+                        await asyncio.sleep(wait)
         raise last_exc or httpx.ReadTimeout("Max retries exceeded")
 
     def _in_maintenance_window(self) -> bool:
@@ -471,6 +554,370 @@ class CourtListenerClient:
             return {"success": False, "error": f"HTTP {e.response.status_code}"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    def _no_token_result(self) -> dict:
+        """Structured skip when the v4 token is missing. No request is sent."""
+        return {
+            "success": False,
+            "skipped": "no_token",
+            "error": "no_token",
+            "status_code": 401,
+            "results": [],
+            "data": None,
+            "warning": ANONYMOUS_V4_REJECTED,
+        }
+
+    async def _read_v4(self, url: str, params: Optional[dict] = None) -> dict:
+        """One GET. 429/5xx backoff lives on ``_request_with_retry``.
+
+        Callers that follow ``next`` must cap the number of calls. This method
+        itself never requests a second page.
+        """
+        if not (self.api_token or "").strip():
+            return self._no_token_result()
+        if self._in_maintenance_window():
+            return {
+                "success": False,
+                "skipped": "maintenance",
+                "error": "maintenance",
+                "status_code": None,
+                "results": [],
+                "data": None,
+            }
+        try:
+            request_kwargs = {"params": params} if params else {}
+            resp = await self._request_with_retry("get", url, **request_kwargs)
+        except CourtListenerQuotaBlocked:
+            return {
+                "success": False,
+                "skipped": "quota_exhausted",
+                "error": "quota_exhausted",
+                "status_code": None,
+                "results": [],
+                "data": None,
+            }
+        except Exception as exc:
+            log.warning("CourtListener request failed: %s", type(exc).__name__)
+            return {
+                "success": False,
+                "error": type(exc).__name__,
+                "status_code": None,
+                "results": [],
+                "data": None,
+            }
+        code = int(getattr(resp, "status_code", 0) or 0)
+        if code == 401:
+            return {
+                "success": False,
+                "error": "unauthorized",
+                "status_code": 401,
+                "results": [],
+                "data": None,
+                "warning": "CourtListener returned 401 for an authenticated v4 call.",
+            }
+        if code != 200:
+            return {
+                "success": False,
+                "error": f"HTTP {code}",
+                "status_code": code,
+                "results": [],
+                "data": None,
+            }
+        try:
+            data = resp.json()
+        except Exception:
+            return {
+                "success": False,
+                "error": "bad_json",
+                "status_code": code,
+                "results": [],
+                "data": None,
+            }
+        results = data.get("results") if isinstance(data, dict) else None
+        return {
+            "success": True,
+            "status_code": 200,
+            "data": data,
+            "results": list(results or []),
+        }
+
+    async def search_limited(
+        self,
+        *,
+        search_type: str,
+        query: str,
+        courts: Optional[list] = None,
+        page_size: int = 15,
+    ) -> dict:
+        """One page of ``/search/``. Never follows ``next``.
+
+        ``type=r`` is federal dockets with nested RECAP documents, ``type=rd``
+        is RECAP documents, and ``type=d`` is federal dockets.
+        """
+        stype = (search_type or "").strip().lower()
+        if stype not in {"o", "r", "rd", "d", "p", "oa"}:
+            return {
+                "success": False,
+                "error": "bad_search_type",
+                "status_code": None,
+                "results": [],
+                "data": None,
+            }
+        params = {
+            "type": stype,
+            "q": (query or "").strip(),
+            "page_size": max(1, min(int(page_size or 15), 20)),
+        }
+        if courts:
+            params["court"] = " ".join(str(c).strip() for c in courts if str(c).strip())
+        return await self._read_v4("/search/", params)
+
+    async def search_recent(
+        self,
+        *,
+        search_type: str,
+        query: str,
+        courts: Optional[list] = None,
+        filed_after: Optional[str] = None,
+        entry_date_filed_after: Optional[str] = None,
+        entry_date_filed_before: Optional[str] = None,
+        start_url: Optional[str] = None,
+        page_size: int = 20,
+        max_pages: int = 50,
+        pause_s: float = 0.0,
+        until_entry_before: Optional[str] = None,
+    ) -> dict:
+        """Recent ``/search/`` hits inside a caller-supplied window.
+
+        ``entry_date_filed_after`` is the docket-entry date. ``filed_after`` is
+        the case-initiation date and is not used for bond-risk scans. Follows
+        ``next`` until the cursor ends, a page is entirely older than
+        ``until_entry_before``, or ``max_pages`` (safety ceiling 50) is hit.
+        429 backoff is ``_request_with_retry``.
+        """
+        stype = (search_type or "").strip().lower()
+        if stype not in {"o", "r", "rd", "d", "p", "oa"}:
+            return {
+                "success": False,
+                "error": "bad_search_type",
+                "status_code": None,
+                "results": [],
+                "data": None,
+                "pages_fetched": 0,
+            }
+        page_cap = max(1, min(int(max_pages or 1), 50))
+        params: Optional[dict] = {
+            "type": stype,
+            "q": (query or "").strip(),
+            "page_size": max(1, min(int(page_size or 20), 20)),
+            "order_by": "entry_date_filed desc",
+        }
+        if entry_date_filed_after:
+            params["entry_date_filed_after"] = entry_date_filed_after
+        if entry_date_filed_before:
+            params["entry_date_filed_before"] = entry_date_filed_before
+        if filed_after:
+            params["filed_after"] = filed_after
+        if courts:
+            params["court"] = " ".join(str(c).strip() for c in courts if str(c).strip())
+
+        url = start_url or "/search/"
+        if start_url:
+            params = None
+        combined: list = []
+        pages = 0
+        last_data: dict = {}
+        last: dict = {"success": False, "results": [], "status_code": None, "data": None}
+        for _ in range(page_cap):
+            last = await self._read_v4(url, params)
+            pages += 1
+            if not last.get("success"):
+                if last.get("skipped") == "quota_exhausted":
+                    if pages > 1:
+                        return {
+                            "success": True,
+                            "status_code": 200,
+                            "results": combined,
+                            "data": last_data,
+                            "pages_fetched": pages - 1,
+                            "truncated": True,
+                            "resume_url": url,
+                            "quota_exhausted": True,
+                        }
+                    last["results"] = []
+                    last["pages_fetched"] = 0
+                    return last
+                last["results"] = combined
+                last["pages_fetched"] = pages if not combined else pages - 1
+                return last
+            page_rows = list(last.get("results") or [])
+            combined.extend(page_rows)
+            data = last.get("data") if isinstance(last.get("data"), dict) else {}
+            last_data = data
+            next_url = str((data or {}).get("next") or "").strip()
+            if _search_page_left_window(page_rows, until_entry_before):
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": False,
+                }
+            truncated = bool(next_url) and pages >= page_cap
+            if not next_url or truncated:
+                payload = {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": truncated,
+                }
+                if truncated and next_url:
+                    payload["resume_url"] = next_url
+                return payload
+            url = next_url
+            params = None
+            if pause_s and self._request_gate is None:
+                await asyncio.sleep(pause_s)
+        return {
+            "success": True,
+            "status_code": 200,
+            "results": combined,
+            "pages_fetched": pages,
+            "truncated": True,
+        }
+
+    async def get_docket_brief(self, docket_id: int) -> dict:
+        """Docket metadata with field selection. One document, no related rows."""
+        params = {"fields": DOCKET_BRIEF_FIELDS}
+        return await self._read_v4(f"/dockets/{int(docket_id)}/", params)
+
+    async def list_docket_entries(
+        self,
+        docket_id: int,
+        page_size: int = 15,
+        max_pages: int = 1,
+        pause_s: float = 0.0,
+        until_date: Optional[str] = None,
+    ) -> dict:
+        """Newest docket entries, through the caller's filing window.
+
+        ``max_pages`` is a safety ceiling (at most 50). No plain_text. The
+        first request selects fields. A later page uses the ``next`` URL only.
+        Paging stops once a page contains a filing older than ``until_date``.
+        ``truncated`` is true only when the ceiling is hit while newer filings
+        may remain.
+        """
+        page_cap = max(1, min(int(max_pages or 1), 50))
+        params: Optional[dict] = {
+            "docket": int(docket_id),
+            "fields": DOCKET_ENTRY_FIELDS,
+            "order_by": "-date_filed",
+            "page_size": max(1, min(int(page_size or 15), 20)),
+        }
+        url = "/docket-entries/"
+        combined: list = []
+        pages = 0
+        window_end = str(until_date or "")[:10]
+        for _ in range(page_cap):
+            res = await self._read_v4(url, params)
+            pages += 1
+            if not res.get("success"):
+                if res.get("skipped") == "quota_exhausted":
+                    res["results"] = combined or []
+                    res["pages_fetched"] = pages - 1
+                    return res
+                res["results"] = combined or res.get("results") or []
+                res["pages_fetched"] = pages if not combined else pages - 1
+                return res
+            page_rows = list(res.get("results") or [])
+            combined.extend(page_rows)
+            data = res.get("data") if isinstance(res.get("data"), dict) else {}
+            next_url = str((data or {}).get("next") or "").strip()
+            if _entry_page_left_window(page_rows, window_end):
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": False,
+                }
+            if not next_url or pages >= page_cap:
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": bool(next_url) and pages >= page_cap,
+                }
+            url = next_url
+            params = None
+            if pause_s and self._request_gate is None:
+                await asyncio.sleep(pause_s)
+        return {
+            "success": True,
+            "status_code": 200,
+            "results": combined,
+            "pages_fetched": pages,
+            "truncated": True,
+        }
+
+    async def list_docket_parties(
+        self,
+        docket_id: int,
+        page_size: int = 20,
+        max_pages: int = 1,
+        pause_s: float = 0.0,
+    ) -> dict:
+        """Party names for one docket. Follows ``next`` up to ``max_pages`` (ceiling 50)."""
+        page_cap = max(1, min(int(max_pages or 1), 50))
+        params: Optional[dict] = {
+            "docket": int(docket_id),
+            "fields": DOCKET_PARTY_FIELDS,
+            "filter_nested_results": "true",
+            "page_size": max(1, min(int(page_size or 20), 20)),
+        }
+        url = "/parties/"
+        combined: list = []
+        pages = 0
+        for _ in range(page_cap):
+            res = await self._read_v4(url, params)
+            pages += 1
+            if not res.get("success"):
+                if res.get("skipped") == "quota_exhausted":
+                    res["results"] = combined or []
+                    res["pages_fetched"] = pages - 1
+                    return res
+                res["results"] = combined or res.get("results") or []
+                res["pages_fetched"] = pages if not combined else pages - 1
+                return res
+            combined.extend(res.get("results") or [])
+            data = res.get("data") if isinstance(res.get("data"), dict) else {}
+            next_url = str((data or {}).get("next") or "").strip()
+            if not next_url or pages >= page_cap:
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "results": combined,
+                    "data": data,
+                    "pages_fetched": pages,
+                    "truncated": bool(next_url) and pages >= page_cap,
+                }
+            url = next_url
+            params = None
+            if pause_s and self._request_gate is None:
+                await asyncio.sleep(pause_s)
+        return {
+            "success": True,
+            "status_code": 200,
+            "results": combined,
+            "pages_fetched": pages,
+            "truncated": True,
+        }
 
     async def get_opinion(self, opinion_id: int) -> dict:
         """Fetch opinion text and citations via /api/rest/v4/opinions/{id}/.

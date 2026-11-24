@@ -367,7 +367,9 @@ Escalate immediately if:
 | `SLACK_WEBHOOK_ARRESTS` | ✅ | #new-arrests channel |
 | `SLACK_WEBHOOK_LEADS` | ✅ | #leads channel (hot leads) |
 | `SLACK_WEBHOOK_ERRORS` | ✅ | #scraper-errors channel (drift / syntax exceptions) |
-| `SLACK_WEBHOOK_ALERTS` | ✅ | #alerts channel (system watchdog, health monitors, forfeitures, POA stock) |
+| `SLACK_WEBHOOK_ALERTS` | ✅ | #alerts channel (system watchdog, health monitors, forfeitures, POA stock, federal bond-risk) |
+| `FEDERAL_BOND_RISK_ALERTS` | Optional | Florida federal (FLMD/FLSD/FLND) bond-risk staff alerts. Default off. CRM notification and `#alerts` only. No client text. |
+| `COURTLISTENER_API_TOKEN` | Optional | CourtListener REST v4 token. When unset, federal bond-risk skips: anonymous v4 search and docket calls are rejected (401). |
 | `SLACK_WEBHOOK_INTAKE` | Optional | New-application Slack copy. Falls back to `SLACK_WEBHOOK_LEADS` |
 | `WIX_WEBHOOK_SECRET` | Website intake | `POST /api/webhooks/wix-intake` and `wix_portal` submits. Fail closed if unset. `GAS_API_KEY` is the fallback |
 | `GAS_WEB_APP_URL` | Sheets copy | Existing GAS Web App `/exec` for `appendIntakeLedger`. Do not mint a new URL |
