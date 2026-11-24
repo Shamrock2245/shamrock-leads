@@ -5891,4 +5891,157 @@ async def test_retry_quota_denial_and_downstream_dossier_quota_return_429(monkey
     assert calls_b2 == ["/clusters/2812209/", "/dockets/4214664/"]
 
 
+@pytest.mark.asyncio
+async def test_shared_quota_fails_closed_on_missing_db_or_revalidation_failure(monkeypatch):
+    import asyncio
+    from dashboard.routers.court_dockets import _make_cl_client, court_intel_bp
+    from dashboard.services import federal_bond_risk as fbr
+    from dashboard.services.courtlistener_client import CourtListenerClient
+    from dashboard.services.federal_bond_risk import (
+        DEFAULT_PAUSE_S,
+        _courtlistener_account_key,
+        _request_quota_id,
+        build_courtlistener_request_gate,
+    )
+
+    _enable(monkeypatch)
+    app = FastAPI()
+    app.include_router(court_intel_bp)
+
+    http_calls = []
+
+    class _CountingHTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            http_calls.append(url)
+            return None
+
+        async def aclose(self):
+            return None
+
+    def _build_counting_client():
+        cl = _make_cl_client()
+        cl._in_maintenance_window = lambda: False
+        cl._client = _CountingHTTP()
+        return cl
+
+    # Part A1: get_db() raises -> local metadata routes still work, live routes fail closed with 429 (0 HTTP calls).
+    def _broken_db():
+        raise RuntimeError("mongo down")
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", _broken_db)
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", _build_counting_client)
+        api_client = TestClient(app)
+        assert api_client.get("/api/court-intel/api-health").status_code == 200
+        for url in (
+            "/api/court-intel/live-search?q=forfeiture&state=FL",
+            "/api/court-intel/docket-lookup?docket_number=2:24-cr-00123",
+            "/api/court-intel/case-dossier?cluster_id=2812209",
+        ):
+            resp = api_client.get(url)
+            assert resp.status_code == 429
+            assert resp.json()["skipped"] == "quota_exhausted"
+    assert http_calls == []
+
+    # Part A2: DB object without federal_bond_risk_state also fails closed.
+    class _PartialDB:
+        pass
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: _PartialDB())
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", _build_counting_client)
+        resp_partial = TestClient(app).get("/api/court-intel/live-search?q=forfeiture&state=FL")
+        assert resp_partial.status_code == 429
+        assert resp_partial.json()["skipped"] == "quota_exhausted"
+    assert http_calls == []
+
+    # Direct client wired with require_shared_store=True gate raises CourtListenerQuotaBlocked when DB missing.
+    direct_client = CourtListenerClient(
+        api_token="test-token",
+        request_gate=build_courtlistener_request_gate(None, api_token="test-token", pause_s=0.0),
+    )
+    direct_client._in_maintenance_window = lambda: False
+    direct_client._client = _CountingHTTP()
+    dos_res = await direct_client.get_full_case_dossier("2812209")
+    assert dos_res["success"] is False
+    assert dos_res["skipped"] == "quota_exhausted"
+    assert http_calls == []
+
+    # Part B: delayed confirm_dispatch failures deny dispatch instead of returning True with stale timestamps.
+    clock = [1000.0]
+    monkeypatch.setattr(fbr.time, "time", lambda: clock[0])
+
+    async def fast_sleep(seconds):
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+    quota_id = _request_quota_id(_courtlistener_account_key(api_token="test-token"))
+
+    # B1: transient MongoDB error during confirm_dispatch find_one denies dispatch.
+    db_err = _DB()
+    db_err.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [998.0],
+        "quota_revision": 0,
+    })
+    orig_find_err = db_err.federal_bond_risk_state.find_one
+    find_calls = {"n": 0}
+
+    async def fail_on_revalidation(filt=None, projection=None, sort=None):
+        find_calls["n"] += 1
+        # Call 1: _load_request_quota, Call 2: reserve_paced; Call 3+: confirm_dispatch
+        if find_calls["n"] >= 3:
+            raise RuntimeError("mongo transient during confirm")
+        return await orig_find_err(filt, projection, sort)
+
+    db_err.federal_bond_risk_state.find_one = fail_on_revalidation
+    gate_err = build_courtlistener_request_gate(db_err, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+    assert await gate_err(0, 0.0) is False
+
+    # B2: missing quota document during confirm_dispatch denies dispatch.
+    clock[0] = 1000.0
+    db_missing = _DB()
+    db_missing.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [998.0],
+        "quota_revision": 0,
+    })
+    orig_find_missing = db_missing.federal_bond_risk_state.find_one
+    missing_calls = {"n": 0}
+
+    async def missing_on_revalidation(filt=None, projection=None, sort=None):
+        missing_calls["n"] += 1
+        if missing_calls["n"] >= 3:
+            return None
+        return await orig_find_missing(filt, projection, sort)
+
+    db_missing.federal_bond_risk_state.find_one = missing_on_revalidation
+    gate_missing = build_courtlistener_request_gate(db_missing, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+    assert await gate_missing(0, 0.0) is False
+
+    # B3: persistent CAS conflict during confirm_dispatch update_one denies dispatch.
+    clock[0] = 1000.0
+    db_cas = _DB()
+    db_cas.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [998.0],
+        "quota_revision": 0,
+    })
+    orig_update_cas = db_cas.federal_bond_risk_state.update_one
+    update_calls = {"n": 0}
+
+    async def cas_mismatch_on_revalidation(filt, update, upsert=False):
+        update_calls["n"] += 1
+        if update_calls["n"] == 1:
+            res = await orig_update_cas(filt, update, upsert=upsert)
+            # reserve_paced succeeded; inject a late prior timestamp so confirm_dispatch must rewrite + contend.
+            db_cas.federal_bond_risk_state.docs[0]["timestamps"].append(clock[0] + 10.0)
+            return res
+        return type("_Missed", (), {"matched_count": 0, "modified_count": 0})()
+
+    db_cas.federal_bond_risk_state.update_one = cas_mismatch_on_revalidation
+    gate_cas = build_courtlistener_request_gate(db_cas, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+    assert await gate_cas(0, 0.0) is False
 

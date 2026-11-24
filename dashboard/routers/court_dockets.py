@@ -29,7 +29,8 @@ def _make_cl_client():
     client = CourtListenerClient(api_token=token if token else None)
     try:
         db = get_db()
-    except Exception:
+    except Exception as exc:
+        log.warning("CourtListener shared quota DB unavailable: %s", type(exc).__name__)
         db = None
     client.set_request_gate(
         build_courtlistener_request_gate(
@@ -38,6 +39,7 @@ def _make_cl_client():
             pause_s=0.0,
             run_limit=MAX_REQUESTS_PER_MINUTE,
             block_on_minute_limit=True,
+            require_shared_store=True,
         )
     )
     return client
@@ -366,21 +368,26 @@ async def api_court_intel_case_dossier(
             content={"success": False, "error": "cluster_id, url, or source_id is required"},
         )
 
-    db = get_db()
-    local_doc = None
     try:
-        lookup_ids = [x for x in (cluster_id.strip(), source_id.strip()) if x]
-        if lookup_ids:
-            local_doc = await db.court_outcomes.find_one(
-                {"source": "courtlistener", "$or": [{"source_id": {"$in": lookup_ids}}, {"cluster_id": {"$in": lookup_ids}}]}
-            )
-    except Exception:
-        local_doc = None
+        db = get_db()
+    except Exception as exc:
+        log.warning("CourtListener case-dossier DB unavailable: %s", type(exc).__name__)
+        db = None
+    local_doc = None
+    if db is not None:
+        try:
+            lookup_ids = [x for x in (cluster_id.strip(), source_id.strip()) if x]
+            if lookup_ids:
+                local_doc = await db.court_outcomes.find_one(
+                    {"source": "courtlistener", "$or": [{"source_id": {"$in": lookup_ids}}, {"cluster_id": {"$in": lookup_ids}}]}
+                )
+        except Exception:
+            local_doc = None
 
     client = _make_cl_client()
     try:
         parsed_id = client.parse_cluster_id_from_url(target)
-        if parsed_id and not local_doc:
+        if parsed_id and not local_doc and db is not None:
             try:
                 local_doc = await db.court_outcomes.find_one(
                     {"source": "courtlistener", "$or": [{"source_id": str(parsed_id)}, {"cluster_id": parsed_id}]}

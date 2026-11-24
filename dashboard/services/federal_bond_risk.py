@@ -2244,6 +2244,7 @@ class _RequestQuota:
         pause_s: float = DEFAULT_PAUSE_S,
         min_delay: float = 0.0,
         block_on_minute_limit: bool = False,
+        require_shared_store: bool = True,
     ) -> tuple[bool, float, float]:
         """Atomically reserve one paced virtual-clock slot via CAS.
 
@@ -2282,6 +2283,9 @@ class _RequestQuota:
             return True, wait, ready_at, updated
 
         if collection is None:
+            if require_shared_store:
+                log.warning("Federal bond-risk quota reserve_paced denied: shared quota store unavailable")
+                return False, 0.0, 0.0
             ts_now = self.prune()
             ok, wait, scheduled_ts, updated = _schedule(self.timestamps, ts_now)
             self.timestamps = updated
@@ -2336,7 +2340,8 @@ class _RequestQuota:
         scheduled_ts: float,
         *,
         pause_s: float = DEFAULT_PAUSE_S,
-    ) -> tuple[float, float]:
+        require_shared_store: bool = True,
+    ) -> tuple[bool, float, float]:
         """Revalidate spacing upon wakeup and update the reserved slot timestamp.
 
         If an earlier task woke late and shifted its own timestamp forward,
@@ -2370,32 +2375,38 @@ class _RequestQuota:
                         break
                     earliest = next_ready
             extra_wait = max(0.0, earliest - effective_now)
-            if extra_wait == 0.0 and abs(earliest - float(scheduled_ts)) <= 0.05:
+            if removed and extra_wait == 0.0 and abs(earliest - float(scheduled_ts)) <= 0.05:
                 return 0.0, float(scheduled_ts), stored, False
             updated = sorted([*others, earliest])[-500:]
             return extra_wait, earliest, updated, True
 
         collection = _shared_quota_collection(db)
         if collection is None:
+            if require_shared_store:
+                log.warning("Federal bond-risk quota confirm_dispatch denied: shared quota store unavailable")
+                return False, 0.0, float(scheduled_ts)
             actual_now = time.time()
             effective_now = max(actual_now, float(scheduled_ts))
             pruned = self._prune_values(self.timestamps, effective_now)
             extra_wait, earliest, updated, changed = _revalidate(pruned, effective_now)
             self.timestamps = updated
-            return (extra_wait, earliest) if changed else (0.0, float(scheduled_ts))
+            return (True, extra_wait, earliest) if changed else (True, 0.0, float(scheduled_ts))
 
         quota_id = _request_quota_id(self.account_key)
         for _ in range(8):
             actual_now = time.time()
             effective_now = max(actual_now, float(scheduled_ts))
             try:
-                row = await collection.find_one({"_id": quota_id}) or {}
+                row = await collection.find_one({"_id": quota_id})
+                if row is None:
+                    log.warning("Federal bond-risk quota confirm_dispatch denied: quota document missing")
+                    return False, 0.0, float(scheduled_ts)
                 rev = int(row.get("quota_revision") or 0)
                 stored = self._prune_values(row.get("timestamps") or [], effective_now)
                 extra_wait, earliest, updated, changed = _revalidate(stored, effective_now)
                 if not changed:
                     self.timestamps = stored
-                    return 0.0, float(scheduled_ts)
+                    return True, 0.0, float(scheduled_ts)
                 res = await collection.update_one(
                     _quota_rev_filter(quota_id, rev),
                     {"$set": {
@@ -2406,12 +2417,12 @@ class _RequestQuota:
                 )
                 if getattr(res, "matched_count", 0) == 1:
                     self.timestamps = updated
-                    return extra_wait, earliest
+                    return True, extra_wait, earliest
             except Exception as exc:
                 log.warning("Federal bond-risk quota confirm_dispatch failed: %s", type(exc).__name__)
-                return 0.0, float(scheduled_ts)
+                return False, 0.0, float(scheduled_ts)
         log.warning("Federal bond-risk quota confirm_dispatch failed after CAS retries")
-        return 0.0, float(scheduled_ts)
+        return False, 0.0, float(scheduled_ts)
 
     async def pace(
         self,
@@ -2479,6 +2490,7 @@ def build_courtlistener_request_gate(
     run_limit: Optional[int] = None,
     quota: Optional[_RequestQuota] = None,
     block_on_minute_limit: bool = False,
+    require_shared_store: bool = True,
 ):
     """Build an async per-attempt request gate backed by the shared account quota."""
     account_key = _courtlistener_account_key(client=client, api_token=api_token)
@@ -2487,6 +2499,9 @@ def build_courtlistener_request_gate(
 
     async def _gate(attempt: int, min_delay: float = 0.0) -> bool:
         nonlocal active_quota
+        if require_shared_store and _shared_quota_collection(db) is None:
+            log.warning("CourtListener request denied: shared quota store unavailable")
+            return False
         if active_quota is None:
             active_quota = await _load_request_quota(
                 db, run_limit=effective_run, account_key=account_key,
@@ -2496,19 +2511,29 @@ def build_courtlistener_request_gate(
             pause_s=pause_s,
             min_delay=min_delay,
             block_on_minute_limit=block_on_minute_limit,
+            require_shared_store=require_shared_store,
         )
         if not allowed:
             return False
         if wait > 0:
             await asyncio.sleep(wait)
             current_ts = scheduled_ts
+            confirmed = False
             for _ in range(8):
-                extra_wait, current_ts = await active_quota.confirm_dispatch(
-                    db, current_ts, pause_s=pause_s,
+                ok, extra_wait, current_ts = await active_quota.confirm_dispatch(
+                    db,
+                    current_ts,
+                    pause_s=pause_s,
+                    require_shared_store=require_shared_store,
                 )
+                if not ok:
+                    return False
                 if extra_wait <= 0:
+                    confirmed = True
                     break
                 await asyncio.sleep(extra_wait)
+            if not confirmed:
+                return False
         return True
 
     return _gate
