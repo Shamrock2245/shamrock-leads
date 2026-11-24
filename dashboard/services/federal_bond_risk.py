@@ -1532,7 +1532,9 @@ def _stop_if_blocked(result: dict) -> None:
             result.get("status_code") == 429
             and result.get("skipped") != "quota_exhausted"
         )
+        or result.get("upstream_status_code") == 429
         or result.get("error") in {"ReadTimeout", "ConnectError"}
+        or result.get("upstream_error") in {"ReadTimeout", "ConnectError"}
     ):
         raise _ScanStop(
             "CourtListener rate limit or connection failure. Scan stopped with no alerts written.",
@@ -2235,6 +2237,193 @@ class _RequestQuota:
         log.warning("Federal bond-risk quota dispatch stamp failed after CAS retries")
         return reserve_ts
 
+    async def reserve_paced(
+        self,
+        db,
+        *,
+        pause_s: float = DEFAULT_PAUSE_S,
+        min_delay: float = 0.0,
+        block_on_minute_limit: bool = False,
+        require_shared_store: bool = True,
+    ) -> tuple[bool, float, float]:
+        """Atomically reserve one paced virtual-clock slot via CAS.
+
+        Computes the earliest dispatch time that obeys inter-request spacing,
+        rolling 1-minute limits, and any caller retry backoff, and writes that
+        scheduled timestamp into MongoDB before sleeping so concurrent callers
+        queue behind it instead of bursting simultaneously.
+        """
+        collection = _shared_quota_collection(db)
+        delay_floor = max(0.0, float(min_delay or 0.0))
+
+        def _schedule(stored: list[float], ts_now: float) -> tuple[bool, float, float, list[float]]:
+            ordered = sorted(stored)
+            if self._available_for(ordered, ts_now) < 1:
+                return False, 0.0, 0.0, ordered
+            ready_at = ts_now + delay_floor
+            if pause_s > 0:
+                if self.run_used > 0:
+                    ready_at = max(ready_at, ts_now + float(pause_s))
+                if ordered:
+                    ready_at = max(ready_at, ordered[-1] + float(pause_s))
+                while True:
+                    in_window = [ts for ts in ordered if ts >= ready_at - 60.0]
+                    if len(in_window) < self.minute_limit:
+                        break
+                    next_ready = in_window[-self.minute_limit] + 60.0
+                    if next_ready <= ready_at:
+                        break
+                    ready_at = next_ready
+            elif block_on_minute_limit:
+                recent = [ts for ts in ordered if ts >= ts_now - 60.0]
+                if len(recent) >= self.minute_limit:
+                    return False, 0.0, 0.0, ordered
+            wait = max(0.0, ready_at - ts_now)
+            updated = sorted([*ordered, ready_at])[-500:]
+            return True, wait, ready_at, updated
+
+        if collection is None:
+            if require_shared_store:
+                log.warning("Federal bond-risk quota reserve_paced denied: shared quota store unavailable")
+                return False, 0.0, 0.0
+            ts_now = self.prune()
+            ok, wait, scheduled_ts, updated = _schedule(self.timestamps, ts_now)
+            self.timestamps = updated
+            if not ok:
+                return False, 0.0, 0.0
+            self.run_used += 1
+            return True, wait, scheduled_ts
+
+        quota_id = _request_quota_id(self.account_key)
+        for _ in range(8):
+            ts_now = time.time()
+            try:
+                row = await collection.find_one({"_id": quota_id})
+                if row is None:
+                    try:
+                        await collection.update_one(
+                            {"_id": quota_id},
+                            {"$setOnInsert": {"timestamps": [], "quota_revision": 0, "updated_at": _now()}},
+                            upsert=True,
+                        )
+                    except Exception as exc:
+                        if not _duplicate_key(exc):
+                            raise
+                    row = await collection.find_one({"_id": quota_id}) or {}
+                rev = int(row.get("quota_revision") or 0)
+                stored = self._prune_values(row.get("timestamps") or [], ts_now)
+                ok, wait, scheduled_ts, updated = _schedule(stored, ts_now)
+                if not ok:
+                    self.timestamps = updated
+                    return False, 0.0, 0.0
+                res = await collection.update_one(
+                    _quota_rev_filter(quota_id, rev),
+                    {"$set": {
+                        "timestamps": updated,
+                        "quota_revision": rev + 1,
+                        "updated_at": _now(),
+                    }},
+                )
+                if getattr(res, "matched_count", 0) == 1:
+                    self.timestamps = updated
+                    self.run_used += 1
+                    return True, wait, scheduled_ts
+            except Exception as exc:
+                log.warning("Federal bond-risk quota reserve_paced failed: %s", type(exc).__name__)
+                return False, 0.0, 0.0
+        log.warning("Federal bond-risk quota reserve_paced failed after CAS retries")
+        return False, 0.0, 0.0
+
+    async def confirm_dispatch(
+        self,
+        db,
+        scheduled_ts: float,
+        *,
+        pause_s: float = DEFAULT_PAUSE_S,
+        require_shared_store: bool = True,
+    ) -> tuple[bool, float, float]:
+        """Revalidate spacing upon wakeup and update the reserved slot timestamp.
+
+        If an earlier task woke late and shifted its own timestamp forward,
+        any following task waking around its earlier reservation sees that
+        shift, pushes its own slot forward atomically, and sleeps the extra
+        delay before dispatching.
+        """
+        def _revalidate(stored: list[float], effective_now: float) -> tuple[float, float, list[float], bool]:
+            others = list(stored)
+            removed = False
+            idx = len(others) - 1
+            while idx >= 0:
+                if abs(float(others[idx]) - float(scheduled_ts)) < 1e-6:
+                    others.pop(idx)
+                    removed = True
+                    break
+                idx -= 1
+            if not removed:
+                others = sorted(others)
+            earliest = effective_now
+            if pause_s > 0:
+                prior = sorted(ts for ts in others if ts <= effective_now)
+                if prior:
+                    earliest = max(earliest, prior[-1] + float(pause_s))
+                while True:
+                    in_window = [ts for ts in prior if ts >= earliest - 60.0]
+                    if len(in_window) < self.minute_limit:
+                        break
+                    next_ready = in_window[-self.minute_limit] + 60.0
+                    if next_ready <= earliest:
+                        break
+                    earliest = next_ready
+            extra_wait = max(0.0, earliest - effective_now)
+            if removed and extra_wait == 0.0 and abs(earliest - float(scheduled_ts)) <= 0.05:
+                return 0.0, float(scheduled_ts), stored, False
+            updated = sorted([*others, earliest])[-500:]
+            return extra_wait, earliest, updated, True
+
+        collection = _shared_quota_collection(db)
+        if collection is None:
+            if require_shared_store:
+                log.warning("Federal bond-risk quota confirm_dispatch denied: shared quota store unavailable")
+                return False, 0.0, float(scheduled_ts)
+            actual_now = time.time()
+            effective_now = max(actual_now, float(scheduled_ts))
+            pruned = self._prune_values(self.timestamps, effective_now)
+            extra_wait, earliest, updated, changed = _revalidate(pruned, effective_now)
+            self.timestamps = updated
+            return (True, extra_wait, earliest) if changed else (True, 0.0, float(scheduled_ts))
+
+        quota_id = _request_quota_id(self.account_key)
+        for _ in range(8):
+            actual_now = time.time()
+            effective_now = max(actual_now, float(scheduled_ts))
+            try:
+                row = await collection.find_one({"_id": quota_id})
+                if row is None:
+                    log.warning("Federal bond-risk quota confirm_dispatch denied: quota document missing")
+                    return False, 0.0, float(scheduled_ts)
+                rev = int(row.get("quota_revision") or 0)
+                stored = self._prune_values(row.get("timestamps") or [], effective_now)
+                extra_wait, earliest, updated, changed = _revalidate(stored, effective_now)
+                if not changed:
+                    self.timestamps = stored
+                    return True, 0.0, float(scheduled_ts)
+                res = await collection.update_one(
+                    _quota_rev_filter(quota_id, rev),
+                    {"$set": {
+                        "timestamps": updated,
+                        "quota_revision": rev + 1,
+                        "updated_at": _now(),
+                    }},
+                )
+                if getattr(res, "matched_count", 0) == 1:
+                    self.timestamps = updated
+                    return True, extra_wait, earliest
+            except Exception as exc:
+                log.warning("Federal bond-risk quota confirm_dispatch failed: %s", type(exc).__name__)
+                return False, 0.0, float(scheduled_ts)
+        log.warning("Federal bond-risk quota confirm_dispatch failed after CAS retries")
+        return False, 0.0, float(scheduled_ts)
+
     async def pace(
         self,
         pause_s: float,
@@ -2290,6 +2479,64 @@ async def _load_request_quota(
     quota = _RequestQuota(timestamps=raw_timestamps, run_limit=effective_run, account_key=account)
     quota.prune()
     return quota
+
+
+def build_courtlistener_request_gate(
+    db,
+    *,
+    api_token: Optional[str] = None,
+    client=None,
+    pause_s: float = DEFAULT_PAUSE_S,
+    run_limit: Optional[int] = None,
+    quota: Optional[_RequestQuota] = None,
+    block_on_minute_limit: bool = False,
+    require_shared_store: bool = True,
+):
+    """Build an async per-attempt request gate backed by the shared account quota."""
+    account_key = _courtlistener_account_key(client=client, api_token=api_token)
+    effective_run = max(int(run_limit or MAX_REQUESTS_PER_RUN), 1)
+    active_quota = quota
+
+    async def _gate(attempt: int, min_delay: float = 0.0) -> bool:
+        nonlocal active_quota
+        if require_shared_store and _shared_quota_collection(db) is None:
+            log.warning("CourtListener request denied: shared quota store unavailable")
+            return False
+        if active_quota is None:
+            active_quota = await _load_request_quota(
+                db, run_limit=effective_run, account_key=account_key,
+            )
+        allowed, wait, scheduled_ts = await active_quota.reserve_paced(
+            db,
+            pause_s=pause_s,
+            min_delay=min_delay,
+            block_on_minute_limit=block_on_minute_limit,
+            require_shared_store=require_shared_store,
+        )
+        if not allowed:
+            return False
+        if wait > 0:
+            await asyncio.sleep(wait)
+            current_ts = scheduled_ts
+            confirmed = False
+            for _ in range(8):
+                ok, extra_wait, current_ts = await active_quota.confirm_dispatch(
+                    db,
+                    current_ts,
+                    pause_s=pause_s,
+                    require_shared_store=require_shared_store,
+                )
+                if not ok:
+                    return False
+                if extra_wait <= 0:
+                    confirmed = True
+                    break
+                await asyncio.sleep(extra_wait)
+            if not confirmed:
+                return False
+        return True
+
+    return _gate
 
 
 @dataclass
@@ -2910,6 +3157,7 @@ async def _hydrate(
                 party_names,
                 entry_dates=entry_dates,
                 fallback_date=hit_date,
+                allow_doc_fallback=entries_complete,
             )
         for doc in hit.get("recap_documents") or []:
             if not isinstance(doc, dict):
@@ -2926,6 +3174,7 @@ async def _hydrate(
                 party_names,
                 entry_dates=entry_dates,
                 fallback_date=hit_date,
+                allow_doc_fallback=entries_complete,
             )
     return view, "", entry_error, brief_error, False
 
@@ -2940,6 +3189,7 @@ def _attach_document(
     *,
     entry_dates: Optional[dict[str, str]] = None,
     fallback_date: str = "",
+    allow_doc_fallback: bool = True,
 ) -> None:
     """Classify one RECAP document, using its docket entry as the filing id when known."""
     doc_date = _normalize_filing_date(_hit_entry_date(doc)) or _normalize_filing_date(fallback_date)
@@ -2952,6 +3202,8 @@ def _attach_document(
         view.seen_filing_ids.add(linked_filing)
         linked_date = (entry_dates or {}).get(linked_filing) or doc_date
         _extend_events(view, blob, linked_filing, party_names, filing_date=linked_date)
+        return
+    if not allow_doc_fallback:
         return
     doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
     if not doc_id and blob.strip():
@@ -4259,15 +4511,15 @@ async def run_federal_bond_risk_scan(
             }
         quota = await _load_request_quota(db, run_limit=max_requests, account_key=account_key)
         if callable(getattr(client, "set_request_gate", None)):
-            async def _request_gate(attempt: int, min_delay: float = 0.0) -> bool:
-                granted, reserve_ts = await quota.reserve(db, 1, min_required=1)
-                if granted == 0:
-                    return False
-                if await quota.pace(pause_s, already_reserved=1, min_delay=min_delay) > 0:
-                    await quota.mark_dispatched(db, 1, reserve_ts)
-                return True
-
-            client.set_request_gate(_request_gate)
+            client.set_request_gate(
+                build_courtlistener_request_gate(
+                    db,
+                    client=client,
+                    pause_s=pause_s,
+                    run_limit=max_requests,
+                    quota=quota,
+                )
+            )
             gate_bound = True
         try:
             collected = await _collect_dockets(client, pause_s, db, quota=quota)

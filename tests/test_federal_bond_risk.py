@@ -5299,3 +5299,949 @@ async def test_quota_slot_timestamps_record_actual_dispatch_time_after_pacing_an
         in_window = [val for val in all_events if ts - 60.0 < val <= ts]
         assert len(in_window) <= MAX_REQUESTS_PER_MINUTE
 
+
+@pytest.mark.asyncio
+async def test_all_courtlistener_callers_share_account_quota_and_space_concurrent_jobs(monkeypatch):
+    import asyncio
+    from dashboard.routers.court_dockets import _make_cl_client, court_intel_bp
+    from dashboard.services.court_data_ingestor import run_ingestion
+    from dashboard.services.docket_monitor import DocketMonitor
+    from dashboard.services.federal_bond_risk import (
+        DEFAULT_PAUSE_S,
+        MAX_REQUESTS_PER_HOUR,
+        MAX_REQUESTS_PER_MINUTE,
+        _courtlistener_account_key,
+        _request_quota_id,
+        build_courtlistener_request_gate,
+    )
+
+    _enable(monkeypatch)
+    clock = [1000.0]
+
+    class _FakeTime:
+        @staticmethod
+        def time():
+            return clock[0]
+
+    async def fake_sleep(seconds):
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.time", _FakeTime)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class _Response:
+        def __init__(self, status_code, payload, headers=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    account_key = _courtlistener_account_key(api_token="test-token")
+    quota_id = _request_quota_id(account_key)
+
+    # 1. DocketMonitor shares the account quota: near the hourly ceiling it uses only the remaining slot,
+    #    stops with quota_exhausted=True, and leaves run_federal_bond_risk_scan with 0 HTTP calls.
+    dm_calls = []
+
+    class _DMHTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            dm_calls.append((clock[0], url, dict(params or {})))
+            return _Response(200, {"results": []})
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    db.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [clock[0] - 20.0] * (MAX_REQUESTS_PER_HOUR - 1),
+        "quota_revision": 0,
+    })
+    dm = DocketMonitor(db, courtlistener_token="test-token")
+    dm._client = _DMHTTP()
+    dm_res = await dm.scan_active_bonds(limit=10)
+    assert dm_res["quota_exhausted"] is True
+    assert len(dm_calls) == 1
+    assert len(db.federal_bond_risk_state.docs[0]["timestamps"]) == MAX_REQUESTS_PER_HOUR
+
+    blocked_court = _CourtListener(hits=[])
+    fbr_after_dm = await run_federal_bond_risk_scan(
+        db, client=blocked_court, notifier=_Notifier(), pause_s=0, clients=[_client()],
+    )
+    assert fbr_after_dm["skipped"] == "quota_exhausted"
+    assert fbr_after_dm["requests_made"] == 0
+    assert blocked_court.calls == []
+
+    # 2. court_data_ingestor wires the shared gate into CourtListenerClient so exhausted quota skips HTTP.
+    ingest_calls = []
+
+    class _IngestClient(CourtListenerClient):
+        def __init__(self, api_token=None):
+            super().__init__(api_token=api_token)
+            self._in_maintenance_window = lambda: False
+
+        async def _get_client(self):
+            class _H:
+                is_closed = False
+
+                async def get(self, url, params=None):
+                    ingest_calls.append((url, dict(params or {})))
+                    return _Response(200, {"results": []})
+
+            return _H()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("dashboard.services.courtlistener_client.CourtListenerClient", _IngestClient)
+    ingest_res = await run_ingestion(db, days_back=7, states=["FL"])
+    assert ingest_res["success"] is False
+    assert ingest_res["skipped"] == "quota_exhausted"
+    assert ingest_res["incomplete_coverage"] is True
+    assert ingest_res["states_skipped_quota"] == ["FL"]
+    assert ingest_res["ingested"] == 0
+    assert ingest_calls == []
+
+    # When hourly headroom exists (e.g., fresh quota), run_ingestion records into the same shared bucket.
+    db.federal_bond_risk_state.docs[0]["timestamps"] = []
+    ingest_ok = await run_ingestion(db, days_back=7, states=["FL"])
+    assert ingest_ok["success"] is True
+    assert len(ingest_calls) == 1
+    assert len(db.federal_bond_risk_state.docs[0]["timestamps"]) == 1
+
+    # Restore default CourtListenerClient before testing interactive route gate.
+    monkeypatch.setattr("dashboard.services.courtlistener_client.CourtListenerClient", CourtListenerClient)
+
+    # 3. Interactive routes (_make_cl_client + court_intel_bp) enforce 5/min ceiling via 429 without blocking.
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db)
+    db.federal_bond_risk_state.docs[0]["timestamps"] = [clock[0] - 5.0] * MAX_REQUESTS_PER_MINUTE
+    live_client = _make_cl_client()
+    live_client._in_maintenance_window = lambda: False
+    live_http_calls = []
+
+    class _LiveHTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            live_http_calls.append(url)
+            return _Response(200, {"results": []})
+
+        async def aclose(self):
+            return None
+
+    live_client._client = _LiveHTTP()
+    app = FastAPI()
+    app.include_router(court_intel_bp)
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", lambda: live_client)
+        api_client = TestClient(app)
+        resp_ls = api_client.get("/api/court-intel/live-search?q=forfeiture&state=FL")
+        assert resp_ls.status_code == 429
+        assert resp_ls.json()["skipped"] == "quota_exhausted"
+        resp_dl = api_client.get("/api/court-intel/docket-lookup?docket_number=2:24-cr-00123")
+        assert resp_dl.status_code == 429
+        assert resp_dl.json()["skipped"] == "quota_exhausted"
+        resp_dos = api_client.get("/api/court-intel/case-dossier?cluster_id=2812209")
+        assert resp_dos.status_code == 429
+        assert resp_dos.json()["skipped"] == "quota_exhausted"
+    assert live_http_calls == []
+
+    # 4. Two concurrent virtual-clock gated jobs serialize onto distinct non-overlapping dispatch slots.
+    clock[0] = 1000.0
+    db.federal_bond_risk_state.docs[0]["timestamps"] = [990.0] * MAX_REQUESTS_PER_MINUTE
+    concurrent_dispatches = []
+
+    class _ConcurrentHTTP:
+        is_closed = False
+
+        def __init__(self, label):
+            self.label = label
+
+        async def get(self, url, params=None):
+            concurrent_dispatches.append((clock[0], self.label))
+            return _Response(200, {"results": []})
+
+    c1 = CourtListenerClient(
+        api_token="test-token",
+        request_gate=build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S),
+    )
+    c1._in_maintenance_window = lambda: False
+    c1._client = _ConcurrentHTTP("job1")
+
+    c2 = CourtListenerClient(
+        api_token="test-token",
+        request_gate=build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S),
+    )
+    c2._in_maintenance_window = lambda: False
+    c2._client = _ConcurrentHTTP("job2")
+
+    await asyncio.gather(
+        c1.search_limited(search_type="r", query="warrant", courts=["flmd"]),
+        c2.search_limited(search_type="rd", query="warrant", courts=["flmd"]),
+    )
+    times = sorted(ts for ts, _label in concurrent_dispatches)
+    assert times == [pytest.approx(1050.0), pytest.approx(1062.0)]
+
+
+@pytest.mark.asyncio
+async def test_unlinked_rd_hit_defers_doc_id_until_entry_hydration_recovers(monkeypatch):
+    _enable(monkeypatch)
+    today = datetime.now(timezone.utc).date().isoformat()
+    client = _client(name="John Smith", dobs=["1985-01-15"], numbers=["2:24-cr-00123", "2:24-cr-00456"])
+
+    class _RecoveredEntryCourt(_CourtListener):
+        def __init__(self):
+            super().__init__(parties=[_defendant(dob="01/15/1985")])
+            self.entries_error_ids = {1002}
+            self.search_calls = 0
+
+        async def search_recent(self, **kwargs):
+            self.calls.append(("search_recent", kwargs))
+            if kwargs["search_type"] == "r":
+                self.search_calls += 1
+                return {
+                    "success": True,
+                    "truncated": False,
+                    "results": [
+                        _hit(id=1001, docket_id=1001, docketNumber="2:24-cr-00123", recap_documents=[]),
+                    ],
+                }
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [{
+                    "id": 55,
+                    "docket_id": 1002,
+                    "court_id": "flmd",
+                    "caseName": "United States v. John Smith",
+                    "docketNumber": "2:24-cr-00456",
+                    "description": "Arrest warrant issued for John Smith",
+                    "entry_date_filed": today,
+                }],
+            }
+
+        async def list_docket_parties(self, docket_id, **kwargs):
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [_defendant(dob="01/15/1985", docket_id=int(docket_id))],
+            }
+
+        async def get_docket_brief(self, docket_id):
+            num = "2:24-cr-00123" if int(docket_id) == 1001 else "2:24-cr-00456"
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {"id": docket_id, "court_id": "flmd", "docket_number": num, "case_name": "United States v. John Smith"},
+            }
+
+        async def list_docket_entries(self, docket_id, **kwargs):
+            if int(docket_id) in self.entries_error_ids:
+                return {"success": False, "error": "HTTP 503", "status_code": 503, "results": []}
+            if int(docket_id) == 1001:
+                return {
+                    "success": True,
+                    "truncated": False,
+                    "results": [{"id": 11, "description": "Detention hearing", "date_filed": today}],
+                }
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [{
+                    "id": 42,
+                    "description": "Arrest warrant issued for John Smith",
+                    "date_filed": today,
+                    "recap_documents": [{"id": 55}],
+                }],
+            }
+
+    court = _RecoveredEntryCourt()
+    db = _DB()
+    notifier = _Notifier()
+
+    # Scan 1: docket 1002 entry hydration fails while its rd hit id=55 has no docket_entry_id ->
+    # do NOT mint a provisional doc:55 row; retain docket 1002 in pending_slice.
+    scan1 = await _scan(db, court, [client], notifier=notifier)
+    assert scan1["success"] is True
+    assert scan1["incomplete_coverage"] is True
+    assert [row["docket_id"] for row in db.docket_events.docs] == ["1001"]
+    assert all(not str(row.get("filing_id") or "").startswith("doc:") for row in db.docket_events.docs)
+
+    # Scan 2: docket 1002 recovers from pending_slice with full entries mapping doc 55 -> entry:42;
+    # creates exactly one confirmed row and zero spurious withdrawals.
+    court.entries_error_ids = set()
+    scan2 = await _scan(db, court, [client], notifier=notifier)
+    assert scan2["success"] is True
+    assert scan2["incomplete_coverage"] is False
+    assert court.search_calls == 1
+    rows_1002 = [row for row in db.docket_events.docs if row["docket_id"] == "1002"]
+    assert len(rows_1002) == 1
+    assert rows_1002[0]["filing_id"] == "entry:42"
+    assert rows_1002[0]["match_status"] == "confirmed"
+    assert all(row["match_status"] != "withdrawn" for row in db.docket_events.docs)
+
+
+@pytest.mark.asyncio
+async def test_docket_monitor_rotates_bond_batch_across_quota_truncated_scans(monkeypatch):
+    import time
+    from dashboard.services.docket_monitor import DocketMonitor
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_HOUR,
+        _courtlistener_account_key,
+        _request_quota_id,
+    )
+
+    _enable(monkeypatch)
+    now = time.time()
+    account_key = _courtlistener_account_key(api_token="test-token")
+    quota_id = _request_quota_id(account_key)
+    queried_names = []
+
+    class _Response:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"results": []}
+
+    class _DMHTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            queried_names.append(((params or {}).get("q") or "", (params or {}).get("type") or ""))
+            return _Response()
+
+    db = _DB()
+    for idx in range(1, 5):
+        db.active_bonds.docs.append({
+            "_id": f"bond-{idx}",
+            "Bond_Case_ID": f"bond-{idx}",
+            "Defendant_ID": f"def-{idx}",
+            "defendant_name": f"Client {idx}",
+            "status": "active",
+        })
+
+    # Seed 47/50 hourly requests -> 3 remaining slots: bond-1 finishes (r+o = 2 slots),
+    # bond-2 starts r (slot 3) and stops before o; cursor stays on bond-1 so bond-2 is not skipped.
+    db.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 20.0] * (MAX_REQUESTS_PER_HOUR - 3),
+        "quota_revision": 0,
+    })
+    dm = DocketMonitor(db, courtlistener_token="test-token", pause_s=0)
+    dm._client = _DMHTTP()
+    res1 = await dm.scan_active_bonds(limit=10)
+    assert res1["quota_exhausted"] is True
+    assert res1["bonds_scanned"] == 1
+    assert queried_names == [('"Client 1"', "r"), ('"Client 1"', "o"), ('"Client 2"', "r")]
+
+    # Give 4 slots -> resumes at bond-2 and bond-3, stops before bond-4.
+    queried_names.clear()
+    db.federal_bond_risk_state.docs[0]["timestamps"] = [now - 20.0] * (MAX_REQUESTS_PER_HOUR - 4)
+    res2 = await dm.scan_active_bonds(limit=10)
+    assert res2["quota_exhausted"] is True
+    assert res2["bonds_scanned"] == 2
+    assert queried_names == [
+        ('"Client 2"', "r"), ('"Client 2"', "o"),
+        ('"Client 3"', "r"), ('"Client 3"', "o"),
+    ]
+
+    # Reset quota -> finishes bond-4, wraps cursor back to None, and next scan starts at bond-1.
+    queried_names.clear()
+    db.federal_bond_risk_state.docs[0]["timestamps"] = []
+    res3 = await dm.scan_active_bonds(limit=10)
+    assert res3["quota_exhausted"] is False
+    assert res3["bonds_scanned"] == 1
+    assert queried_names == [('"Client 4"', "r"), ('"Client 4"', "o")]
+
+    queried_names.clear()
+    res4 = await dm.scan_active_bonds(limit=10)
+    assert res4["quota_exhausted"] is False
+    assert res4["bonds_scanned"] == 4
+    assert queried_names[0] == ('"Client 1"', "r")
+
+
+@pytest.mark.asyncio
+async def test_delayed_reserved_dispatch_preserves_spacing_for_following_sleeper(monkeypatch):
+    import asyncio
+    from dashboard.services.federal_bond_risk import (
+        DEFAULT_PAUSE_S,
+        MAX_REQUESTS_PER_MINUTE,
+        _courtlistener_account_key,
+        _request_quota_id,
+        build_courtlistener_request_gate,
+    )
+
+    _enable(monkeypatch)
+    clock = [1000.0]
+
+    class _FakeTime:
+        @staticmethod
+        def time():
+            return clock[0]
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.time", _FakeTime)
+
+    db = _DB()
+    quota_id = _request_quota_id(_courtlistener_account_key(api_token="test-token"))
+    seed = [990.0] * MAX_REQUESTS_PER_MINUTE
+    db.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": list(seed),
+        "quota_revision": 0,
+    })
+
+    dispatches = []
+    sleep_log = []
+    a_started_sleep = asyncio.Event()
+    b_reserved = asyncio.Event()
+    a_dispatched = asyncio.Event()
+
+    async def scripted_sleep(seconds):
+        sleep_log.append((clock[0], seconds))
+        if not a_started_sleep.is_set() and abs(seconds - 50.0) < 0.01:
+            a_started_sleep.set()
+            await b_reserved.wait()
+            # Simulate Sleeper A waking 10s late at 1060.0 (instead of 1050.0).
+            clock[0] = 1060.0
+            return
+        if not b_reserved.is_set() and abs(seconds - 62.0) < 0.01:
+            b_reserved.set()
+            await a_dispatched.wait()
+            # Sleeper B wakes at its scheduled 1062.0 after A has already confirmed 1060.0.
+            clock[0] = max(clock[0], 1062.0)
+            return
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", scripted_sleep)
+
+    async def _worker(label, gate):
+        allowed = await gate(0, 0.0)
+        assert allowed is True
+        dispatches.append((label, clock[0]))
+        if label == "A":
+            a_dispatched.set()
+
+    gate_a = build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+    gate_b = build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+
+    task_a = asyncio.create_task(_worker("A", gate_a))
+    await a_started_sleep.wait()
+    task_b = asyncio.create_task(_worker("B", gate_b))
+    await asyncio.gather(task_a, task_b)
+
+    assert dispatches == [("A", pytest.approx(1060.0)), ("B", pytest.approx(1072.0))]
+    assert abs(dispatches[1][1] - dispatches[0][1]) >= DEFAULT_PAUSE_S - 1e-6
+    assert db.federal_bond_risk_state.docs[0]["timestamps"][-2:] == [
+        pytest.approx(1060.0),
+        pytest.approx(1072.0),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_retry_quota_denial_and_downstream_dossier_quota_return_429(monkeypatch):
+    import asyncio
+    import time
+    from dashboard.routers.court_dockets import _make_cl_client, court_intel_bp
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_MINUTE,
+        _courtlistener_account_key,
+        _request_quota_id,
+    )
+
+    _enable(monkeypatch)
+    now = time.time()
+    quota_id = _request_quota_id(_courtlistener_account_key(api_token="test-token"))
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    class _Response:
+        def __init__(self, status_code, payload, headers=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    # Case A: live-search gets 503 on 5th slot in 1m window -> retry denied by quota -> HTTP 429 (not 502).
+    db_a = _DB()
+    db_a.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 5.0] * (MAX_REQUESTS_PER_MINUTE - 1),
+        "quota_revision": 0,
+    })
+    calls_a = []
+
+    class _HTTP503:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_a.append(url)
+            return _Response(503, {"detail": "unavailable"})
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db_a)
+    client_a = _make_cl_client()
+    client_a._in_maintenance_window = lambda: False
+    client_a._client = _HTTP503()
+
+    app = FastAPI()
+    app.include_router(court_intel_bp)
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", lambda: client_a)
+        res_ls = TestClient(app).get("/api/court-intel/live-search?q=forfeiture&state=FL")
+        assert res_ls.status_code == 429
+        assert res_ls.json()["skipped"] == "quota_exhausted"
+    assert len(calls_a) == 1
+
+    # Case B1: case-dossier consumes 5th slot on /clusters/, then /dockets/ is blocked -> HTTP 429 (not 200).
+    db_b1 = _DB()
+    db_b1.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 5.0] * (MAX_REQUESTS_PER_MINUTE - 1),
+        "quota_revision": 0,
+    })
+    calls_b1 = []
+
+    class _HTTPClusterOnly:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_b1.append(url)
+            return _Response(200, {
+                "id": 2812209,
+                "case_name": "State v. Doe",
+                "docket": "https://www.courtlistener.com/api/rest/v4/dockets/4214664/",
+                "sub_opinions": ["https://www.courtlistener.com/api/rest/v4/opinions/9969234/"],
+            })
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db_b1)
+    client_b1 = _make_cl_client()
+    client_b1._in_maintenance_window = lambda: False
+    client_b1._client = _HTTPClusterOnly()
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", lambda: client_b1)
+        res_dos1 = TestClient(app).get("/api/court-intel/case-dossier?cluster_id=2812209")
+        assert res_dos1.status_code == 429
+        assert res_dos1.json()["skipped"] == "quota_exhausted"
+    assert calls_b1 == ["/clusters/2812209/"]
+
+    # Case B2: case-dossier completes /clusters/ and /dockets/, then /opinions/ is blocked -> HTTP 429.
+    db_b2 = _DB()
+    db_b2.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 5.0] * (MAX_REQUESTS_PER_MINUTE - 2),
+        "quota_revision": 0,
+    })
+    calls_b2 = []
+
+    class _HTTPClusterAndDocket:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_b2.append(url)
+            if url.startswith("/clusters/"):
+                return _Response(200, {
+                    "id": 2812209,
+                    "case_name": "State v. Doe",
+                    "docket": "https://www.courtlistener.com/api/rest/v4/dockets/4214664/",
+                    "sub_opinions": ["https://www.courtlistener.com/api/rest/v4/opinions/9969234/"],
+                })
+            return _Response(200, {"id": 4214664, "court_id": "fla", "docket_number": "SC25-1"})
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db_b2)
+    client_b2 = _make_cl_client()
+    client_b2._in_maintenance_window = lambda: False
+    client_b2._client = _HTTPClusterAndDocket()
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", lambda: client_b2)
+        res_dos2 = TestClient(app).get("/api/court-intel/case-dossier?cluster_id=2812209")
+        assert res_dos2.status_code == 429
+        assert res_dos2.json()["skipped"] == "quota_exhausted"
+    assert calls_b2 == ["/clusters/2812209/", "/dockets/4214664/"]
+
+
+@pytest.mark.asyncio
+async def test_shared_quota_fails_closed_on_missing_db_or_revalidation_failure(monkeypatch):
+    import asyncio
+    from dashboard.routers.court_dockets import _make_cl_client, court_intel_bp
+    from dashboard.services import federal_bond_risk as fbr
+    from dashboard.services.courtlistener_client import CourtListenerClient
+    from dashboard.services.federal_bond_risk import (
+        DEFAULT_PAUSE_S,
+        _courtlistener_account_key,
+        _request_quota_id,
+        build_courtlistener_request_gate,
+    )
+
+    _enable(monkeypatch)
+    app = FastAPI()
+    app.include_router(court_intel_bp)
+
+    http_calls = []
+
+    class _CountingHTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            http_calls.append(url)
+            return None
+
+        async def aclose(self):
+            return None
+
+    def _build_counting_client():
+        cl = _make_cl_client()
+        cl._in_maintenance_window = lambda: False
+        cl._client = _CountingHTTP()
+        return cl
+
+    # Part A1: get_db() raises -> local metadata routes still work, live routes fail closed with 429 (0 HTTP calls).
+    def _broken_db():
+        raise RuntimeError("mongo down")
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", _broken_db)
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", _build_counting_client)
+        api_client = TestClient(app)
+        assert api_client.get("/api/court-intel/api-health").status_code == 200
+        for url in (
+            "/api/court-intel/live-search?q=forfeiture&state=FL",
+            "/api/court-intel/docket-lookup?docket_number=2:24-cr-00123",
+            "/api/court-intel/case-dossier?cluster_id=2812209",
+        ):
+            resp = api_client.get(url)
+            assert resp.status_code == 429
+            assert resp.json()["skipped"] == "quota_exhausted"
+    assert http_calls == []
+
+    # Part A2: DB object without federal_bond_risk_state also fails closed.
+    class _PartialDB:
+        pass
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: _PartialDB())
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", _build_counting_client)
+        resp_partial = TestClient(app).get("/api/court-intel/live-search?q=forfeiture&state=FL")
+        assert resp_partial.status_code == 429
+        assert resp_partial.json()["skipped"] == "quota_exhausted"
+    assert http_calls == []
+
+    # Direct client wired with require_shared_store=True gate raises CourtListenerQuotaBlocked when DB missing.
+    direct_client = CourtListenerClient(
+        api_token="test-token",
+        request_gate=build_courtlistener_request_gate(None, api_token="test-token", pause_s=0.0),
+    )
+    direct_client._in_maintenance_window = lambda: False
+    direct_client._client = _CountingHTTP()
+    dos_res = await direct_client.get_full_case_dossier("2812209")
+    assert dos_res["success"] is False
+    assert dos_res["skipped"] == "quota_exhausted"
+    assert http_calls == []
+
+    # Part B: delayed confirm_dispatch failures deny dispatch instead of returning True with stale timestamps.
+    clock = [1000.0]
+    monkeypatch.setattr(fbr.time, "time", lambda: clock[0])
+
+    async def fast_sleep(seconds):
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+    quota_id = _request_quota_id(_courtlistener_account_key(api_token="test-token"))
+
+    # B1: transient MongoDB error during confirm_dispatch find_one denies dispatch.
+    db_err = _DB()
+    db_err.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [998.0],
+        "quota_revision": 0,
+    })
+    orig_find_err = db_err.federal_bond_risk_state.find_one
+    find_calls = {"n": 0}
+
+    async def fail_on_revalidation(filt=None, projection=None, sort=None):
+        find_calls["n"] += 1
+        # Call 1: _load_request_quota, Call 2: reserve_paced; Call 3+: confirm_dispatch
+        if find_calls["n"] >= 3:
+            raise RuntimeError("mongo transient during confirm")
+        return await orig_find_err(filt, projection, sort)
+
+    db_err.federal_bond_risk_state.find_one = fail_on_revalidation
+    gate_err = build_courtlistener_request_gate(db_err, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+    assert await gate_err(0, 0.0) is False
+
+    # B2: missing quota document during confirm_dispatch denies dispatch.
+    clock[0] = 1000.0
+    db_missing = _DB()
+    db_missing.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [998.0],
+        "quota_revision": 0,
+    })
+    orig_find_missing = db_missing.federal_bond_risk_state.find_one
+    missing_calls = {"n": 0}
+
+    async def missing_on_revalidation(filt=None, projection=None, sort=None):
+        missing_calls["n"] += 1
+        if missing_calls["n"] >= 3:
+            return None
+        return await orig_find_missing(filt, projection, sort)
+
+    db_missing.federal_bond_risk_state.find_one = missing_on_revalidation
+    gate_missing = build_courtlistener_request_gate(db_missing, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+    assert await gate_missing(0, 0.0) is False
+
+    # B3: persistent CAS conflict during confirm_dispatch update_one denies dispatch.
+    clock[0] = 1000.0
+    db_cas = _DB()
+    db_cas.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [998.0],
+        "quota_revision": 0,
+    })
+    orig_update_cas = db_cas.federal_bond_risk_state.update_one
+    update_calls = {"n": 0}
+
+    async def cas_mismatch_on_revalidation(filt, update, upsert=False):
+        update_calls["n"] += 1
+        if update_calls["n"] == 1:
+            res = await orig_update_cas(filt, update, upsert=upsert)
+            # reserve_paced succeeded; inject a late prior timestamp so confirm_dispatch must rewrite + contend.
+            db_cas.federal_bond_risk_state.docs[0]["timestamps"].append(clock[0] + 10.0)
+            return res
+        return type("_Missed", (), {"matched_count": 0, "modified_count": 0})()
+
+    db_cas.federal_bond_risk_state.update_one = cas_mismatch_on_revalidation
+    gate_cas = build_courtlistener_request_gate(db_cas, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
+    assert await gate_cas(0, 0.0) is False
+
+
+@pytest.mark.asyncio
+async def test_opinion_ingestion_propagates_quota_exhaustion_to_api_and_cron(monkeypatch):
+    import asyncio
+    from dashboard.cron import _run_court_intel
+    from dashboard.routers.court_dockets import court_intel_bp
+    from dashboard.services import federal_bond_risk as fbr
+    from dashboard.services.court_data_ingestor import run_ingestion
+    from dashboard.services.courtlistener_client import CourtListenerClient
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_HOUR,
+        _courtlistener_account_key,
+        _request_quota_id,
+    )
+
+    _enable(monkeypatch)
+    clock = [2000.0]
+    monkeypatch.setattr(fbr.time, "time", lambda: clock[0])
+
+    async def fast_sleep(seconds):
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    async def _no_ai(_opinion):
+        return None
+
+    async def _no_match(_db, _case_name):
+        return None
+
+    monkeypatch.setattr("dashboard.services.court_data_ingestor._ai_analyze_opinion", _no_ai)
+    monkeypatch.setattr("dashboard.services.court_data_ingestor._fuzzy_match_defendant", _no_match)
+
+    class _Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    quota_id = _request_quota_id(_courtlistener_account_key(api_token="test-token"))
+
+    class _OutcomeDB(_DB):
+        def __init__(self):
+            super().__init__()
+            self.court_outcomes = _Collection()
+
+    app = FastAPI()
+    app.include_router(court_intel_bp)
+
+    def _wire_client(responses_fn, recorded_calls):
+        class _ScriptedIngestClient(CourtListenerClient):
+            def __init__(self, api_token=None):
+                super().__init__(api_token=api_token)
+                self._in_maintenance_window = lambda: False
+
+            async def _get_client(self):
+                class _H:
+                    is_closed = False
+
+                    async def get(self, url, params=None):
+                        recorded_calls.append((url, dict(params or {})))
+                        return responses_fn(url, params)
+
+                    async def aclose(self):
+                        return None
+
+                return _H()
+
+            async def close(self):
+                return None
+
+        monkeypatch.setattr("dashboard.services.courtlistener_client.CourtListenerClient", _ScriptedIngestClient)
+
+    # Case 1: Pre-exhausted quota -> run_ingestion fails, API returns 429, cron raises RuntimeError.
+    db1 = _OutcomeDB()
+    db1.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [clock[0] - 120.0] * MAX_REQUESTS_PER_HOUR,
+        "quota_revision": 0,
+    })
+    calls1 = []
+    _wire_client(lambda url, params: _Response(200, {"results": []}), calls1)
+
+    res1 = await run_ingestion(db1, days_back=7, states=["FL", "GA"])
+    assert res1["success"] is False
+    assert res1["skipped"] == "quota_exhausted"
+    assert res1["incomplete_coverage"] is True
+    assert res1["states_completed"] == []
+    assert res1["states_skipped_quota"] == ["FL", "GA"]
+    assert res1["ingested"] == 0
+    assert calls1 == []
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db1)
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db1)
+    api_resp1 = TestClient(app).post("/api/court-intel/ingest", json={"days_back": 7, "states": ["FL", "GA"]})
+    assert api_resp1.status_code == 429
+    assert api_resp1.json()["skipped"] == "quota_exhausted"
+    assert calls1 == []
+
+    with pytest.raises(RuntimeError, match="quota_exhausted"):
+        await _run_court_intel()
+    assert calls1 == []
+
+    # Case 2: Mid-loop partial exhaustion -> FL opinion persists, GA skipped -> still fails closed (429 + cron raises).
+    db2 = _OutcomeDB()
+    db2.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [clock[0] - 120.0] * (MAX_REQUESTS_PER_HOUR - 1),
+        "quota_revision": 0,
+    })
+    calls2 = []
+    _wire_client(
+        lambda url, params: _Response(
+            200,
+            {
+                "count": 1,
+                "results": [
+                    {
+                        "cluster_id": 7701,
+                        "court_id": "fla",
+                        "caseName": "State v. Doe",
+                        "docketNumber": "SC26-10",
+                        "dateFiled": "2026-11-20",
+                        "snippet": "Surety bond forfeiture and failure to appear.",
+                    }
+                ],
+            },
+        ),
+        calls2,
+    )
+
+    res2 = await run_ingestion(db2, days_back=7, states=["FL", "GA"])
+    assert res2["success"] is False
+    assert res2["skipped"] == "quota_exhausted"
+    assert res2["incomplete_coverage"] is True
+    assert res2["ingested"] == 1
+    assert res2["states_completed"] == ["FL"]
+    assert res2["states_skipped_quota"] == ["GA"]
+    assert len(calls2) == 1
+    assert len(db2.court_outcomes.docs) == 1
+
+    # Next API/cron attempt sees exhausted quota -> 429 and RuntimeError.
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db2)
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db2)
+    api_resp2 = TestClient(app).post("/api/court-intel/ingest", json={"days_back": 7, "states": ["FL", "GA"]})
+    assert api_resp2.status_code == 429
+    assert api_resp2.json()["skipped"] == "quota_exhausted"
+    with pytest.raises(RuntimeError, match="quota_exhausted"):
+        await _run_court_intel()
+
+    # Case 3: Mid-state pagination exhaustion -> FL page 1 persists, page 2 hits quota -> state marked skipped_quota.
+    clock[0] = 3000.0
+    db3 = _OutcomeDB()
+    db3.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [clock[0] - 120.0] * (MAX_REQUESTS_PER_HOUR - 1),
+        "quota_revision": 0,
+    })
+    calls3 = []
+    _wire_client(
+        lambda url, params: _Response(
+            200,
+            {
+                "count": 2,
+                "next": "https://www.courtlistener.com/api/rest/v4/search/?cursor=p2",
+                "results": [
+                    {
+                        "cluster_id": 7702,
+                        "court_id": "fla",
+                        "caseName": "State v. Roe",
+                        "docketNumber": "SC26-11",
+                        "dateFiled": "2026-11-21",
+                        "snippet": "Revocation of pretrial release after warrant issued.",
+                    }
+                ],
+            },
+        ),
+        calls3,
+    )
+
+    res3 = await run_ingestion(db3, days_back=7, states=["FL"])
+    assert res3["success"] is False
+    assert res3["skipped"] == "quota_exhausted"
+    assert res3["incomplete_coverage"] is True
+    assert res3["ingested"] == 1
+    assert res3["states_completed"] == []
+    assert res3["states_skipped_quota"] == ["FL"]
+    assert len(calls3) == 1
+    assert len(db3.court_outcomes.docs) == 1
+

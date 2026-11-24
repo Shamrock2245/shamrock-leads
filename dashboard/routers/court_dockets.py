@@ -20,9 +20,29 @@ court_intel_bp = APIRouter(prefix="/api", tags=["court_intel"])
 
 def _make_cl_client():
     from dashboard.services.courtlistener_client import CourtListenerClient
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_MINUTE,
+        build_courtlistener_request_gate,
+    )
 
     token = os.getenv("COURTLISTENER_API_TOKEN", "")
-    return CourtListenerClient(api_token=token if token else None)
+    client = CourtListenerClient(api_token=token if token else None)
+    try:
+        db = get_db()
+    except Exception as exc:
+        log.warning("CourtListener shared quota DB unavailable: %s", type(exc).__name__)
+        db = None
+    client.set_request_gate(
+        build_courtlistener_request_gate(
+            db,
+            client=client,
+            pause_s=0.0,
+            run_limit=MAX_REQUESTS_PER_MINUTE,
+            block_on_minute_limit=True,
+            require_shared_store=True,
+        )
+    )
+    return client
 
 
 # ── Coverage & Status ────────────────────────────────────────────────────────
@@ -73,7 +93,11 @@ async def api_court_intel_ingest(request: Request):
         states = body.get("states", None)
 
         result = await run_ingestion(db, days_back=days_back, states=states)
-        status = 200 if result.get("success") else 500
+        status = (
+            200
+            if result.get("success")
+            else (429 if result.get("skipped") == "quota_exhausted" else 500)
+        )
         return JSONResponse(content=result, status_code=status)
     except Exception as e:
         log.exception("Ingestion error: %s", e)
@@ -284,7 +308,11 @@ async def api_court_intel_live_search(
             judge=judge or None,
             page_size=min(max(int(limit), 1), 50),
         )
-        status = 200 if result.get("success") else 502
+        status = (
+            200
+            if result.get("success")
+            else (429 if result.get("skipped") == "quota_exhausted" else 502)
+        )
         return JSONResponse(status_code=status, content=result)
     except Exception as e:
         log.exception("Live search error: %s", e)
@@ -315,7 +343,11 @@ async def api_court_intel_docket_lookup(
             court=court.strip() or None,
             state=state.strip() or None,
         )
-        status = 200 if result.get("success") else 502
+        status = (
+            200
+            if result.get("success")
+            else (429 if result.get("skipped") == "quota_exhausted" else 502)
+        )
         return JSONResponse(status_code=status, content=result)
     except Exception as e:
         log.exception("Docket lookup error: %s", e)
@@ -340,21 +372,26 @@ async def api_court_intel_case_dossier(
             content={"success": False, "error": "cluster_id, url, or source_id is required"},
         )
 
-    db = get_db()
-    local_doc = None
     try:
-        lookup_ids = [x for x in (cluster_id.strip(), source_id.strip()) if x]
-        if lookup_ids:
-            local_doc = await db.court_outcomes.find_one(
-                {"source": "courtlistener", "$or": [{"source_id": {"$in": lookup_ids}}, {"cluster_id": {"$in": lookup_ids}}]}
-            )
-    except Exception:
-        local_doc = None
+        db = get_db()
+    except Exception as exc:
+        log.warning("CourtListener case-dossier DB unavailable: %s", type(exc).__name__)
+        db = None
+    local_doc = None
+    if db is not None:
+        try:
+            lookup_ids = [x for x in (cluster_id.strip(), source_id.strip()) if x]
+            if lookup_ids:
+                local_doc = await db.court_outcomes.find_one(
+                    {"source": "courtlistener", "$or": [{"source_id": {"$in": lookup_ids}}, {"cluster_id": {"$in": lookup_ids}}]}
+                )
+        except Exception:
+            local_doc = None
 
     client = _make_cl_client()
     try:
         parsed_id = client.parse_cluster_id_from_url(target)
-        if parsed_id and not local_doc:
+        if parsed_id and not local_doc and db is not None:
             try:
                 local_doc = await db.court_outcomes.find_one(
                     {"source": "courtlistener", "$or": [{"source_id": str(parsed_id)}, {"cluster_id": parsed_id}]}
@@ -427,7 +464,14 @@ async def api_court_intel_case_dossier(
                 },
             )
 
-        return JSONResponse(status_code=400 if "Invalid" in str(live_res.get("error", "")) else 502, content=live_res)
+        return JSONResponse(
+            status_code=(
+                429
+                if live_res.get("skipped") == "quota_exhausted"
+                else (400 if "Invalid" in str(live_res.get("error", "")) else 502)
+            ),
+            content=live_res,
+        )
     except Exception as e:
         log.exception("Case dossier error: %s", e)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
