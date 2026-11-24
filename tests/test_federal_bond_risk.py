@@ -337,6 +337,20 @@ def _hit(**overrides):
     return row
 
 
+def _defendant(name="Smith, John", *, dob="", docket_id=1001, extra_info=None, party_id=None):
+    party = {
+        "name": name,
+        "party_types": [{
+            "docket_id": docket_id,
+            "name": "Defendant",
+            "extra_info": extra_info if extra_info is not None else (f"DOB: {dob}" if dob else ""),
+        }],
+    }
+    if party_id is not None:
+        party["id"] = party_id
+    return party
+
+
 def _enable(monkeypatch):
     monkeypatch.setenv(FLAG, "1")
     monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
@@ -519,7 +533,7 @@ async def test_upgrade_and_downgrade_write_audit_events(monkeypatch):
     assert recorded[0]["evidence"]["filing_id"]
     assert recorded[0]["evidence"]["candidate_bond_case_id"] == client.bond_case_id
 
-    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    court.parties = [_defendant(dob="01/15/1985")]
     await _scan(db, court, [_client(dobs=["1985-01-15"])])
     upgraded = [row for row in db.audit_events.docs if row["reason"] == "possible_upgraded_to_confirmed"]
     assert upgraded[0]["actor"] == "system"
@@ -534,8 +548,8 @@ async def test_upgrade_and_downgrade_write_audit_events(monkeypatch):
     court.parties = [{
         "name": "Smith, John",
         "party_types": [
-            {"docket_id": 1001, "extra_info": "DOB: 01/15/1985"},
-            {"docket_id": 1001, "extra_info": "DOB: 02/02/1990"},
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 02/02/1990"},
         ],
     }]
     await _scan(db, court, [_client(dobs=["1985-01-15"])])
@@ -553,7 +567,7 @@ async def test_docket_entry_outage_is_not_an_empty_success(monkeypatch):
     _enable(monkeypatch)
     court = _CourtListener(
         hits=[_hit(recap_documents=[])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     court.entries_error = {"success": False, "error": "HTTP 503", "status_code": 503, "results": []}
     db = _DB()
@@ -568,7 +582,7 @@ async def test_docket_entry_outage_is_not_an_empty_success(monkeypatch):
             _hit(id=1001, docket_id=1001),
             _hit(id=1002, docket_id=1002, docketNumber="2:24-cr-00456", recap_documents=[]),
         ],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     partial.entries_error = {"success": False, "error": "bad_json", "status_code": 200, "results": []}
     partial.entries_error_ids = {1002}
@@ -595,7 +609,7 @@ async def test_reinstated_bond_restores_the_withdrawn_row(monkeypatch):
     })
     court = _CourtListener(
         hits=[_hit()],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     notifier = _Notifier()
     first = await run_federal_bond_risk_scan(db, client=court, notifier=notifier, pause_s=0)
@@ -863,7 +877,7 @@ async def test_upgrade_keeps_an_earlier_pending_audit(monkeypatch):
     db.audit_events.update_one = fail_until_retry
     await _scan(db, court, [_client()])
     original = db.docket_events.docs[0]["audit_pending"][0]["event_id"]
-    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    court.parties = [_defendant(dob="01/15/1985")]
     await _scan(db, court, [_client(dobs=["1985-01-15"])])
     pending_ids = [item["event_id"] for item in db.docket_events.docs[0]["audit_pending"]]
     assert original in pending_ids
@@ -882,13 +896,13 @@ async def test_each_match_transition_notifies_once(monkeypatch):
     db = _DB()
     client = _client(dobs=["1985-01-15"])
     await _scan(db, court, [client])
-    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    court.parties = [_defendant(dob="01/15/1985")]
     await _scan(db, court, [client])
     court.parties = [{
         "name": "Smith, John",
         "party_types": [
-            {"docket_id": 1001, "extra_info": "DOB: 01/15/1985"},
-            {"docket_id": 1001, "extra_info": "DOB: 02/02/1990"},
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 02/02/1990"},
         ],
     }]
     await _scan(db, court, [client])
@@ -1087,7 +1101,7 @@ async def test_name_and_dob_confirms_and_alerts_staff_only(monkeypatch):
             "case_name": "United States v. John Smith",
             "pacer_case_id": "999111",
         },
-        parties=[{"id": 1, "name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985", party_id=1)],
         entries=[{"id": 5, "description": "Detention Hearing", "date_filed": "2026-11-01"}],
     )
     notifier = _Notifier()
@@ -1185,7 +1199,7 @@ async def test_case_number_confirms_without_a_docket_dob(monkeypatch):
     court = _CourtListener(
         hits=[_hit(recap_documents=[{"description": "Bond increased"}])],
         brief={"id": 1001, "court_id": "flnd", "docket_number": "2:24-cr-00123-SPC", "case_name": "United States v. John Smith"},
-        parties=[{"name": "John Smith"}],
+        parties=[_defendant("John Smith")],
         entries=[],
     )
     db = _DB()
@@ -1204,7 +1218,7 @@ async def test_two_confirmed_clients_stay_unlinked(monkeypatch):
     court = _CourtListener(
         hits=[_hit(recap_documents=[{"description": "Detention hearing"}])],
         brief={"id": 1001, "court_id": "flmd", "docket_number": "2:24-cr-00123", "case_name": "United States v. John Smith"},
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 1985-01-15"}],
+        parties=[_defendant(dob="1985-01-15")],
         entries=[],
     )
     clients = [
@@ -1270,7 +1284,7 @@ async def test_duplicate_scan_does_not_alert_twice_and_possible_can_upgrade(monk
     assert len(notifier.calls) == 1
     assert len(db.notifications.docs) == 1
 
-    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    court.parties = [_defendant(dob="01/15/1985")]
     upgraded = await _scan(db, court, [_client(dobs=["1985-01-15"])], notifier)
     assert upgraded["rows_written"] == 1
     assert upgraded["confirmed"] == 1
@@ -1325,7 +1339,7 @@ async def test_loader_ignores_booking_numbers_and_phones(monkeypatch):
             recap_documents=[{"description": "Conditions of release"}],
         )],
         brief={"id": 3003, "court_id": "flmd", "docket_number": "8:24-cr-00077", "case_name": "United States v. Jane Roe"},
-        parties=[{"name": "Roe, Jane", "extra_info": "DOB: 04/04/1991"}],
+        parties=[_defendant("Roe, Jane", dob="04/04/1991", docket_id=3003)],
         entries=[],
     )
     notifier = _Notifier()
@@ -1636,7 +1650,7 @@ async def test_distinct_filings_of_the_same_type_each_alert_once(monkeypatch):
     court = _CourtListener(
         hits=[_hit(recap_documents=[])],
         brief={"id": 1001, "court_id": "flmd", "docket_number": "2:24-cr-00123", "case_name": "United States v. John Smith"},
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
         entries=[
             {"id": 11, "description": "Detention hearing", "date_filed": today},
             {"id": 12, "description": "Detention hearing", "date_filed": today},
@@ -1711,7 +1725,7 @@ async def test_old_case_with_a_new_entry_is_not_dropped(monkeypatch):
             "case_name": "United States v. John Smith",
             "date_filed": "2010-01-01",
         },
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
         entries=[{"id": 80, "description": "Failure to appear", "date_filed": today}],
     )
     db = _DB()
@@ -1810,7 +1824,7 @@ async def test_slack_cap_does_not_mark_the_unsent_alert_complete(monkeypatch):
     court = _CourtListener(
         hits=[_hit(recap_documents=[])],
         brief={"id": 1001, "court_id": "flmd", "docket_number": "2:24-cr-00123", "case_name": "United States v. John Smith"},
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
         entries=[
             {"id": 21, "description": "Detention hearing", "date_filed": today},
             {"id": 22, "description": "Failure to appear", "date_filed": today},
@@ -2216,7 +2230,7 @@ async def test_party_list_outage_is_not_an_empty_success(monkeypatch):
             _hit(id=1001, docket_id=1001),
             _hit(id=1002, docket_id=1002, docketNumber="2:24-cr-00456"),
         ],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
         parties_error={"success": False, "error": "bad_json", "status_code": 200, "results": []},
         parties_error_ids={1002},
     )
@@ -2233,7 +2247,7 @@ async def test_later_conflicting_party_dobs_downgrade_a_confirmed_link(monkeypat
     _enable(monkeypatch)
     court = _CourtListener(
         hits=[_hit()],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     db = _DB()
     client = _client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])
@@ -2245,8 +2259,8 @@ async def test_later_conflicting_party_dobs_downgrade_a_confirmed_link(monkeypat
     court.parties = [{
         "name": "Smith, John",
         "party_types": [
-            {"docket_id": 1001, "extra_info": "DOB: 01/15/1985"},
-            {"docket_id": 1001, "extra_info": "DOB: 02/02/1990"},
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 02/02/1990"},
         ],
     }]
     second = await _scan(db, court, [client])
@@ -2289,7 +2303,7 @@ async def test_failed_slack_retry_uses_the_downgraded_wording(monkeypatch):
 
     court = _CourtListener(
         hits=[_hit()],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     db = _DB()
     notifier = _FailThenSend()
@@ -2302,8 +2316,8 @@ async def test_failed_slack_retry_uses_the_downgraded_wording(monkeypatch):
     court.parties = [{
         "name": "Smith, John",
         "party_types": [
-            {"docket_id": 1001, "extra_info": "DOB: 01/15/1985"},
-            {"docket_id": 1001, "extra_info": "DOB: 02/02/1990"},
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 02/02/1990"},
         ],
     }]
     second = await _scan(db, court, [client], notifier)
@@ -2356,7 +2370,7 @@ async def test_et_al_caption_still_matches_a_loaded_codefendant(monkeypatch):
         )],
         parties=[
             {"name": "Defendant, Lead"},
-            {"name": "Smith, John", "extra_info": "DOB: 01/15/1985"},
+            _defendant(dob="01/15/1985"),
         ],
     )
     db = _DB()
@@ -2418,7 +2432,7 @@ async def test_failed_slack_attempts_count_against_the_cap(monkeypatch):
     court = _CourtListener(
         hits=[_hit(recap_documents=[])],
         brief={"id": 1001, "court_id": "flmd", "docket_number": "2:24-cr-00123", "case_name": "United States v. John Smith"},
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
         entries=[
             {"id": 21, "description": "Detention hearing", "date_filed": today},
             {"id": 22, "description": "Failure to appear", "date_filed": today},
@@ -3141,7 +3155,7 @@ async def test_failed_withdrawal_notification_is_retried_on_next_scan(monkeypatc
     })
     court = _CourtListener(
         hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     first = await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
     assert first["confirmed"] == 1
@@ -3187,7 +3201,7 @@ async def test_corrected_filing_without_risk_phrase_withdraws_stale_link(monkeyp
         def __init__(self):
             super().__init__(
                 hits=[_hit(recap_documents=[])],
-                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+                parties=[_defendant(dob="01/15/1985")],
             )
             self.stage = 1
 
@@ -3381,7 +3395,7 @@ async def test_failed_confirmed_notification_is_not_replayed_after_downgrade_or_
     db_a.notifications.update_one = fail_all
     court_a = _CourtListener(
         hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     first_a = await run_federal_bond_risk_scan(db_a, client=court_a, notifier=_Notifier(), pause_s=0)
     assert first_a["confirmed"] == 1
@@ -3400,7 +3414,7 @@ async def test_failed_confirmed_notification_is_not_replayed_after_downgrade_or_
     db_b.notifications.update_one = fail_all
     court_b = _CourtListener(
         hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     first_b = await _scan(db_b, court_b, [_client(dobs=["1985-01-15"])])
     assert first_b["confirmed"] == 1
@@ -3516,7 +3530,7 @@ async def test_match_audits_record_confidence_across_transitions(monkeypatch):
     dual_db = _DB()
     dual_court = _CourtListener(
         hits=[_hit()],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     await _scan(dual_db, dual_court, [_client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])])
     assert dual_db.audit_events.docs[-1]["confidence"] == 1.0
@@ -3541,7 +3555,7 @@ async def test_match_audits_record_confidence_across_transitions(monkeypatch):
         def __init__(self):
             super().__init__(
                 hits=[_hit(recap_documents=[])],
-                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+                parties=[_defendant(dob="01/15/1985")],
             )
             self.benign = False
 
@@ -3610,7 +3624,7 @@ async def test_bond_closing_mid_scan_is_not_stored_or_notified(monkeypatch):
         def __init__(self, target_docs, idx=0):
             super().__init__(
                 hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
-                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+                parties=[_defendant(dob="01/15/1985")],
             )
             self.target_docs = target_docs
             self.idx = idx
@@ -3649,7 +3663,7 @@ async def test_bond_closing_mid_scan_is_not_stored_or_notified(monkeypatch):
         db_b,
         client=_CourtListener(
             hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
-            parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+            parties=[_defendant(dob="01/15/1985")],
         ),
         notifier=_Notifier(),
         pause_s=0,
@@ -3696,8 +3710,8 @@ async def test_bond_closing_mid_scan_is_not_stored_or_notified(monkeypatch):
 
         async def list_docket_parties(self, docket_id, **kwargs):
             if docket_id == 1001:
-                return {"success": True, "truncated": False, "results": [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]}
-            return {"success": True, "truncated": False, "results": [{"name": "Roe, Jane", "extra_info": "DOB: 02/02/1990"}]}
+                return {"success": True, "truncated": False, "results": [_defendant(dob="01/15/1985")]}
+            return {"success": True, "truncated": False, "results": [_defendant("Roe, Jane", dob="02/02/1990", docket_id=1002)]}
 
     real_update = db_c.docket_events.update_one
     closed_second = {"done": False}
@@ -3793,7 +3807,7 @@ async def test_actor_sensitive_phrase_must_tie_to_defendant(monkeypatch):
             "id": 9,
             "description": "John Smith was present; counsel for the government failed to appear",
         }])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     db = _DB()
     result = await _scan(db, court, [client])
@@ -3852,7 +3866,7 @@ async def test_same_status_evidence_change_persists_and_audits(monkeypatch):
     _enable(monkeypatch)
     court = _CourtListener(
         hits=[_hit()],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     db = _DB()
     client = _client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])
@@ -3865,7 +3879,7 @@ async def test_same_status_evidence_change_persists_and_audits(monkeypatch):
     assert len(db.audit_events.docs) == 1
 
     # Lose DOB evidence while retaining case_number confirmation (same match_status="confirmed").
-    court.parties = [{"name": "Smith, John"}]
+    court.parties = [_defendant("Smith, John")]
     scan2 = await _scan(db, court, [client])
     assert scan2["rows_written"] == 1
     assert scan2["confirmed"] == 1
@@ -4069,7 +4083,7 @@ async def test_partial_entry_hydration_failure_does_not_withdraw_existing_link(m
         def __init__(self):
             super().__init__(
                 hits=[_hit(id=1001, docket_id=1001, recap_documents=[])],
-                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+                parties=[_defendant(dob="01/15/1985")],
             )
             self.stage = 1
             self.entries_error_ids = set()
@@ -4160,7 +4174,7 @@ async def test_restored_or_upgraded_row_retry_uses_confirmed_notification_not_do
     })
     court = _CourtListener(
         hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
 
@@ -4221,7 +4235,7 @@ async def test_upgrade_clears_stale_slack_claim_and_mismatch_releases_claim(monk
     db.docket_events.docs[0]["slack_claim"] = True
     db.docket_events.docs[0]["slack_claim_at"] = prior_claim_at
 
-    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    court.parties = [_defendant(dob="01/15/1985")]
     notifier2 = _Notifier()
     scan2 = await _scan(db, court, [_client(dobs=["1985-01-15"])], notifier2)
     assert scan2["slack_sent"] == 1
@@ -4272,7 +4286,7 @@ async def test_stale_withdrawal_is_rejected_after_same_status_evidence_refresh(m
 
     court = _CourtListener(
         hits=[_hit()],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
     )
     db = _DB()
     client = _client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])
@@ -4282,7 +4296,7 @@ async def test_stale_withdrawal_is_rejected_after_same_status_evidence_refresh(m
     stale_row = dict(db.docket_events.docs[0])
 
     # Refresh evidence while keeping status="confirmed" -> match_revision advances to 1.
-    court.parties = [{"name": "Smith, John"}]
+    court.parties = [_defendant("Smith, John")]
     await _scan(db, court, [client])
     assert db.docket_events.docs[0]["confirmations"] == ["case_number"]
     assert db.docket_events.docs[0]["confidence"] == 0.95
@@ -4430,7 +4444,7 @@ async def test_deleted_in_window_entry_withdraws_link_but_out_of_window_entry_st
         def __init__(self):
             super().__init__(
                 hits=[_hit(recap_documents=[])],
-                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+                parties=[_defendant(dob="01/15/1985")],
             )
             self.stage = 1
 
@@ -4545,7 +4559,7 @@ async def test_enabling_multi_tenant_preserves_shamrock_source_ids_and_isolates_
     today = datetime.now(timezone.utc).date().isoformat()
     court = _CourtListener(
         hits=[_hit(recap_documents=[])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
         entries=[{"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": today}],
     )
     raw = _DB()
@@ -4666,7 +4680,7 @@ async def test_default_pause_and_inter_request_pacing_respect_courtlistener_minu
     today = datetime.now(timezone.utc).date().isoformat()
     court = _CourtListener(
         hits=[_hit(recap_documents=[])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
         entries=[{"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": today}],
     )
     db = _DB()
@@ -4764,7 +4778,7 @@ async def test_durable_hourly_and_daily_quota_defers_scans_without_http_calls_an
     now = time.time()
     court = _CourtListener(
         hits=[_hit(recap_documents=[])],
-        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        parties=[_defendant(dob="01/15/1985")],
         entries=[{"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": datetime.now(timezone.utc).date().isoformat()}],
     )
     db = _DB()
@@ -4808,3 +4822,179 @@ async def test_durable_hourly_and_daily_quota_defers_scans_without_http_calls_an
         assert _request_quota_id() == "request_quota"
     with bind_job_tenant("alpha", "federal_bond_risk"):
         assert _request_quota_id() == "request_quota:alpha"
+
+
+@pytest.mark.asyncio
+async def test_non_defendant_party_roles_are_excluded_and_missing_or_ambiguous_roles_stay_possible(monkeypatch):
+    _enable(monkeypatch)
+    today = datetime.now(timezone.utc).date().isoformat()
+    client = _client(name="John Smith", dobs=["1985-01-15"], numbers=["2:24-cr-00123"])
+
+    # 1. Explicit non-defendant role on this docket (even if Defendant on a different docket) is excluded.
+    for role_name in ("Material Witness", "Victim", "Plaintiff", "Surety", "Attorney for Defendant"):
+        court = _CourtListener(
+            hits=[_hit(recap_documents=[])],
+            parties=[{
+                "name": "Smith, John",
+                "party_types": [
+                    {"docket_id": 9999, "name": "Defendant", "extra_info": "DOB: 01/15/1985"},
+                    {"docket_id": 1001, "name": role_name, "extra_info": "DOB: 01/15/1985"},
+                ],
+            }],
+            entries=[{"id": 42, "description": "Detention hearing", "date_filed": today}],
+        )
+        db = _DB()
+        res = await _scan(db, court, [client])
+        assert res["rows_written"] == 0, role_name
+        assert db.docket_events.docs == [], role_name
+
+    # 2. Missing party_types OR blank party_types[].name stays "possible" (never confirmed).
+    for parties in (
+        [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        [{"name": "Smith, John", "party_types": [{"docket_id": 1001, "extra_info": "DOB: 01/15/1985"}]}],
+    ):
+        court = _CourtListener(
+            hits=[_hit(recap_documents=[])],
+            parties=parties,
+            entries=[{"id": 42, "description": "Detention hearing", "date_filed": today}],
+        )
+        db = _DB()
+        res = await _scan(db, court, [client])
+        assert res["confirmed"] == 0
+        assert res["possible"] == 1
+        assert db.docket_events.docs[0]["match_status"] == "possible"
+        assert db.docket_events.docs[0]["auto_linked"] is False
+        assert db.docket_events.docs[0]["confirmations"] == []
+
+    # 3. Ambiguous or mixed roles on this docket also stay "possible".
+    for party_types in (
+        [{"docket_id": 1001, "name": "Other Party", "extra_info": "DOB: 01/15/1985"}],
+        [
+            {"docket_id": 1001, "name": "Defendant", "extra_info": "DOB: 01/15/1985"},
+            {"docket_id": 1001, "name": "Victim", "extra_info": "DOB: 01/15/1985"},
+        ],
+    ):
+        court = _CourtListener(
+            hits=[_hit(recap_documents=[])],
+            parties=[{"name": "Smith, John", "party_types": party_types}],
+            entries=[{"id": 42, "description": "Detention hearing", "date_filed": today}],
+        )
+        db = _DB()
+        res = await _scan(db, court, [client])
+        assert res["confirmed"] == 0
+        assert res["possible"] == 1
+        assert db.docket_events.docs[0]["match_status"] == "possible"
+        assert db.docket_events.docs[0]["auto_linked"] is False
+
+    # 4. Explicit criminal Defendant / Co-Defendant on docket 1001 confirms (even if Witness elsewhere).
+    for def_role in ("Defendant", "Criminal Defendant", "Co-Defendant"):
+        court = _CourtListener(
+            hits=[_hit(recap_documents=[])],
+            parties=[{
+                "name": "Smith, John",
+                "party_types": [
+                    {"docket_id": 9999, "name": "Material Witness", "extra_info": "DOB: 01/15/1985"},
+                    {"docket_id": 1001, "name": def_role, "extra_info": "DOB: 01/15/1985"},
+                ],
+            }],
+            entries=[{"id": 42, "description": "Detention hearing", "date_filed": today}],
+        )
+        db = _DB()
+        res = await _scan(db, court, [client])
+        assert res["confirmed"] == 1
+        assert db.docket_events.docs[0]["match_status"] == "confirmed"
+        assert db.docket_events.docs[0]["auto_linked"] is True
+        assert db.docket_events.docs[0]["confirmations"] == ["dob", "case_number"]
+
+
+@pytest.mark.asyncio
+async def test_overlapping_scans_serialize_with_lease_and_reserve_quota_atomically(monkeypatch):
+    import asyncio
+    import time
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_HOUR,
+        _RequestQuota,
+        _request_quota_id,
+        _scan_lease_id,
+    )
+    from dashboard.tenancy.context import bind_job_tenant
+
+    _enable(monkeypatch)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    class _BlockingCourt(_CourtListener):
+        async def search_recent(self, **kwargs):
+            if kwargs["search_type"] == "r":
+                entered.set()
+                await release.wait()
+            return await super().search_recent(**kwargs)
+
+    court = _BlockingCourt(
+        hits=[_hit(recap_documents=[])],
+        parties=[_defendant(dob="01/15/1985")],
+        entries=[{"id": 42, "description": "Detention hearing", "date_filed": today}],
+    )
+    db = _DB()
+    client = _client(dobs=["1985-01-15"])
+
+    # 1. Overlapping scheduled + manual scans serialize cleanly via scan_lease.
+    first_task = asyncio.create_task(_scan(db, court, [client]))
+    await entered.wait()
+    overlapped = await _scan(db, _CourtListener(hits=[]), [client])
+    assert overlapped["success"] is True
+    assert overlapped["skipped"] == "scan_in_progress"
+    assert overlapped["requests_made"] == 0
+    release.set()
+    first = await first_task
+    assert first["confirmed"] == 1
+
+    # Lease is released once first scan completes, and expired leases can be reclaimed.
+    db.federal_bond_risk_state.update_one  # ensure collection present
+    lease_doc = next(d for d in db.federal_bond_risk_state.docs if d["_id"] == _scan_lease_id())
+    lease_doc["lease_owner"] = "crashed-worker"
+    lease_doc["lease_expires_at"] = "2020-01-01T00:00:00+00:00"
+    recovered = await _scan(db, _CourtListener(hits=[]), [client])
+    assert recovered["skipped"] is None
+
+    # 2. Atomic CAS reserve + reconcile under concurrent contention enforces 50/hr ceiling.
+    qdb = _DB()
+    now = time.time()
+    qdb.federal_bond_risk_state.docs.append({
+        "_id": _request_quota_id(),
+        "timestamps": [now - 30.0] * 30,
+        "quota_revision": 0,
+    })
+    real_find = qdb.federal_bond_risk_state.find_one
+    raced = {"injected": False}
+
+    async def contend_once(filt=None, projection=None, sort=None):
+        row = await real_find(filt, projection, sort)
+        if not raced["injected"] and (filt or {}).get("_id") == _request_quota_id():
+            raced["injected"] = True
+            # Concurrent caller reserves 15 slots before caller A completes CAS update.
+            quota_b = _RequestQuota(timestamps=[])
+            granted_b, ts_b = await quota_b.reserve(qdb, 15, min_required=1)
+            assert granted_b == 15
+            assert ts_b > 0
+        return row
+
+    qdb.federal_bond_risk_state.find_one = contend_once
+    quota_a = _RequestQuota(timestamps=[])
+    granted_a, ts_a = await quota_a.reserve(qdb, 15, min_required=1)
+    assert granted_a == MAX_REQUESTS_PER_HOUR - 30 - 15  # strictly 5 remaining, never >50/hr
+    stored_row = await real_find({"_id": _request_quota_id()})
+    assert len(stored_row["timestamps"]) == MAX_REQUESTS_PER_HOUR
+
+    # Refunding 3 unused slots from caller A preserves all prior/caller-B timestamps.
+    await quota_a.reconcile(qdb, granted_a, ts_a, 2)
+    stored_after = await real_find({"_id": _request_quota_id()})
+    assert len(stored_after["timestamps"]) == MAX_REQUESTS_PER_HOUR - 3
+
+    # 3. Scan lease keys stay unprefixed for Shamrock and isolate secondary tenants.
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    with bind_job_tenant("shamrock", "federal_bond_risk"):
+        assert _scan_lease_id() == "scan_lease"
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        assert _scan_lease_id() == "scan_lease:alpha"
