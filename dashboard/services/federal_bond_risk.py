@@ -1353,18 +1353,14 @@ async def _active_bond_ids(db, page_size: int = BOND_PAGE) -> set[str]:
     return ids
 
 
-async def _bond_is_active(db, bond_case_id: str, *, require_record: bool = True) -> bool:
-    """Confirm ``bond_case_id`` still has an active status in ``active_bonds``.
-
-    When ``require_record`` is True (all DB-loaded scans), a missing record or
-    lookup error fails closed and returns False.
-    """
+async def _bond_live_status(db, bond_case_id: str) -> str:
+    """Return ``active``, ``inactive``, ``missing``, or ``error`` from ``active_bonds``."""
     bonds = getattr(db, "active_bonds", None) if db is not None else None
     bond_id = str(bond_case_id or "").strip()
     if not bond_id:
-        return False
+        return "missing"
     if bonds is None:
-        return not require_record
+        return "error"
     clauses: list[dict] = [
         {"Bond_Case_ID": bond_id},
         {"bond_case_id": bond_id},
@@ -1383,14 +1379,32 @@ async def _bond_is_active(db, bond_case_id: str, *, require_record: bool = True)
             "$or": clauses,
         })
         if active_row is not None:
-            return True
-        if require_record:
-            return False
+            return "active"
         any_row = await bonds.find_one({"$or": clauses})
-        return any_row is None
+        return "missing" if any_row is None else "inactive"
     except Exception as exc:
         log.warning("Federal bond-risk bond status recheck failed: %s", type(exc).__name__)
+        return "error"
+
+
+async def _bond_is_active(db, bond_case_id: str, *, require_record: bool = True) -> bool:
+    """Confirm ``bond_case_id`` still has an active status in ``active_bonds``.
+
+    When ``require_record`` is True (all DB-loaded scans), a missing record or
+    lookup error fails closed and returns False.
+    """
+    bond_id = str(bond_case_id or "").strip()
+    if not bond_id:
         return False
+    bonds = getattr(db, "active_bonds", None) if db is not None else None
+    if bonds is None:
+        return not require_record
+    state = await _bond_live_status(db, bond_id)
+    if state == "active":
+        return True
+    if state == "missing":
+        return not require_record
+    return False
 
 
 class _ScanStop(Exception):
@@ -2104,6 +2118,7 @@ def _event_document(decision: MatchDecision, docket: DocketView, source_id: str)
         "slack_attempts": 0,
         "notification_written": False,
         "notification_status": "",
+        "match_revision": 0,
     }
 
 
@@ -2235,6 +2250,40 @@ def _next_notification_revision(existing: Optional[dict], new_status: str) -> in
     if prior and prior != new_status:
         return stored + 1
     return stored
+
+
+def _next_match_revision(existing: Optional[dict]) -> int:
+    """Monotonic revision bumped on every state or evidence transition."""
+    return int((existing or {}).get("match_revision") or 0) + 1
+
+
+def _match_cas_filter(row: dict, expected_status: str) -> dict:
+    """Compare-and-set guard binding updates to _id, match_status, notification_revision, and match_revision."""
+    notif_rev = int(row.get("notification_revision") or 0)
+    match_rev = int(row.get("match_revision") or 0)
+    notif_clause: dict = (
+        {"$or": [
+            {"notification_revision": 0},
+            {"notification_revision": {"$exists": False}},
+            {"notification_revision": None},
+        ]}
+        if notif_rev == 0
+        else {"notification_revision": notif_rev}
+    )
+    match_clause: dict = (
+        {"$or": [
+            {"match_revision": 0},
+            {"match_revision": {"$exists": False}},
+            {"match_revision": None},
+        ]}
+        if match_rev == 0
+        else {"match_revision": match_rev}
+    )
+    return {
+        "_id": row.get("_id"),
+        "match_status": expected_status,
+        "$and": [notif_clause, match_clause],
+    }
 
 
 def _notification_version_filter(source_id: str, status: str, revision: int = 0) -> dict:
@@ -2719,6 +2768,7 @@ async def _store_decision(
         document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
         document["slack_claim"] = False
         document["slack_claim_at"] = ""
+        document["match_revision"] = _next_match_revision(existing)
         _clear_downgrade_fields(document)
         audit = _queue_match_audit(
             document, source_id, _match_state(existing), _match_state(document),
@@ -2726,7 +2776,7 @@ async def _store_decision(
             prior=existing,
         )
         result = await db.docket_events.update_one(
-            {"_id": existing.get("_id"), "match_status": "possible"},
+            _match_cas_filter(existing, "possible"),
             _transition_update(document, audit),
         )
         if not getattr(result, "matched_count", 0):
@@ -2743,6 +2793,7 @@ async def _store_decision(
         document["slack_claim_at"] = ""
         document["slack_delivered"] = False
         document["alert_complete"] = False
+        document["match_revision"] = _next_match_revision(existing)
         document["_history_event"] = {
             "at": _now(),
             "from": "withdrawn",
@@ -2759,7 +2810,7 @@ async def _store_decision(
             prior=existing,
         )
         result = await db.docket_events.update_one(
-            {"_id": existing.get("_id"), "match_status": "withdrawn"},
+            _match_cas_filter(existing, "withdrawn"),
             _transition_update(document, audit),
         )
         if not getattr(result, "matched_count", 0):
@@ -2770,6 +2821,7 @@ async def _store_decision(
         )
         return "restored"
     if downgrade:
+        document["match_revision"] = _next_match_revision(existing)
         document = _with_downgrade_audit(existing, document, "identity_no_longer_confirms")
         audit = _queue_match_audit(
             document, source_id, _match_state(existing), _match_state(document),
@@ -2777,7 +2829,7 @@ async def _store_decision(
             prior=existing,
         )
         result = await db.docket_events.update_one(
-            {"_id": existing.get("_id"), "match_status": "confirmed"},
+            _match_cas_filter(existing, "confirmed"),
             _transition_update(document, audit),
         )
         if not getattr(result, "matched_count", 0):
@@ -2808,6 +2860,7 @@ async def _store_decision(
             document["notification_status"] = existing.get("notification_status") or ""
             rev = int(existing.get("notification_revision") or 0)
             document["notification_revision"] = rev
+            document["match_revision"] = _next_match_revision(existing)
             document["_history_event"] = {
                 "at": _now(),
                 "from": existing.get("match_status") or decision.status,
@@ -2824,10 +2877,7 @@ async def _store_decision(
                 prior=existing,
             )
             result = await db.docket_events.update_one(
-                {
-                    "_id": existing.get("_id"),
-                    **_notification_version_filter(source_id, decision.status, rev),
-                },
+                _match_cas_filter(existing, decision.status),
                 _transition_update(document, audit),
             )
             if not getattr(result, "matched_count", 0):
@@ -2899,6 +2949,7 @@ async def _withdraw_row(db, row: dict, reason: str) -> bool:
     document["confirmations"] = []
     document["confidence"] = 0.0
     document["notification_revision"] = _next_notification_revision(row, "withdrawn")
+    document["match_revision"] = _next_match_revision(row)
     document = _with_downgrade_audit(row, document, reason)
     audit = _queue_match_audit(
         document, source_id, _match_state(row), _match_state(document),
@@ -2906,7 +2957,7 @@ async def _withdraw_row(db, row: dict, reason: str) -> bool:
         prior=row,
     )
     result = await db.docket_events.update_one(
-        {"_id": row.get("_id"), "match_status": prior_status},
+        _match_cas_filter(row, str(prior_status or "")),
         _transition_update(document, audit),
     )
     if getattr(result, "matched_count", 0) and source_id:
@@ -2927,11 +2978,22 @@ async def _unlink_inactive_bond_ids(db, active: set[str]) -> list[str]:
         {"source": SOURCE, "match_status": {"$in": ["confirmed", "possible"]}},
     ):
         for row in page:
-            bonds = [
-                str(row.get("bond_case_id") or "").strip(),
-                str(row.get("candidate_bond_case_id") or "").strip(),
+            candidate_bonds = [
+                bond for bond in dict.fromkeys((
+                    str(row.get("bond_case_id") or "").strip(),
+                    str(row.get("candidate_bond_case_id") or "").strip(),
+                )) if bond
             ]
-            if any(bond in active for bond in bonds if bond):
+            if any(bond in active for bond in candidate_bonds):
+                continue
+            # Re-verify live bond status before withdrawing so a bond reinstated
+            # after ``active`` was snapshotted (or a lookup error) never causes a false unlink.
+            still_open = False
+            for bond in candidate_bonds:
+                if await _bond_live_status(db, bond) in {"active", "error"}:
+                    still_open = True
+                    break
+            if still_open:
                 continue
             source_id = str(row.get("source_id") or "")
             if await _withdraw_row(db, row, "client_no_longer_active") and source_id:

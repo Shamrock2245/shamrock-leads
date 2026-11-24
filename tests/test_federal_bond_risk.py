@@ -4263,3 +4263,88 @@ async def test_upgrade_clears_stale_slack_claim_and_mismatch_releases_claim(monk
     )
     assert claimed_confirmed is not None
     assert claimed_confirmed["match_status"] == "confirmed"
+
+
+@pytest.mark.asyncio
+async def test_stale_withdrawal_is_rejected_after_same_status_evidence_refresh(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import _withdraw_row
+
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    db = _DB()
+    client = _client(dobs=["1985-01-15"], numbers=["2:24-cr-00123"])
+    await _scan(db, court, [client])
+    assert db.docket_events.docs[0]["match_status"] == "confirmed"
+    assert db.docket_events.docs[0]["match_revision"] == 0
+    stale_row = dict(db.docket_events.docs[0])
+
+    # Refresh evidence while keeping status="confirmed" -> match_revision advances to 1.
+    court.parties = [{"name": "Smith, John"}]
+    await _scan(db, court, [client])
+    assert db.docket_events.docs[0]["confirmations"] == ["case_number"]
+    assert db.docket_events.docs[0]["confidence"] == 0.95
+    assert db.docket_events.docs[0]["match_revision"] == 1
+    assert db.docket_events.docs[0].get("notification_revision", 0) == 0
+
+    audits_before = len(db.audit_events.docs)
+    notes_before = len(db.notifications.docs)
+    assert await _withdraw_row(db, stale_row, "identity_no_longer_matches") is False
+    assert db.docket_events.docs[0]["match_status"] == "confirmed"
+    assert db.docket_events.docs[0]["confirmations"] == ["case_number"]
+    assert db.docket_events.docs[0]["match_revision"] == 1
+    assert len(db.audit_events.docs) == audits_before
+    assert len(db.notifications.docs) == notes_before
+
+    # Withdrawing with the fresh match_revision=1 snapshot succeeds.
+    assert await _withdraw_row(db, dict(db.docket_events.docs[0]), "identity_no_longer_matches") is True
+    assert db.docket_events.docs[0]["match_status"] == "withdrawn"
+    assert db.docket_events.docs[0]["match_revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_unlink_rechecks_live_bond_status_before_withdrawing_reinstated_bond(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, _unlink_inactive_bond_ids
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "reinstated",
+    })
+    db.docket_events.docs.append({
+        "_id": "evt-1",
+        "source": SOURCE,
+        "source_id": "fl-federal:1001:warrant:entry:1:bond-1",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "bond_case_id": "bond-1",
+        "candidate_bond_case_id": "bond-1",
+        "defendant_id": "def-1",
+        "matched_defendant_id": "def-1",
+        "confirmations": ["dob"],
+        "confidence": 0.95,
+        "match_revision": 0,
+        "notification_revision": 0,
+    })
+
+    # Stale snapshot omits bond-1, but live active_bonds shows reinstated -> no false unlink.
+    assert await _unlink_inactive_bond_ids(db, set()) == []
+    assert db.docket_events.docs[0]["match_status"] == "confirmed"
+    assert db.docket_events.docs[0]["auto_linked"] is True
+    assert db.audit_events.docs == []
+    assert db.notifications.docs == []
+
+    # Lookup error during live bond check also skips withdrawal instead of false-unlinking.
+    async def broken_find_one(*_args, **_kwargs):
+        raise RuntimeError("mongo timeout")
+
+    db.active_bonds.find_one = broken_find_one
+    assert await _unlink_inactive_bond_ids(db, set()) == []
+    assert db.docket_events.docs[0]["match_status"] == "confirmed"
+    assert db.docket_events.docs[0]["auto_linked"] is True
