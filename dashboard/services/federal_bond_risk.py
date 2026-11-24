@@ -622,6 +622,7 @@ class DocketEvent:
     label: str
     filing_id: str
     affected_names: tuple[str, ...] = ()
+    filing_date: str = ""
 
 
 @dataclass
@@ -639,6 +640,8 @@ class DocketView:
     events: list[DocketEvent] = field(default_factory=list)
     seen_filing_ids: set[str] = field(default_factory=set)
     absolute_url: str = ""
+    entries_complete: bool = False
+    entry_window_start: str = ""
 
     def identifier_pool(self) -> set[str]:
         pool = set(self.numbers)
@@ -658,6 +661,7 @@ class MatchDecision:
     event_label: str
     filing_id: str
     ambiguous: bool = False
+    filing_date: str = ""
 
 
 def party_dobs_for_client(client: ClientIdentity, docket: DocketView) -> Optional[set[str]]:
@@ -1098,6 +1102,7 @@ def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[Ma
                 event_type=event.event_type,
                 event_label=event.label,
                 filing_id=event.filing_id,
+                filing_date=event.filing_date,
             ))
         confirmed = [row for row in group if row.status == "confirmed"]
         people = {_person_key(row.client) for row in confirmed}
@@ -1165,6 +1170,11 @@ def _parse_day(value: str) -> Optional[datetime]:
         return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError:
         return None
+
+
+def _normalize_filing_date(value: str) -> str:
+    raw = str(value or "").strip()[:10]
+    return raw if _parse_day(raw) is not None else ""
 
 
 def filing_in_window(value: str, start: Optional[str] = None) -> bool:
@@ -1443,16 +1453,22 @@ def _stop_if_blocked(result: dict) -> None:
         )
 
 
-def _events_from_text(text: str, filing_id: str, party_names: list[str] | None = None) -> list[DocketEvent]:
+def _events_from_text(
+    text: str,
+    filing_id: str,
+    party_names: list[str] | None = None,
+    filing_date: str = "",
+) -> list[DocketEvent]:
     names = list(party_names or [])
     general_named = parties_affected_by_text(text, names)
+    day = _normalize_filing_date(filing_date)
     events: list[DocketEvent] = []
     for event_type, label in classify_bond_risk(text):
         if event_type in _ACTOR_SENSITIVE:
             named = _actor_event_parties(text, event_type, names)
         else:
             named = general_named
-        events.append(DocketEvent(event_type, label, filing_id, named))
+        events.append(DocketEvent(event_type, label, filing_id, named, day))
     return events
 
 
@@ -1511,18 +1527,26 @@ def _hit_docket_id(hit: dict, search_type: str) -> str:
     return ""
 
 
-def _extend_events(docket: DocketView, text: str, filing_id: str, party_names: list[str] | None = None) -> None:
+def _extend_events(
+    docket: DocketView,
+    text: str,
+    filing_id: str,
+    party_names: list[str] | None = None,
+    filing_date: str = "",
+) -> None:
     """Keep every filing. A later copy of the same filing can add the party it names."""
     if not filing_id:
         return
     resolved_parties = list(party_names or [party.name for party in docket.parties])
     have = {(event.event_type, event.filing_id): event for event in docket.events}
-    for event in _events_from_text(text, filing_id, resolved_parties):
+    for event in _events_from_text(text, filing_id, resolved_parties, filing_date=filing_date):
         key = (event.event_type, event.filing_id)
         existing = have.get(key)
         if existing is not None:
             if event.affected_names:
                 existing.affected_names = tuple(dict.fromkeys((*existing.affected_names, *event.affected_names)))
+            if not existing.filing_date and event.filing_date:
+                existing.filing_date = event.filing_date
             continue
         docket.events.append(event)
         have[key] = event
@@ -1889,7 +1913,7 @@ async def _collect_dockets(client, pause_s: float, db=None) -> _CollectedSlice:
             brief_failures.append(brief_error)
             if sid:
                 failed_seed_ids.add(sid)
-        if view and (view.events or view.seen_filing_ids) and is_fl_federal_criminal(view.court_id, view.docket_number):
+        if view and (view.events or view.seen_filing_ids or view.entries_complete) and is_fl_federal_criminal(view.court_id, view.docket_number):
             views.append(view)
     if batch and party_failures and len(party_failures) == len(batch):
         raise _ScanStop(
@@ -1954,12 +1978,13 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         log.warning("Docket %s party list was truncated", docket_id)
         return None, f"{docket_id} party_list_truncated", "", ""
     parties = [row for row in (party_res.get("results") or []) if isinstance(row, dict)]
+    window = filing_window_start()
     entry_res = await client.list_docket_entries(
         int(docket_id),
         page_size=20,
         max_pages=MAX_ENTRY_PAGES,
         pause_s=pause_s,
-        until_date=filing_window_start(),
+        until_date=window,
     )
     _stop_if_blocked(entry_res)
     entry_error = ""
@@ -1968,10 +1993,11 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         # A partial list would hide a warrant or release, so this docket stops.
         log.warning("Docket %s entry list did not cover the lookback window", docket_id)
         return None, "", f"{docket_id} entry_list_truncated", ""
+    entries_complete = bool(entry_res.get("success") and not entry_res.get("truncated"))
     if entry_res.get("success"):
         entries = [
             row for row in (entry_res.get("results") or [])
-            if isinstance(row, dict) and filing_in_window(str(row.get("date_filed") or ""))
+            if isinstance(row, dict) and filing_in_window(str(row.get("date_filed") or ""), window)
         ]
     else:
         detail = entry_res.get("error") or f"HTTP {entry_res.get('status_code') or 'error'}"
@@ -2006,6 +2032,8 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
         names=names,
         parties=party_rows,
         absolute_url=f"https://www.courtlistener.com/docket/{docket_id}/" if docket_id else "",
+        entries_complete=entries_complete,
+        entry_window_start=window,
     )
     for value in (docket_number, pacer):
         ident = canonical_identifier(value)
@@ -2013,6 +2041,7 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
             view.numbers.add(ident)
     doc_to_entry: dict[str, str] = {}
     text_to_entry: dict[str, str] = {}
+    entry_dates: dict[str, str] = {}
     for entry in entries:
         description = str(entry.get("description") or "")
         entry_token = entry.get("id") or entry.get("entry_number") or ""
@@ -2022,6 +2051,7 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
             filing = "entry:" + hashlib.sha256(description.encode()).hexdigest()[:12]
         else:
             filing = ""
+        entry_date = _normalize_filing_date(str(entry.get("date_filed") or ""))
         for doc_id in _entry_document_ids(entry):
             if entry_token:
                 doc_to_entry[doc_id] = str(entry_token)
@@ -2029,22 +2059,49 @@ async def _hydrate(client, seed: dict, pause_s: float = 0.0) -> tuple[Optional[D
             text_to_entry.setdefault(_norm_filing_text(description), filing)
         if filing:
             view.seen_filing_ids.add(filing)
-        _extend_events(view, description, filing, [party.name for party in view.parties])
+            if entry_date:
+                entry_dates[filing] = entry_date
+        _extend_events(
+            view,
+            description,
+            filing,
+            [party.name for party in view.parties],
+            filing_date=entry_date,
+        )
     for hit in hits:
         party_names = [party.name for party in view.parties]
+        hit_date = _normalize_filing_date(_hit_entry_date(hit))
         if hit.get("_search_type") == "rd":
             blob = " ".join(
                 str(hit.get(key) or "")
                 for key in ("description", "short_description", "snippet")
             )
-            _attach_document(view, hit, blob, doc_to_entry, text_to_entry, party_names)
+            _attach_document(
+                view,
+                hit,
+                blob,
+                doc_to_entry,
+                text_to_entry,
+                party_names,
+                entry_dates=entry_dates,
+                fallback_date=hit_date,
+            )
         for doc in hit.get("recap_documents") or []:
             if not isinstance(doc, dict):
                 continue
             blob = " ".join(
                 str(doc.get(key) or "") for key in ("description", "short_description", "snippet")
             )
-            _attach_document(view, doc, blob, doc_to_entry, text_to_entry, party_names)
+            _attach_document(
+                view,
+                doc,
+                blob,
+                doc_to_entry,
+                text_to_entry,
+                party_names,
+                entry_dates=entry_dates,
+                fallback_date=hit_date,
+            )
     return view, "", entry_error, brief_error
 
 
@@ -2055,8 +2112,12 @@ def _attach_document(
     doc_to_entry: dict[str, str],
     text_to_entry: dict[str, str],
     party_names: list[str],
+    *,
+    entry_dates: Optional[dict[str, str]] = None,
+    fallback_date: str = "",
 ) -> None:
     """Classify one RECAP document, using its docket entry as the filing id when known."""
+    doc_date = _normalize_filing_date(_hit_entry_date(doc)) or _normalize_filing_date(fallback_date)
     linked = _linked_entry_id(doc) or doc_to_entry.get(str(doc.get("id") or ""))
     if not linked:
         linked_filing = text_to_entry.get(_norm_filing_text(blob), "")
@@ -2064,7 +2125,8 @@ def _attach_document(
         linked_filing = f"entry:{linked}"
     if linked_filing:
         view.seen_filing_ids.add(linked_filing)
-        _extend_events(view, blob, linked_filing, party_names)
+        linked_date = (entry_dates or {}).get(linked_filing) or doc_date
+        _extend_events(view, blob, linked_filing, party_names, filing_date=linked_date)
         return
     doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
     if not doc_id and blob.strip():
@@ -2072,7 +2134,7 @@ def _attach_document(
     filing_id = f"doc:{doc_id}" if doc_id else ""
     if filing_id:
         view.seen_filing_ids.add(filing_id)
-    _extend_events(view, blob, filing_id, party_names)
+    _extend_events(view, blob, filing_id, party_names, filing_date=doc_date)
 
 
 def _event_document(decision: MatchDecision, docket: DocketView, source_id: str) -> dict:
@@ -2110,6 +2172,7 @@ def _event_document(decision: MatchDecision, docket: DocketView, source_id: str)
         "description": message,
         "title": title,
         "filing_id": decision.filing_id,
+        "filing_date": _normalize_filing_date(decision.filing_date),
         "acknowledged": False,
         "detected_at": _now(),
         "client_messages": 0,
@@ -2584,7 +2647,15 @@ def _match_state(row: dict) -> dict:
         "auto_linked": bool(row.get("auto_linked")),
         "ambiguous": bool(row.get("ambiguous")),
         "bond_case_id": row.get("bond_case_id") or "",
+        "candidate_bond_case_id": row.get("candidate_bond_case_id") or row.get("bond_case_id") or "",
         "defendant_id": row.get("defendant_id") or row.get("matched_defendant_id") or "",
+        "candidate_defendant_id": (
+            row.get("candidate_defendant_id")
+            or row.get("defendant_id")
+            or row.get("matched_defendant_id")
+            or ""
+        ),
+        "defendant_name": row.get("defendant_name") or "",
         "confirmations": list(row.get("confirmations") or []),
         "confidence": _match_confidence(row),
     }
@@ -2599,6 +2670,22 @@ def _match_state_changed(existing: dict, document: dict) -> bool:
     return before != after
 
 
+def _identity_changed(existing: dict, document: dict) -> bool:
+    """True when the linked or candidate bond/defendant identity changed."""
+    before = _match_state(existing)
+    after = _match_state(document)
+    return any(
+        before[key] != after[key]
+        for key in (
+            "bond_case_id",
+            "candidate_bond_case_id",
+            "defendant_id",
+            "candidate_defendant_id",
+            "defendant_name",
+        )
+    )
+
+
 def _match_evidence(row: dict, reason: str) -> dict:
     return {
         "reason": reason,
@@ -2609,15 +2696,22 @@ def _match_evidence(row: dict, reason: str) -> dict:
         "confirmations": list(row.get("confirmations") or []),
         "candidate_bond_case_id": row.get("candidate_bond_case_id") or row.get("bond_case_id") or "",
         "candidate_defendant_id": row.get("candidate_defendant_id") or row.get("defendant_id") or "",
+        "defendant_name": row.get("defendant_name") or "",
     }
 
 
-def _downgrade_copy(name: str, event_label: str) -> tuple[str, str]:
+def _downgrade_copy(name: str, event_label: str, reason: str = "") -> tuple[str, str]:
     title = f"Federal bond risk link withdrawn — {event_label}"
-    message = (
-        f"Previously linked for {name}. {event_label} no longer confirms. "
-        "Newer court identity evidence removed the bond link and left it for staff review."
-    )
+    if reason == "filing_removed_from_docket":
+        message = (
+            f"Previously linked for {name}. {event_label} is no longer present in the "
+            "recent court docket listing. The bond link was withdrawn for staff review."
+        )
+    else:
+        message = (
+            f"Previously linked for {name}. {event_label} no longer confirms. "
+            "Newer court identity evidence removed the bond link and left it for staff review."
+        )
     return _redact_sensitive(title), _redact_sensitive(message)
 
 
@@ -2666,7 +2760,7 @@ def _with_downgrade_audit(existing: dict, document: dict, reason: str) -> dict:
     updated["notification_status"] = ""
     name = str(updated.get("defendant_name") or existing.get("defendant_name") or "the client")
     label = str(existing.get("event_type") or updated.get("event_type") or "filing").replace("_", " ")
-    title, message = _downgrade_copy(name, label)
+    title, message = _downgrade_copy(name, label, reason)
     updated["title"] = title
     updated["description"] = message
     return updated
@@ -2744,6 +2838,8 @@ async def _store_decision(
                 return "withdrawn"
         return "inactive"
     document = _event_document(decision, docket, source_id)
+    if existing and not document.get("filing_date") and existing.get("filing_date"):
+        document["filing_date"] = existing["filing_date"]
     document["notification_revision"] = _next_notification_revision(existing, decision.status)
     note = _notification(decision, docket, source_id)
     restore = bool(
@@ -2842,24 +2938,36 @@ async def _store_decision(
         return "downgraded"
     if existing:
         if _match_state_changed(existing, document):
+            identity_changed = _identity_changed(existing, document)
             document["detected_at"] = existing.get("detected_at") or document["detected_at"]
             document["updated_at"] = _now()
             document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
-            document["slack_delivered"] = bool(existing.get("slack_delivered"))
-            document["alert_complete"] = bool(existing.get("alert_complete"))
-            document["slack_claim"] = bool(existing.get("slack_claim"))
-            if existing.get("slack_delivered_at"):
-                document["slack_delivered_at"] = existing["slack_delivered_at"]
-            if existing.get("slack_last_attempt_at"):
-                document["slack_last_attempt_at"] = existing["slack_last_attempt_at"]
-            if existing.get("slack_claim_at"):
-                document["slack_claim_at"] = existing["slack_claim_at"]
+            if identity_changed:
+                rev = int(existing.get("notification_revision") or 0) + 1
+                document["notification_revision"] = rev
+                document["notification_written"] = False
+                document["notification_status"] = ""
+                document["slack_delivered"] = False
+                document["alert_complete"] = False
+                document["slack_claim"] = False
+                document["slack_claim_at"] = ""
+                document["slack_delivered_at"] = ""
+            else:
+                document["slack_delivered"] = bool(existing.get("slack_delivered"))
+                document["alert_complete"] = bool(existing.get("alert_complete"))
+                document["slack_claim"] = bool(existing.get("slack_claim"))
+                if existing.get("slack_delivered_at"):
+                    document["slack_delivered_at"] = existing["slack_delivered_at"]
+                if existing.get("slack_last_attempt_at"):
+                    document["slack_last_attempt_at"] = existing["slack_last_attempt_at"]
+                if existing.get("slack_claim_at"):
+                    document["slack_claim_at"] = existing["slack_claim_at"]
+                document["notification_written"] = bool(existing.get("notification_written"))
+                document["notification_status"] = existing.get("notification_status") or ""
+                rev = int(existing.get("notification_revision") or 0)
+                document["notification_revision"] = rev
             if existing.get("upgraded_at"):
                 document["upgraded_at"] = existing["upgraded_at"]
-            document["notification_written"] = bool(existing.get("notification_written"))
-            document["notification_status"] = existing.get("notification_status") or ""
-            rev = int(existing.get("notification_revision") or 0)
-            document["notification_revision"] = rev
             document["match_revision"] = _next_match_revision(existing)
             document["_history_event"] = {
                 "at": _now(),
@@ -2869,6 +2977,9 @@ async def _store_decision(
                 "auto_linked": bool(document.get("auto_linked")),
                 "bond_case_id": document.get("bond_case_id") or "",
                 "matched_defendant_id": document.get("matched_defendant_id"),
+                "candidate_bond_case_id": document.get("candidate_bond_case_id") or "",
+                "candidate_defendant_id": document.get("candidate_defendant_id") or "",
+                "defendant_name": document.get("defendant_name") or "",
                 "confidence": _match_confidence(document),
             }
             audit = _queue_match_audit(
@@ -2884,11 +2995,17 @@ async def _store_decision(
                 return "duplicate"
             await _flush_match_audit(db, source_id, audit)
             if (
-                not existing.get("notification_written")
+                identity_changed
+                or not existing.get("notification_written")
                 or existing.get("notification_status") != decision.status
             ):
                 await _ensure_notification(db, note, source_id, decision.status, rev)
             return "updated"
+        if document.get("filing_date") and not existing.get("filing_date"):
+            await db.docket_events.update_one(
+                _match_cas_filter(existing, decision.status),
+                {"$set": {"filing_date": document["filing_date"]}},
+            )
         if (
             not existing.get("notification_written")
             or existing.get("notification_status") != decision.status
@@ -3006,13 +3123,22 @@ async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> list[st
     return await _unlink_inactive_bond_ids(db, {client.bond_case_id for client in clients})
 
 
+def _filing_in_covered_window(row: dict, window_start: str) -> bool:
+    """True only when the stored row has a known filing date inside ``window_start``."""
+    raw = _normalize_filing_date(str(row.get("filing_date") or ""))
+    if not raw:
+        return False
+    return filing_in_window(raw, window_start)
+
+
 async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[MatchDecision]) -> list[str]:
-    """A filing seen again that no longer matches (or was corrected) must not stay auto-linked."""
+    """Withdraw active alerts whose filing no longer matches or disappeared in-window."""
     filing_ids = {fid for fid in docket.seen_filing_ids if fid} | {
         event.filing_id for event in docket.events if event.filing_id
     }
-    if not filing_ids:
+    if not filing_ids and not docket.entries_complete:
         return []
+    window_start = docket.entry_window_start or filing_window_start()
     still_open = {_source_id(docket, decision) for decision in decisions}
     withdrawn: list[str] = []
     async for page in _each_page(
@@ -3022,9 +3148,20 @@ async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[
             source_id = str(row.get("source_id") or "")
             if row.get("match_status") not in {"confirmed", "possible"}:
                 continue
-            if str(row.get("filing_id") or "") not in filing_ids or source_id in still_open:
+            if source_id in still_open:
                 continue
-            if await _withdraw_row(db, row, "identity_no_longer_matches") and source_id:
+            row_filing = str(row.get("filing_id") or "")
+            if row_filing in filing_ids:
+                reason = "identity_no_longer_matches"
+            elif (
+                docket.entries_complete
+                and row_filing.startswith(("entry:", "doc:"))
+                and _filing_in_covered_window(row, window_start)
+            ):
+                reason = "filing_removed_from_docket"
+            else:
+                continue
+            if await _withdraw_row(db, row, reason) and source_id:
                 withdrawn.append(source_id)
     return withdrawn
 

@@ -4348,3 +4348,180 @@ async def test_unlink_rechecks_live_bond_status_before_withdrawing_reinstated_bo
     assert await _unlink_inactive_bond_ids(db, set()) == []
     assert db.docket_events.docs[0]["match_status"] == "confirmed"
     assert db.docket_events.docs[0]["auto_linked"] is True
+
+
+@pytest.mark.asyncio
+async def test_possible_match_refreshes_and_audits_when_candidate_identity_changes(monkeypatch):
+    _enable(monkeypatch)
+    court = _CourtListener(
+        hits=[_hit()],
+        parties=[{"name": "Smith, John"}],
+    )
+    db = _DB()
+    notifier = _Notifier()
+
+    scan1 = await _scan(
+        db, court, [_client(name="John Smith", bond="bond-1", defendant="def-1")], notifier,
+    )
+    assert scan1["rows_written"] == 1
+    assert scan1["possible"] == 1
+    assert len(notifier.calls) == 1
+    assert len(db.notifications.docs) == 1
+    assert db.docket_events.docs[0]["match_status"] == "possible"
+    assert db.docket_events.docs[0]["auto_linked"] is False
+    assert db.docket_events.docs[0]["candidate_defendant_id"] == "def-1"
+    assert db.docket_events.docs[0]["defendant_name"] == "John Smith"
+    assert db.docket_events.docs[0]["match_revision"] == 0
+    assert db.docket_events.docs[0]["notification_revision"] == 0
+
+    # Active bond relinked to corrected defendant identity while filing remains "possible".
+    relinked = ClientIdentity(
+        bond_case_id="bond-1",
+        defendant_id="def-2",
+        names=("John A. Smith", "John Smith"),
+        dobs=frozenset(),
+        numbers=frozenset(),
+        status="active",
+    )
+    scan2 = await _scan(db, court, [relinked], notifier)
+    assert scan2["rows_written"] == 1
+    assert scan2["possible"] == 1
+    assert scan2["slack_sent"] == 1
+    row = db.docket_events.docs[0]
+    assert row["match_status"] == "possible"
+    assert row["auto_linked"] is False
+    assert row["candidate_defendant_id"] == "def-2"
+    assert row["defendant_name"] == "John A. Smith"
+    assert "John A. Smith" in row["description"]
+    assert row["match_revision"] == 1
+    assert row["notification_revision"] == 1
+    assert len(db.notifications.docs) == 2
+    assert "John A. Smith" in db.notifications.docs[-1]["message"]
+    assert len(notifier.calls) == 2
+    assert "John A. Smith" in notifier.calls[-1]["message"]
+    assert row["match_history"][-1]["reason"] == "match_evidence_updated"
+    assert row["match_history"][-1]["candidate_defendant_id"] == "def-2"
+    updated_audit = db.audit_events.docs[-1]
+    assert updated_audit["reason"] == "match_evidence_updated"
+    assert updated_audit["old_state"]["candidate_defendant_id"] == "def-1"
+    assert updated_audit["old_state"]["defendant_name"] == "John Smith"
+    assert updated_audit["new_state"]["candidate_defendant_id"] == "def-2"
+    assert updated_audit["new_state"]["defendant_name"] == "John A. Smith"
+
+    # Repeating with unchanged candidate identity writes 0 rows and no extra alert/audit.
+    scan3 = await _scan(db, court, [relinked], notifier)
+    assert scan3["rows_written"] == 0
+    assert scan3["slack_sent"] == 0
+    assert len(db.notifications.docs) == 2
+    assert len(notifier.calls) == 2
+    assert len(db.audit_events.docs) == 2
+
+
+@pytest.mark.asyncio
+async def test_deleted_in_window_entry_withdraws_link_but_out_of_window_entry_stays(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    old_day = (datetime.now(timezone.utc).date() - timedelta(days=60)).isoformat()
+    client = _client(name="John Smith", dobs=["1985-01-15"])
+
+    class _DeletedEntryCourt(_CourtListener):
+        def __init__(self):
+            super().__init__(
+                hits=[_hit(recap_documents=[])],
+                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+            )
+            self.stage = 1
+
+        async def list_docket_entries(self, docket_id, **kwargs):
+            self.calls.append(("entries", kwargs))
+            if self.stage == 1:
+                rows = [
+                    {"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": today},
+                    {"id": 99, "description": "Detention hearing", "date_filed": today},
+                ]
+            elif self.stage == 2:
+                rows = [
+                    {"id": 99, "description": "Detention hearing", "date_filed": today},
+                ]
+            else:
+                rows = []
+            return {"success": True, "truncated": False, "results": rows}
+
+    court = _DeletedEntryCourt()
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+
+    scan1 = await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+    assert scan1["confirmed"] == 2
+    by_filing = {row["filing_id"]: row for row in db.docket_events.docs}
+    assert by_filing["entry:42"]["filing_date"] == today
+    assert by_filing["entry:42"]["match_status"] == "confirmed"
+    assert by_filing["entry:99"]["filing_date"] == today
+    assert by_filing["entry:99"]["match_status"] == "confirmed"
+
+    # Seed an older out-of-window confirmed entry on the same docket (outside 45-day lookback).
+    db.docket_events.docs.append({
+        "_id": "old-entry-7",
+        "source": SOURCE,
+        "source_id": "fl-federal:1001:warrant:entry:7:bond-1",
+        "docket_id": "1001",
+        "docket_number": "2:24-cr-00123",
+        "filing_id": "entry:7",
+        "filing_date": old_day,
+        "event_type": "warrant",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "bond_case_id": "bond-1",
+        "candidate_bond_case_id": "bond-1",
+        "defendant_id": "def-1",
+        "candidate_defendant_id": "def-1",
+        "matched_defendant_id": "def-1",
+        "defendant_name": "John Smith",
+        "confirmations": ["dob"],
+        "confidence": 0.95,
+        "slack_delivered": True,
+        "notification_written": True,
+        "notification_status": "confirmed",
+        "match_revision": 0,
+        "notification_revision": 0,
+    })
+
+    # Stage 2: entry:42 disappeared (deleted/sealed) while entry:99 keeps the docket hydrated cleanly.
+    court.stage = 2
+    scan2 = await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+    assert scan2["rows_written"] == 1
+    by_filing = {row["filing_id"]: row for row in db.docket_events.docs}
+    assert by_filing["entry:42"]["match_status"] == "withdrawn"
+    assert by_filing["entry:42"]["auto_linked"] is False
+    assert by_filing["entry:42"]["bond_case_id"] == ""
+    assert by_filing["entry:42"]["downgrade_reason"] == "filing_removed_from_docket"
+    assert by_filing["entry:99"]["match_status"] == "confirmed"
+    assert by_filing["entry:7"]["match_status"] == "confirmed"
+    assert by_filing["entry:7"]["auto_linked"] is True
+    removed_audits = [a for a in db.audit_events.docs if a.get("reason") == "filing_removed_from_docket"]
+    assert len(removed_audits) == 1
+    assert removed_audits[0]["confidence"] == 0.0
+
+    # Stage 3: entry:99 also disappears leaving entries=[]; in-window entry:99 withdraws, old entry:7 stays.
+    court.stage = 3
+    scan3 = await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+    assert scan3["rows_written"] == 1
+    by_filing = {row["filing_id"]: row for row in db.docket_events.docs}
+    assert by_filing["entry:99"]["match_status"] == "withdrawn"
+    assert by_filing["entry:99"]["downgrade_reason"] == "filing_removed_from_docket"
+    assert by_filing["entry:7"]["match_status"] == "confirmed"
+    assert by_filing["entry:7"]["auto_linked"] is True
+    assert client.bond_case_id == "bond-1"
