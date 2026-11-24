@@ -1298,3 +1298,49 @@ async def first_appearance_watcher_endpoint(request: Request, api_key: str = "")
             status_code=500,
         )
 
+
+@automation_bp.post("/review-harvester")
+async def review_harvester_sweep(request: Request, api_key: str = ""):
+    """
+    Scan eligible posted/discharged bonds and queue (review mode) or send
+    (full_auto mode) Google review invitations.
+    Auth: GAS_API_KEY.
+    """
+    if not _authorized(request, api_key):
+        return _unauthorized()
+
+    from dashboard.extensions import get_db
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.services.review_harvester_service import ReviewHarvesterService
+
+    try:
+        try:
+            body = await request.json() or {}
+        except Exception:
+            body = {}
+        db = get_db()
+        cfg = dict((await get_automation_config(db)).get("review_harvester") or {})
+        if body.get("mode") is not None:
+            requested_mode = str(body["mode"]).strip().lower()
+            if requested_mode not in ("review", "full_auto"):
+                return JSONResponse(
+                    {"ok": False, "error": "invalid_mode", "action": "review_harvester"},
+                    status_code=400,
+                )
+            cfg["mode"] = requested_mode
+        if body.get("ignore_quiet_hours") is True:
+            cfg["ignore_quiet_hours"] = True
+        result = await ReviewHarvesterService(db).scan_and_harvest(cfg)
+        return {
+            "ok": True,
+            "action": "review_harvester",
+            **result,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        logger.exception("[automation] review-harvester failed: %s", exc)
+        return JSONResponse(
+            {"ok": False, "error": str(exc)[:400], "action": "review_harvester"},
+            status_code=500,
+        )
+

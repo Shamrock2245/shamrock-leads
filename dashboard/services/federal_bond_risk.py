@@ -1,0 +1,4477 @@
+"""
+Florida federal bond-risk alerts.
+
+Watches CourtListener v4 for criminal cases in FLMD, FLSD, and FLND that
+show a bond-risk event for someone who already has an active Shamrock bond.
+Reuses ``CourtListenerClient`` (token, 429 backoff, field selection, a
+bounded number of recent pages).
+
+Matching fails closed:
+  * full name, plus a date of birth on the party whose name matched, or a
+    case or agency number we already hold → confirmed and auto-linked
+  * full name only, or a date of birth that belongs to a different party →
+    ``possible`` for staff review, not auto-linked
+  * the matched party's own date of birth conflicts, a surname-only caption,
+    or two confirmed clients for the same filing → no auto-link
+
+``FEDERAL_BOND_RISK_ALERTS`` defaults off. Nothing is written and CourtListener
+is not called until it is on. With the flag on and no token, the scan skips
+and the status payload carries a warning. Output is a CRM notification plus
+a docket-monitor row and a Slack ``#alerts`` post. No client text, email, or
+Apple chat.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+import os
+import re
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+
+from core.booking_identity import redact_internal_keys
+from dashboard.services.courtlistener_client import (
+    ANONYMOUS_V4_REJECTED,
+    FL_FEDERAL_COURT_IDS,
+    SE_US_COURTS,
+)
+
+log = logging.getLogger("shamrock.federal_bond_risk")
+
+FLAG = "FEDERAL_BOND_RISK_ALERTS"
+SOURCE = "courtlistener_federal_bond_risk"
+EVENT_INDEX = "idx_federal_bond_risk_source"
+NOTIFICATION_INDEX = "idx_federal_bond_risk_notification"
+AUDIT_INDEX = "idx_federal_bond_risk_audit"
+_ON = {"1", "true", "yes", "on"}
+ACTIVE_STATUSES = ("active", "monitoring", "alert", "reinstated")
+FL_FEDERAL_COURTS = frozenset(FL_FEDERAL_COURT_IDS)
+# CourtListener v4 supports ``entry_date_filed`` filtering/ordering only on
+# RECAP dockets (``r``) and RECAP documents (``rd``), not docket-only ``d``.
+FEDERAL_SEARCH_TYPES = ("r", "rd")
+BOND_PAGE = 200
+# Search already stops at 50 pages. Hydrate every seed from that window.
+# 3,000 is only a ceiling. Past it, the next scan continues where this one stopped.
+HYDRATE_CEILING = 3000
+MAX_ROWS = 30
+MAX_SLACK = 10
+LOOKBACK_DAYS = 45
+SLACK_CLAIM_TTL = timedelta(minutes=30)
+SCAN_LEASE_TTL = timedelta(minutes=10)
+# Safety ceiling only. Paging stops when the filing dates leave the window.
+MAX_SEARCH_PAGES = 50
+MAX_ENTRY_PAGES = 50
+# CourtListener v4 default authenticated limits: 5/min, 50/hour, 125/day.
+# 12s minimum spacing stays at or below 5 req/min; 25 req/run across 4 six-hour
+# runs stays at 100/day (<= 125/day) with headroom for manual runs or other jobs.
+DEFAULT_PAUSE_S = 12.0
+MAX_REQUESTS_PER_MINUTE = 5
+MAX_REQUESTS_PER_HOUR = 50
+MAX_REQUESTS_PER_DAY = 125
+MAX_REQUESTS_PER_RUN = 25
+
+_SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
+_CAPTION_SPLIT = re.compile(r"\s+v(?:s\.?)?\s+", re.I)
+_CRIMINAL_DOCKET = re.compile(r"(?i)(?:\d{1,2}:)?\d{2}-(?:cr|mj)-")
+_CIVIL_DOCKET = re.compile(r"(?i)(?:\d{1,2}:)?\d{2}-cv-")
+_DOB_LABELED = re.compile(
+    r"(?i)(?:\bdob\b|date\s+of\s+birth|d\.o\.b\.?)\s*[:#-]?\s*"
+    r"(\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})"
+)
+
+# More specific release events are listed before "conditions set" so a
+# modification is not also stored as a new bond being set.
+_EVENT_RULES: tuple[tuple[str, str, re.Pattern[str]], ...] = (
+    ("failure_to_appear", "Failure to appear", re.compile(r"failure\s+to\s+appear|\bfailed\s+to\s+appear\b|\bfta\b", re.I)),
+    ("warrant", "Warrant", re.compile(r"arrest\s+warrant|bench\s+warrant|warrant\s+(?:issued|for\s+arrest)|\bcapias\b", re.I)),
+    ("revocation_of_release", "Revocation of release", re.compile(
+        r"revoc\w*\s+(?:of\s+)?(?:pretrial\s+)?release|revoke\s+(?:the\s+)?(?:bond|release|pretrial)|bond\s+revoc\w*|motion\s+to\s+revoke\s+bond",
+        re.I,
+    )),
+    ("modification_of_release", "Modification of release", re.compile(
+        r"modif\w+\s+(?:the\s+)?(?:conditions\s+of\s+)?release|order\s+modifying\s+conditions",
+        re.I,
+    )),
+    ("bond_conditions_changed", "Bond conditions changed", re.compile(
+        r"(?:bond|conditions\s+of\s+release)\s+(?:increased|decreased|reduced|raised|amended|changed)"
+        r"|amended\s+conditions\s+of\s+release",
+        re.I,
+    )),
+    ("detention_hearing", "Detention hearing", re.compile(r"detention\s+hearing", re.I)),
+    ("bond_conditions_set", "Bond conditions set", re.compile(
+        r"conditions\s+of\s+release|order\s+setting\s+(?:conditions|bond)|appearance\s+bond\s+set|\bbond\s+set\b",
+        re.I,
+    )),
+)
+_SET_SUPPRESSED_BY = {"revocation_of_release", "modification_of_release", "bond_conditions_changed"}
+
+
+def _match_paren(source: str, start: int) -> int:
+    depth = 0
+    index = start
+    while index < len(source):
+        if source[index] == "\\":
+            index += 2
+            continue
+        if source[index] == "(":
+            depth += 1
+        elif source[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return index
+        index += 1
+    raise ValueError(source)
+
+
+def _split_top(source: str, sep: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    index = 0
+    while index < len(source):
+        if source.startswith(sep, index) and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+            index += len(sep)
+            continue
+        char = source[index]
+        if char == "\\":
+            buf.append(source[index:index + 2])
+            index += 2
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        buf.append(char)
+        index += 1
+    parts.append("".join(buf))
+    return parts
+
+
+def _expand_regex_literals(source: str) -> list[str]:
+    """Word sequences a regex alternative can match, with the operators removed."""
+    source = re.sub(r"\(\?[aiLmsux]+\)", "", source)
+    out: list[str] = []
+    for phrase in _expand_expr(source):
+        cleaned = re.sub(r"\s+", " ", phrase).strip()
+        if cleaned and re.search(r"[A-Za-z]", cleaned):
+            out.append(cleaned)
+    return out
+
+
+def _expand_expr(source: str) -> list[str]:
+    alternatives = _split_top(source, "|")
+    if len(alternatives) > 1:
+        phrases: list[str] = []
+        for alternative in alternatives:
+            phrases.extend(_expand_expr(alternative))
+        return phrases
+    return _expand_concat(source)
+
+
+_STEM_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    "revoc": ("revocation",),
+    "modif": ("modify", "modifying", "modified", "modification"),
+}
+
+
+def _expand_concat(source: str) -> list[str]:
+    pieces: list[list[str]] = []
+    index = 0
+    while index < len(source):
+        if source.startswith(r"\b", index):
+            index += 2
+            continue
+        if source.startswith(r"\s+", index):
+            pieces.append([" "])
+            index += 3
+            continue
+        if source.startswith(r"\s", index):
+            pieces.append([" "])
+            index += 2
+            continue
+        if source.startswith(r"\w*", index) or source.startswith(r"\w+", index):
+            if pieces and len(pieces[-1]) == 1:
+                stem_match = re.search(r"([A-Za-z]+)$", pieces[-1][0])
+                if stem_match:
+                    stem = stem_match.group(1).lower()
+                    expanded = _STEM_EXPANSIONS.get(stem)
+                    if expanded:
+                        prefix = pieces[-1][0][:stem_match.start(1)]
+                        pieces[-1] = [f"{prefix}{word}" for word in expanded]
+                        index += 3
+                        continue
+            return []
+        if source[index] == "(":
+            end = _match_paren(source, index)
+            inner = source[index + 1:end]
+            optional = end + 1 < len(source) and source[end + 1] == "?"
+            if inner.startswith("?:"):
+                inner = inner[2:]
+            elif inner.startswith("?"):
+                return []
+            options = _expand_expr(inner)
+            if optional:
+                options = ["", *options]
+            pieces.append(options or [""])
+            index = end + 1 + (1 if optional else 0)
+            continue
+        if source[index] == "\\":
+            return []
+        end = index
+        while end < len(source) and source[end] not in "(|)\\":
+            end += 1
+        pieces.append([source[index:end]])
+        index = end
+    combos = [""]
+    for options in pieces:
+        combos = [left + right for left in combos for right in options]
+    phrases = []
+    for combo in combos:
+        text = re.sub(r"\s+", " ", combo)
+        if text.strip() and "\\" not in text:
+            phrases.append(text)
+    return phrases
+
+
+def search_phrases() -> list[str]:
+    """Every literal the classifier can match, so the CourtListener query cannot drift."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for _event_type, label, pattern in _EVENT_RULES:
+        candidates = _expand_regex_literals(pattern.pattern)
+        if pattern.search(label):
+            candidates.append(label)
+        for phrase in candidates:
+            phrase = re.sub(r"\s+", " ", phrase).strip()
+            if not phrase or not pattern.search(phrase):
+                continue
+            key = phrase.lower()
+            if len(re.sub(r"[^a-z0-9]", "", key)) < 3 or key in seen:
+                continue
+            seen.add(key)
+            found.append(phrase)
+    found.sort(key=lambda phrase: (-len(phrase), phrase.lower()))
+    return found
+
+
+def bond_risk_query() -> str:
+    parts = []
+    for phrase in search_phrases():
+        parts.append(f'"{phrase}"' if " " in phrase else phrase)
+    return " OR ".join(parts)
+
+
+BOND_RISK_QUERY = bond_risk_query()
+# These phrases can describe counsel, the government, or another person.
+# Without a named defendant they stay possible, even on a one-defendant docket.
+_ACTOR_SENSITIVE = frozenset({
+    "failure_to_appear",
+    "warrant",
+    "revocation_of_release",
+    "modification_of_release",
+})
+
+_DOB_FIELDS = (
+    "dob", "DOB", "date_of_birth", "defendant_dob", "Date_of_Birth", "Defendant_DOB",
+)
+_NUMBER_FIELDS = (
+    "case_number", "Case_Number", "court_case_number", "Court_Case_Number",
+    "agency_case_number", "agency_number", "Agency_Number", "Agency_Case_Number",
+    "federal_case_number", "pacer_case_id", "pacer_case_number",
+)
+_NAME_FIELDS = ("defendant_name", "Defendant_Name", "full_name", "Full_Name")
+
+
+def federal_bond_risk_enabled() -> bool:
+    return os.getenv(FLAG, "").strip().lower() in _ON
+
+
+def federal_bond_risk_health() -> dict:
+    """Flag and token state. Safe to call when the scan is not running."""
+    token_on = bool(os.getenv("COURTLISTENER_API_TOKEN", "").strip())
+    enabled = federal_bond_risk_enabled()
+    warning = None
+    if not token_on:
+        warning = ANONYMOUS_V4_REJECTED
+    elif not enabled:
+        warning = (
+            f"{FLAG} is off. No CRM rows or Slack alerts are written."
+        )
+    return {
+        "enabled": enabled,
+        "token_configured": token_on,
+        "warning": warning,
+        "courts": list(FL_FEDERAL_COURT_IDS),
+        "client_messages": 0,
+    }
+
+
+def _tokens(value: str) -> list[str]:
+    cleaned = re.sub(r"[^A-Za-z\s'-]", " ", value or "")
+    out = []
+    for raw in cleaned.split():
+        token = raw.strip("'-").replace("'", "").upper()
+        if token and token not in _SUFFIXES:
+            out.append(token)
+    return out
+
+
+_SURNAME_PARTICLES = frozenset({
+    "ABU", "AL", "BIN", "DA", "DAS", "DE", "DEL", "DEN", "DER", "DI", "DO",
+    "DOS", "DU", "EL", "LA", "LAS", "LE", "LOS", "MAC", "MC", "SAN", "ST",
+    "TEN", "TER", "VAN", "VON", "Y",
+})
+
+
+def _split_natural_name(tokens: list[str]) -> tuple[str, tuple[str, ...], str]:
+    """Given name first. Surname particles stay on the surname, as in comma order."""
+    end = len(tokens) - 1
+    start = end
+    while start > 1 and tokens[start - 1] in _SURNAME_PARTICLES:
+        start -= 1
+    return tokens[0], tuple(tokens[1:start]), " ".join(tokens[start:])
+
+
+def name_parts(value: str) -> Optional[tuple[str, tuple[str, ...], str]]:
+    """Return (first, middles, last) for a full name, or None.
+
+    A single token or a one-letter given name is not a full name.
+    ``John De La Cruz`` and ``De La Cruz, John`` share the surname DE LA CRUZ.
+    """
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    if "," in raw:
+        last_raw, _, rest = raw.partition(",")
+        first_tokens = _tokens(rest)
+        last_tokens = _tokens(last_raw)
+        if not first_tokens or not last_tokens:
+            return None
+        first, middles, surname = first_tokens[0], tuple(first_tokens[1:]), " ".join(last_tokens)
+    else:
+        tokens = _tokens(raw)
+        if len(tokens) < 2:
+            return None
+        first, middles, surname = _split_natural_name(tokens)
+    if len(first) < 2 or len(surname.replace(" ", "")) < 2:
+        return None
+    return first, middles, surname
+
+
+def _middles_compatible(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    if len(left) != len(right):
+        return False
+    for x, y in zip(left, right):
+        if x == y:
+            continue
+        if len(x) == 1 and y.startswith(x):
+            continue
+        if len(y) == 1 and x.startswith(y):
+            continue
+        return False
+    return True
+
+
+def full_name_equal(left: str, right: str) -> bool:
+    """Exact first and last name. Middles may be absent. Conflicting middles fail."""
+    a = name_parts(left)
+    b = name_parts(right)
+    if not a or not b:
+        return False
+    if a[0] != b[0] or a[2] != b[2]:
+        return False
+    if a[1] and b[1]:
+        return _middles_compatible(a[1], b[1])
+    return True
+
+
+def defendant_names_from_caption(case_name: str) -> list[str]:
+    """Defendant side of ``United States v. Jane Roe``. Surname-only stays surname-only."""
+    text = re.sub(r"\([^)]*\)", " ", case_name or "")
+    parts = _CAPTION_SPLIT.split(text, maxsplit=1)
+    tail = parts[-1] if len(parts) == 2 else ""
+    tail = re.sub(r"\bet\s+al\.?\b", " ", tail, flags=re.I)
+    if not tail.strip():
+        return []
+    names = []
+    for chunk in re.split(r"\s+(?:and|&)\s+|;\s*", tail):
+        for alias in re.split(r"\s+a/?k/?a\s+", chunk, flags=re.I):
+            alias = alias.strip(" ,.-")
+            if alias:
+                names.append(alias)
+    return names
+
+
+def normalize_dob(value: str) -> Optional[str]:
+    raw = str(value or "").strip()
+    iso = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", raw)
+    us = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", raw)
+    if iso:
+        year, month, day = int(iso.group(1)), int(iso.group(2)), int(iso.group(3))
+    elif us:
+        month, day, year = int(us.group(1)), int(us.group(2)), int(us.group(3))
+    else:
+        return None
+    if year < 1900 or year > datetime.now(timezone.utc).year:
+        return None
+    try:
+        return datetime(year, month, day).date().isoformat()
+    except ValueError:
+        return None
+
+
+def extract_labeled_dobs(text: str) -> set[str]:
+    found = set()
+    for match in _DOB_LABELED.finditer(text or ""):
+        norm = normalize_dob(match.group(1))
+        if norm:
+            found.add(norm)
+    return found
+
+
+def _dobs_from_extra(value) -> set[str]:
+    """Dates of birth inside one PACER extra_info blob."""
+    if isinstance(value, dict):
+        found = set()
+        for key in _DOB_FIELDS:
+            norm = normalize_dob(str(value.get(key) or ""))
+            if norm:
+                found.add(norm)
+        found |= extract_labeled_dobs(" ".join(str(item) for item in value.values() if item))
+        return found
+    return extract_labeled_dobs(str(value or ""))
+
+
+def _party_type_docket_id(party_type: dict) -> str:
+    explicit = str(party_type.get("docket_id") or "").strip()
+    if explicit:
+        return explicit
+    docket = party_type.get("docket")
+    if isinstance(docket, dict):
+        nested = str(docket.get("id") or "").strip()
+        if nested:
+            return nested
+        docket = docket.get("url") or docket.get("resource_uri") or ""
+    match = re.search(r"/dockets/(\d+)/?", str(docket or ""))
+    return match.group(1) if match else ""
+
+
+_DEFENDANT_ROLE = re.compile(r"\b(?:co[-\s]?)?defendant\b", re.I)
+_NON_DEFENDANT_ROLE = re.compile(
+    r"\b(?:attorney|counsel|lawyer|witness|victim|surety|bondsman|plaintiff|"
+    r"government|united\s+states|usa|prosecut\w*|intervenor|garnishee|claimant|"
+    r"creditor|interested|third[-\s]?party|amicus|trustee|receiver|custodian|"
+    r"guardian|interpreter|mediator|movant|objector|petitioner|respondent|"
+    r"probation|pretrial\s+services)\b",
+    re.I,
+)
+
+
+def _classify_party_role(role_name: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(role_name or "").strip())
+    if not cleaned:
+        return "unknown"
+    if _NON_DEFENDANT_ROLE.search(cleaned):
+        return "non_defendant"
+    if _DEFENDANT_ROLE.search(cleaned):
+        return "defendant"
+    return "ambiguous"
+
+
+def party_role_for_docket(party: dict, docket_id: str) -> str:
+    """Return ``defendant``, ``non_defendant``, ``ambiguous``, or ``unknown`` for this docket."""
+    types = party.get("party_types") or []
+    if isinstance(types, dict):
+        types = [types]
+    wanted = str(docket_id or "").strip()
+    matching: list[dict] = []
+    for party_type in types:
+        if not isinstance(party_type, dict):
+            continue
+        type_docket = _party_type_docket_id(party_type)
+        if wanted and type_docket != wanted:
+            continue
+        matching.append(party_type)
+    if not matching:
+        return "unknown"
+    roles = {_classify_party_role(str(pt.get("name") or pt.get("party_type") or "")) for pt in matching}
+    if roles == {"defendant"}:
+        return "defendant"
+    if roles == {"non_defendant"}:
+        return "non_defendant"
+    if len(roles) > 1 or "ambiguous" in roles:
+        return "ambiguous"
+    return "unknown"
+
+
+def party_dobs_for_docket(party: dict, docket_id: str) -> set[str]:
+    """Dates of birth on this party's defendant-eligible types for this docket.
+
+    CourtListener nests that text on ``party_types[].extra_info``. A type for
+    another docket or an explicit non-defendant role is ignored. The flat
+    ``Party.extra_info`` field is used only when the response has no party types
+    at all.
+    """
+    types = party.get("party_types") or []
+    if isinstance(types, dict):
+        types = [types]
+    wanted = str(docket_id or "").strip()
+    found: set[str] = set()
+    saw_type = False
+    for party_type in types:
+        if not isinstance(party_type, dict):
+            continue
+        saw_type = True
+        type_docket = _party_type_docket_id(party_type)
+        if wanted and type_docket != wanted:
+            continue
+        role_name = str(party_type.get("name") or party_type.get("party_type") or "")
+        if _classify_party_role(role_name) == "non_defendant":
+            continue
+        found |= _dobs_from_extra(party_type.get("extra_info"))
+    if saw_type:
+        return found
+    return _dobs_from_extra(party.get("extra_info"))
+
+
+_FEDERAL_JUDGE_DOCKET = re.compile(
+    r"^(?:\d{1,2}:)?\d{2}-(?:CR|MJ)-\d+(?:-\d+)?(?:-[A-Z]{2,4})+$"
+)
+
+
+def canonical_identifier(value: str) -> Optional[str]:
+    """Case or agency number. Requires a digit and at least 5 alphanumeric characters."""
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 80:
+        return None
+    compact = re.sub(r"\s+", "", raw.upper()).replace("–", "-").replace("—", "-")
+    # 2:24-cr-00123-JES-NPM and 2:24-cr-00123-SPC are the same case.
+    # Strip trailing judge initials only on federal cr/mj docket numbers so
+    # agency identifiers like AG-445566-FL vs AG-445566-JES stay exact.
+    if _FEDERAL_JUDGE_DOCKET.match(compact):
+        compact = re.sub(r"(?:-[A-Z]{2,4})+$", "", compact)
+    if not re.search(r"\d", compact):
+        return None
+    alnum = re.sub(r"[^A-Z0-9]", "", compact)
+    if len(alnum) < 5:
+        return None
+    return compact
+
+
+def _collect_dobs(doc: dict) -> set[str]:
+    found = set()
+    for key in _DOB_FIELDS:
+        norm = normalize_dob(str(doc.get(key) or ""))
+        if norm:
+            found.add(norm)
+    return found
+
+
+def _collect_numbers(doc: dict) -> set[str]:
+    found = set()
+    for key in _NUMBER_FIELDS:
+        ident = canonical_identifier(str(doc.get(key) or ""))
+        if ident:
+            found.add(ident)
+    return found
+
+
+def _collect_names(doc: dict) -> list[str]:
+    names = []
+    for key in _NAME_FIELDS:
+        value = str(doc.get(key) or "").strip()
+        if value and name_parts(value):
+            names.append(value)
+    first = str(doc.get("first_name") or doc.get("First_Name") or "").strip()
+    last = str(doc.get("last_name") or doc.get("Last_Name") or "").strip()
+    if first and last:
+        combined = f"{first} {last}".strip()
+        middle = str(doc.get("middle_name") or doc.get("Middle_Name") or "").strip()
+        if middle:
+            combined = f"{first} {middle} {last}"
+        if name_parts(combined):
+            names.append(combined)
+    return names
+
+
+def is_fl_federal_criminal(court_id: str, docket_number: str) -> bool:
+    if (court_id or "").strip().lower() not in FL_FEDERAL_COURTS:
+        return False
+    number = docket_number or ""
+    if _CIVIL_DOCKET.search(number) and not _CRIMINAL_DOCKET.search(number):
+        return False
+    return bool(_CRIMINAL_DOCKET.search(number))
+
+
+def classify_bond_risk(text: str) -> list[tuple[str, str]]:
+    """Bond-risk events in one docket entry or RECAP blurb. Empty when none match."""
+    if not text or not text.strip():
+        return []
+    if re.search(r"search\s+warrant", text, re.I) and not re.search(
+        r"arrest\s+warrant|bench\s+warrant|warrant\s+(?:issued|for\s+arrest)|\bcapias\b",
+        text,
+        re.I,
+    ):
+        # A search warrant alone is not a bond-risk warrant.
+        stripped = re.sub(r"search\s+warrant", " ", text, flags=re.I)
+    else:
+        stripped = text
+    found: list[tuple[str, str]] = []
+    seen = set()
+    for event_type, label, pattern in _EVENT_RULES:
+        if event_type not in seen and pattern.search(stripped):
+            found.append((event_type, label))
+            seen.add(event_type)
+    if seen & _SET_SUPPRESSED_BY:
+        found = [item for item in found if item[0] != "bond_conditions_set"]
+    return found
+
+
+def _court_slug(raw: dict) -> str:
+    from dashboard.services.courtlistener_client import CourtListenerClient
+
+    cid = str(raw.get("court_id") or "")
+    slug = CourtListenerClient._extract_court_slug(cid)
+    if slug:
+        return slug.lower()
+    court = str(raw.get("court") or "").strip().lower()
+    slug = CourtListenerClient._extract_court_slug(court)
+    if slug:
+        return slug.lower()
+    if court in FL_FEDERAL_COURTS:
+        return court
+    bare = cid.strip().lower()
+    if re.fullmatch(r"[a-z0-9_]+", bare):
+        return bare
+    return ""
+
+
+def _first_text(raw: dict, *keys: str) -> str:
+    for key in keys:
+        value = raw.get(key)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+@dataclass
+class ClientIdentity:
+    bond_case_id: str
+    defendant_id: str
+    names: tuple[str, ...]
+    dobs: frozenset[str]
+    numbers: frozenset[str]
+    status: str
+    dob_conflict: bool = False
+
+
+@dataclass(frozen=True)
+class DocketParty:
+    """One person on the docket. Their date of birth stays on this record."""
+
+    name: str
+    dobs: frozenset[str] = frozenset()
+    role: str = "defendant"
+
+
+@dataclass
+class DocketEvent:
+    event_type: str
+    label: str
+    filing_id: str
+    affected_names: tuple[str, ...] = ()
+    filing_date: str = ""
+
+
+@dataclass
+class DocketView:
+    docket_id: str
+    court_id: str
+    court_name: str
+    docket_number: str
+    case_name: str
+    pacer_case_id: str
+    cause: str
+    names: list[str] = field(default_factory=list)
+    parties: list[DocketParty] = field(default_factory=list)
+    numbers: set[str] = field(default_factory=set)
+    events: list[DocketEvent] = field(default_factory=list)
+    seen_filing_ids: set[str] = field(default_factory=set)
+    absolute_url: str = ""
+    entries_complete: bool = False
+    entry_window_start: str = ""
+    excluded_party_names: list[str] = field(default_factory=list)
+
+    def identifier_pool(self) -> set[str]:
+        pool = set(self.numbers)
+        for value in (self.docket_number, self.pacer_case_id, self.cause):
+            ident = canonical_identifier(value)
+            if ident:
+                pool.add(ident)
+        return pool
+
+
+@dataclass
+class MatchDecision:
+    client: ClientIdentity
+    status: str
+    confirmations: tuple[str, ...]
+    event_type: str
+    event_label: str
+    filing_id: str
+    ambiguous: bool = False
+    filing_date: str = ""
+
+
+def party_dobs_for_client(client: ClientIdentity, docket: DocketView) -> Optional[set[str]]:
+    """Dates of birth on parties whose name matches the client.
+
+    ``None`` means no party name matched (a caption-only hit). An empty set
+    means a party matched and that party has no date of birth. Dates of birth
+    on other parties are not included.
+    """
+    matched = [
+        party for party in docket.parties
+        if any(full_name_equal(name, party.name) for name in client.names)
+    ]
+    if not matched:
+        return None
+    found: set[str] = set()
+    for party in matched:
+        found.update(party.dobs)
+    return found
+
+
+def match_client(client: ClientIdentity, docket: DocketView) -> tuple[Optional[str], tuple[str, ...]]:
+    """Return (confirmed|possible|None, confirmation labels).
+
+    A date of birth confirms the link only when it is on a defendant-role party
+    whose name matched and that party has one date of birth. Missing or
+    ambiguous party roles stay possible for staff review, and explicit
+    non-defendants on this docket are excluded. Several dates on that party
+    stay possible for staff review. A different party's date of birth does not
+    confirm and does not conflict. The matched party's own single date of
+    birth, when it differs, drops the row even if a case number overlaps.
+    """
+    matched_parties = [
+        party for party in docket.parties
+        if any(full_name_equal(name, party.name) for name in client.names)
+    ]
+    if not matched_parties and any(
+        full_name_equal(name, excluded)
+        for name in client.names
+        for excluded in docket.excluded_party_names
+    ):
+        return None, ()
+    if not any(full_name_equal(name, other) for name in client.names for other in docket.names):
+        return None, ()
+    # Held dates that disagree cannot confirm, including through a case number.
+    if client.dob_conflict:
+        return "possible", ()
+    party_dobs = party_dobs_for_client(client, docket)
+    usable_dobs = set(client.dobs)
+    if party_dobs is not None and len(party_dobs) > 1:
+        # The matched party has more than one date of birth. One overlap does
+        # not confirm, and a case number does not paper over that conflict.
+        if usable_dobs and party_dobs and usable_dobs.isdisjoint(party_dobs):
+            return None, ()
+        return "possible", ()
+    if party_dobs is not None and usable_dobs and party_dobs and usable_dobs.isdisjoint(party_dobs):
+        return None, ()
+    # Non-defendant roles are excluded above; missing or ambiguous roles never auto-confirm.
+    role_confirmed = bool(matched_parties) and all(party.role == "defendant" for party in matched_parties)
+    if not role_confirmed:
+        return "possible", ()
+    confirmations = []
+    if party_dobs and usable_dobs & party_dobs:
+        confirmations.append("dob")
+    held_numbers = {
+        ident for ident in (canonical_identifier(number) for number in client.numbers) if ident
+    }
+    if held_numbers & docket.identifier_pool():
+        confirmations.append("case_number")
+    if confirmations:
+        return "confirmed", tuple(confirmations)
+    return "possible", ()
+
+
+_PARTY_TAIL = re.compile(
+    r"\b(?:denying|granting|granted|denies|grants|motion|ordering|"
+    r"setting|modifying|modify|modification|entered|issued|filed|ordered|"
+    r"regarding|concerning|pursuant|under|upon)\b",
+    re.I,
+)
+
+
+def _party_chunk(chunk: str) -> str:
+    """Keep the person's name and drop the rest of the docket sentence."""
+    clipped = _PARTY_TAIL.split(chunk or "", maxsplit=1)[0]
+    clipped = re.sub(r"\([^)]*\)", "", clipped).strip(" ,.-")
+    words = clipped.split()
+    if len(words) > 6:
+        clipped = " ".join(words[:6])
+    return clipped.strip(" ,.-")
+
+
+def parties_named_in_filing(text: str) -> tuple[str, ...]:
+    """People a filing names, such as ``as to Jane Roe``. Empty when it names nobody."""
+    found: list[str] = []
+    patterns = (
+        r"\bas to\b(?:\s+the)?(?:\s+defendant)?\s+([^.;\n]+)",
+        r"\bfor defendant\s+([^.;\n]+)",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, text or "", flags=re.I):
+            chunk = _party_chunk(match.group(1))
+            for part in re.split(r"\s+(?:and|&)\s+|;\s*", chunk):
+                part = part.strip(" ,.-")
+                if name_parts(part):
+                    found.append(part)
+    return tuple(dict.fromkeys(found))
+
+
+_NAME_SEGMENT_SPLIT = re.compile(
+    r"[;\n\r:()\[\]/|&]+"
+    r"|\s+vs?\.?\s+"
+    r"|\s+(?:and|or)\s+"
+    r"|\s+[-–—]+\s+"
+    r"|(?<!\b[A-Za-z])(?<!\bSt)(?<!\bJr)(?<!\bSr)\.(?=\s|$)",
+    re.I,
+)
+_NON_MIDDLE_TOKENS = frozenset({
+    "AND", "OR", "VS", "V", "FOR", "TO", "BY", "OF", "IN", "ON", "AT",
+    "WITH", "FROM", "RE", "AS", "THE", "PER", "DEFENDANT", "PLAINTIFF",
+    "COUNSEL", "ATTORNEY", "JUDGE", "COURT", "WARRANT", "BOND", "ORDER",
+    "MOTION", "UNITED", "STATES", "AMERICA", "USA", "ET", "AL",
+})
+_COMMA_NAME_LEAD_INS = frozenset({
+    "TO", "FOR", "DEFENDANT", "DEFENDANTS", "DEF", "RE", "BY", "OF",
+    "AGAINST", "CONCERNING", "REGARDING", "AS", "ON", "PER",
+    "MOVANT", "PETITIONER", "RESPONDENT",
+})
+_COMMA_NAME_TRAILERS = frozenset({
+    "DENYING", "GRANTING", "GRANTED", "DENIES", "GRANTS", "MOTION",
+    "ORDERING", "SETTING", "MODIFYING", "MODIFY", "MODIFICATION",
+    "ENTERED", "ISSUED", "FILED", "ORDERED", "REGARDING", "CONCERNING",
+    "PURSUANT", "UNDER", "UPON", "FAILED", "APPEARED", "SIGNED",
+    "WAIVED", "REVOKED", "MODIFIED", "SET", "HELD", "WAS", "IS",
+    "HAS", "HAD", "DETAINED", "RELEASED", "ARRESTED",
+})
+
+
+def _token_spans(value: str, base_offset: int = 0) -> list[tuple[str, int, int]]:
+    """Normalized alpha tokens with their character ``(start, end)`` spans."""
+    out: list[tuple[str, int, int]] = []
+    for match in re.finditer(r"[A-Za-z'-]+", value or ""):
+        token = match.group(0).strip("'-").replace("'", "").upper()
+        if token and token not in _SUFFIXES:
+            out.append((token, base_offset + match.start(), base_offset + match.end()))
+    return out
+
+
+def _name_spans_in_text(name: str, text: str) -> list[tuple[int, int]]:
+    """Character ``(start, end)`` spans where ``name`` appears contiguously in order."""
+    parts = name_parts(name)
+    if not parts or not text:
+        return []
+    first, middles, last = parts
+    last_seq = tuple(last.split())
+    last_len = len(last_seq)
+
+    seg_bounds: list[tuple[int, int]] = []
+    pos = 0
+    for sep_match in _NAME_SEGMENT_SPLIT.finditer(text):
+        if sep_match.start() > pos:
+            seg_bounds.append((pos, sep_match.start()))
+        pos = sep_match.end()
+    if pos < len(text):
+        seg_bounds.append((pos, len(text)))
+
+    spans: list[tuple[int, int]] = []
+    for seg_start, seg_end in seg_bounds:
+        segment = text[seg_start:seg_end]
+        if not segment.strip():
+            continue
+        piece_spans: list[tuple[int, int]] = []
+        p_start = seg_start
+        for part in segment.split(","):
+            piece_spans.append((p_start, p_start + len(part)))
+            p_start += len(part) + 1
+        for ps, pe in piece_spans:
+            tok_spans = _token_spans(text[ps:pe], ps)
+            toks = [item[0] for item in tok_spans]
+            for i, tok in enumerate(toks):
+                if tok != first:
+                    continue
+                if i + 1 + last_len <= len(toks) and tuple(toks[i + 1 : i + 1 + last_len]) == last_seq:
+                    spans.append((tok_spans[i][1], tok_spans[i + last_len][2]))
+                    continue
+                if middles:
+                    mid_len = len(middles)
+                    j = i + 1 + mid_len
+                    if (
+                        j + last_len <= len(toks)
+                        and tuple(toks[j : j + last_len]) == last_seq
+                        and _middles_compatible(middles, tuple(toks[i + 1 : j]))
+                    ):
+                        spans.append((tok_spans[i][1], tok_spans[j + last_len - 1][2]))
+                elif (
+                    i + 2 + last_len <= len(toks)
+                    and tuple(toks[i + 2 : i + 2 + last_len]) == last_seq
+                    and toks[i + 1] not in _NON_MIDDLE_TOKENS
+                ):
+                    spans.append((tok_spans[i][1], tok_spans[i + 1 + last_len][2]))
+        for k in range(len(piece_spans) - 1):
+            left_spans = _token_spans(text[piece_spans[k][0] : piece_spans[k][1]], piece_spans[k][0])
+            right_spans = _token_spans(
+                text[piece_spans[k + 1][0] : piece_spans[k + 1][1]], piece_spans[k + 1][0],
+            )
+            left_toks = [item[0] for item in left_spans]
+            right_toks = [item[0] for item in right_spans]
+            if not (
+                len(left_toks) >= last_len
+                and tuple(left_toks[-last_len:]) == last_seq
+                and (len(left_toks) == last_len or left_toks[-last_len - 1] in _COMMA_NAME_LEAD_INS)
+                and right_toks
+                and right_toks[0] == first
+            ):
+                continue
+            span_start = left_spans[-last_len][1]
+            tail = right_toks[1:]
+            if not tail or tail[0] in _COMMA_NAME_TRAILERS:
+                spans.append((span_start, right_spans[0][2]))
+                continue
+            if middles:
+                mid_len = len(middles)
+                if (
+                    len(tail) >= mid_len
+                    and _middles_compatible(middles, tuple(tail[:mid_len]))
+                    and (len(tail) == mid_len or tail[mid_len] in _COMMA_NAME_TRAILERS)
+                ):
+                    spans.append((span_start, right_spans[mid_len][2]))
+                continue
+            if len(tail[0]) == 1 and (len(tail) == 1 or tail[1] in _COMMA_NAME_TRAILERS):
+                spans.append((span_start, right_spans[1][2]))
+    return spans
+
+
+def _name_in_text(name: str, text: str) -> bool:
+    """True only when ``name`` appears as one contiguous ordered sequence."""
+    return bool(_name_spans_in_text(name, text))
+
+
+def parties_affected_by_text(text: str, party_names: list[str]) -> tuple[str, ...]:
+    """Who a filing is about. A single named party does not attach to the others.
+
+    A capture that is not an exact party name falls back to the docket party
+    named inside it, so a long order title cannot rename the defendant.
+    """
+    names = list(party_names or [])
+    explicit = parties_named_in_filing(text)
+    if explicit:
+        matched: list[str] = []
+        leftover: list[str] = []
+        for captured in explicit:
+            exact = [name for name in names if full_name_equal(captured, name)]
+            if exact:
+                matched.extend(exact)
+                continue
+            inside = [name for name in names if _name_in_text(name, captured)]
+            if len(inside) == 1:
+                matched.append(inside[0])
+                continue
+            if not names and name_parts(captured):
+                leftover.append(captured)
+        if matched:
+            return tuple(dict.fromkeys(matched))
+        mentioned = [name for name in names if _name_in_text(name, text)]
+        if len(mentioned) == 1:
+            return (mentioned[0],)
+        if mentioned:
+            return tuple(dict.fromkeys(mentioned))
+        return tuple(dict.fromkeys(leftover))
+    mentioned = [name for name in names if _name_in_text(name, text)]
+    if len(mentioned) == 1:
+        return (mentioned[0],)
+    return tuple(dict.fromkeys(mentioned))
+
+
+_EVENT_RULE_BY_TYPE = {et: pat for et, _label, pat in _EVENT_RULES}
+_PERSONAL_ACTOR_SENSITIVE = frozenset({"failure_to_appear", "warrant"})
+_CLAUSE_SPLIT = re.compile(
+    r"[;\n\r:]+"
+    r"|(?<!\b[A-Za-z])(?<!\bSt)(?<!\bJr)(?<!\bSr)\.(?=\s|$)"
+    r"|,\s+(?:and|but|while|whereas|however)\s+",
+    re.I,
+)
+_NON_DEFENDANT_ACTOR = re.compile(
+    r"\b(?:counsel|attorney|lawyer|defender|representative|prosecutor|government|"
+    r"united\s+states|ausa|usao|witness|material\s+witness|victim|surety|"
+    r"bondsman|bail\s+agent|probation|pretrial\s+services|marshal|officer|"
+    r"agent|interpreter|juror)\b",
+    re.I,
+)
+_REPRESENTATIVE_PREFIX = re.compile(
+    r"\b(?:counsel|attorney|lawyer|defender|representative)\s+(?:for|of|representing)\s+(?:the\s+)?(?:defendant\s+)?$",
+    re.I,
+)
+_SUBJECT_BRIDGE_TOKENS = frozenset({
+    "HAS", "HAD", "IS", "WAS", "WHO", "ALLEGEDLY", "ALLEGED", "DEFENDANT", "DEF",
+})
+_TARGET_BRIDGE_TOKENS = frozenset({
+    "ISSUED", "ENTERED", "ORDERED", "FILED", "RETURNED", "EXECUTED",
+    "UNEXECUTED", "AS", "TO", "FOR", "AGAINST", "BY", "OF", "RE",
+    "ON", "IN", "THE", "A", "DEFENDANT", "DEFENDANTS", "DEF",
+    "BOND", "RELEASE", "PRETRIAL", "CONDITIONS", "AND",
+})
+
+
+def _strip_joint_names(bridge: str, current_party: str, party_names: list[str]) -> str:
+    """Blank out earlier party names inside a joint target clause like ``for A and B``."""
+    masked = bridge
+    for other in party_names:
+        if full_name_equal(other, current_party):
+            continue
+        for ns, ne in reversed(_name_spans_in_text(other, masked)):
+            after = masked[ne:]
+            if re.match(r"^\s*(?:and|&)\b", after, re.I):
+                masked = masked[:ns] + (" " * (ne - ns)) + masked[ne:]
+    return masked
+
+
+def _actor_event_parties(text: str, event_type: str, party_names: list[str]) -> tuple[str, ...]:
+    """Tie an actor-sensitive event phrase to the defendant it actually refers to."""
+    pattern = _EVENT_RULE_BY_TYPE.get(event_type)
+    if pattern is None or not text:
+        return ()
+    names = list(party_names or [])
+    matched: list[str] = []
+    header_patterns = (
+        r"\bas to\b(?:\s+the)?(?:\s+defendant)?\s+([^.;\n]+)",
+        r"\bfor defendant\s+([^.;\n]+)",
+    )
+    for clause in _CLAUSE_SPLIT.split(text):
+        if not clause or not clause.strip():
+            continue
+        found_in_clause = False
+        for match in pattern.finditer(clause):
+            found_in_clause = True
+            before = clause[: match.start()]
+            after = clause[match.end() :]
+            if not names:
+                if event_type not in _PERSONAL_ACTOR_SENSITIVE or not _NON_DEFENDANT_ACTOR.search(clause):
+                    matched.extend(parties_named_in_filing(clause))
+                continue
+            for party_name in names:
+                for ns, ne in _name_spans_in_text(party_name, before):
+                    prefix = before[:ns]
+                    bridge = before[ne:]
+                    if (
+                        "," not in bridge
+                        and not _REPRESENTATIVE_PREFIX.search(prefix)
+                        and not _NON_DEFENDANT_ACTOR.search(bridge)
+                        and not _NON_DEFENDANT_ACTOR.search(prefix.rsplit(",", 1)[-1])
+                        and set(_tokens(bridge)).issubset(_SUBJECT_BRIDGE_TOKENS)
+                    ):
+                        matched.append(party_name)
+                for ns, _ne in _name_spans_in_text(party_name, after):
+                    bridge = after[:ns]
+                    if (
+                        "," in bridge
+                        or _NON_DEFENDANT_ACTOR.search(bridge)
+                        or _REPRESENTATIVE_PREFIX.search(bridge)
+                    ):
+                        continue
+                    cleaned_bridge = _strip_joint_names(bridge, party_name, names)
+                    if set(_tokens(cleaned_bridge)).issubset(_TARGET_BRIDGE_TOKENS):
+                        matched.append(party_name)
+            for hpat in header_patterns:
+                for hmatch in re.finditer(hpat, before, flags=re.I):
+                    raw_after_kw = before[hmatch.start(1) :]
+                    if event_type in _PERSONAL_ACTOR_SENSITIVE and _NON_DEFENDANT_ACTOR.search(raw_after_kw):
+                        continue
+                    chunk = _party_chunk(hmatch.group(1))
+                    if not chunk:
+                        continue
+                    chunk_pos = raw_after_kw.find(chunk)
+                    between = raw_after_kw[chunk_pos + len(chunk) :] if chunk_pos >= 0 else ""
+                    if "," in between or _NON_DEFENDANT_ACTOR.search(between):
+                        continue
+                    for part in re.split(r"\s+(?:and|&)\s+|;\s*", chunk):
+                        part = part.strip(" ,.-")
+                        if not name_parts(part):
+                            continue
+                        exact = [name for name in names if full_name_equal(part, name)]
+                        if exact:
+                            matched.extend(exact)
+                        else:
+                            inside = [name for name in names if _name_in_text(name, part)]
+                            if len(inside) == 1:
+                                matched.append(inside[0])
+        if not found_in_clause:
+            continue
+    return tuple(dict.fromkeys(matched))
+
+
+def _filing_affects_client(event: DocketEvent, client: ClientIdentity) -> bool:
+    """A filing that names someone else does not attach to this client."""
+    if not event.affected_names:
+        return True
+    return any(
+        full_name_equal(named, held)
+        for named in event.affected_names
+        for held in client.names
+    )
+
+
+def _person_key(client: ClientIdentity) -> tuple:
+    """One person, even when that person has more than one active bond."""
+    if client.defendant_id:
+        return ("defendant", client.defendant_id)
+    if client.names:
+        parts = name_parts(client.names[0])
+        if parts:
+            return ("name", parts[0], parts[2])
+    return ("bond", client.bond_case_id)
+
+
+def _docket_people(docket: DocketView) -> set[tuple]:
+    """Defendant-side people. The United States is not a defendant."""
+    found: set[tuple] = set()
+    for party in docket.parties:
+        label = " ".join(_tokens(party.name))
+        if label in {"UNITED STATES", "UNITED STATES OF AMERICA", "USA"}:
+            continue
+        parts = name_parts(party.name)
+        if parts:
+            found.add((parts[0], parts[2]))
+    return found
+
+
+def decide_matches(clients: list[ClientIdentity], docket: DocketView) -> list[MatchDecision]:
+    """One decision per client per event. Two confirmed people on one event are not linked.
+
+    A filing that names nobody is not confirmed when the docket has more than
+    one defendant, or when the phrase can describe someone other than the
+    defendant. Several bonds for the same defendant are still one person.
+    """
+    decisions: list[MatchDecision] = []
+    for event in docket.events:
+        group: list[MatchDecision] = []
+        for client in clients:
+            if not _filing_affects_client(event, client):
+                continue
+            status, confirmations = match_client(client, docket)
+            if not status:
+                continue
+            if status == "confirmed" and not event.affected_names and (
+                len(_docket_people(docket)) > 1
+                or event.event_type in _ACTOR_SENSITIVE
+            ):
+                status = "possible"
+                confirmations = ()
+            group.append(MatchDecision(
+                client=client,
+                status=status,
+                confirmations=confirmations,
+                event_type=event.event_type,
+                event_label=event.label,
+                filing_id=event.filing_id,
+                filing_date=event.filing_date,
+            ))
+        confirmed = [row for row in group if row.status == "confirmed"]
+        people = {_person_key(row.client) for row in confirmed}
+        if len(people) > 1:
+            for row in group:
+                if row.status == "confirmed":
+                    row.status = "possible"
+                    row.confirmations = ()
+                    row.ambiguous = True
+        decisions.extend(group)
+    return decisions
+
+
+def _redact_sensitive(text: str) -> str:
+    def _hide_dob(match: re.Match) -> str:
+        full = match.group(0)
+        date = match.group(1)
+        return full[: full.rfind(date)] + "[redacted]"
+
+    cleaned = _DOB_LABELED.sub(_hide_dob, text or "")
+    cleaned = re.sub(r"\b\d{3}-\d{2}-\d{4}\b", "[redacted]", cleaned)
+    cleaned = re.sub(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b", "[redacted]", cleaned)
+    return redact_internal_keys(cleaned)
+
+
+def _staff_copy(decision: MatchDecision, docket: DocketView) -> tuple[str, str]:
+    name = decision.client.names[0]
+    court = docket.court_name or docket.court_id.upper()
+    docket_no = docket.docket_number or "unknown docket"
+    if decision.status == "confirmed":
+        how = []
+        if "dob" in decision.confirmations:
+            how.append("date of birth")
+        if "case_number" in decision.confirmations:
+            how.append("a case or agency number already on the bond")
+        title = f"Federal bond risk linked — {decision.event_label}"
+        message = (
+            f"Confirmed for {name}. {decision.event_label} in {court}, docket {docket_no}. "
+            f"Matched on full name and {' and '.join(how)}. Linked to the active bond."
+        )
+    else:
+        title = f"Federal bond risk needs review — {decision.event_label}"
+        if decision.ambiguous:
+            why = "More than one active client confirmed to this docket, so nobody was auto-linked."
+        else:
+            why = "Full name matched. No date of birth or held case or agency number confirmed it."
+        message = (
+            f"Possible match for {name}. {decision.event_label} in {court}, docket {docket_no}. "
+            f"{why} Staff review only."
+        )
+    return _redact_sensitive(title), _redact_sensitive(message)
+
+
+def filing_window_start(now: Optional[datetime] = None) -> str:
+    """First calendar day of the recent-filings window, UTC."""
+    moment = now or datetime.now(timezone.utc)
+    return (moment.date() - timedelta(days=LOOKBACK_DAYS)).isoformat()
+
+
+def _parse_day(value: str) -> Optional[datetime]:
+    raw = str(value or "").strip()[:10]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _normalize_filing_date(value: str) -> str:
+    raw = str(value or "").strip()[:10]
+    return raw if _parse_day(raw) is not None else ""
+
+
+def filing_in_window(value: str, start: Optional[str] = None) -> bool:
+    """True when a filing date is inside the window. A missing date is kept."""
+    day = _parse_day(value)
+    if day is None:
+        return True
+    window = _parse_day(start or filing_window_start())
+    if window is None:
+        return True
+    return day >= window
+
+
+def _source_id(docket: DocketView, decision: MatchDecision) -> str:
+    key = docket.docket_id or canonical_identifier(docket.docket_number) or docket.docket_number
+    filing = decision.filing_id or "filing-unknown"
+    base = f"fl-federal:{key}:{decision.event_type}:{filing}:{decision.client.bond_case_id}"
+    token = _tenant_scope_token()
+    return f"{token}:{base}" if token else base
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _to_list(cursor, limit: int) -> list:
+    if hasattr(cursor, "limit"):
+        cursor = cursor.limit(limit)
+    rows = await cursor.to_list(length=limit)
+    return list(rows or [])
+
+
+async def _each_page(collection, query: dict, page_size: int = 200):
+    """Every matching row, in ``_id`` order, one page after another."""
+    last_id = None
+    step = max(int(page_size or 200), 1)
+    while True:
+        page_query = dict(query)
+        if last_id is not None:
+            page_query["_id"] = {"$gt": last_id}
+        cursor = collection.find(page_query)
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("_id", 1)
+        page = await _to_list(cursor, step)
+        if not page:
+            return
+        yield page
+        tail = page[-1].get("_id")
+        if tail is None or tail == last_id or len(page) < step:
+            return
+        last_id = tail
+
+
+async def _page_bonds(db, page_size: int) -> list[dict]:
+    """Every open bond, including reinstated ones, in ``_id`` order."""
+    bonds: list[dict] = []
+    last_id = None
+    while True:
+        query: dict = {"status": {"$in": list(ACTIVE_STATUSES)}}
+        if last_id is not None:
+            query["_id"] = {"$gt": last_id}
+        cursor = db.active_bonds.find(query)
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("_id", 1)
+        page = await _to_list(cursor, page_size)
+        if not page:
+            break
+        bonds.extend(page)
+        tail = page[-1].get("_id")
+        if tail is None or len(page) < page_size:
+            break
+        last_id = tail
+    return bonds
+
+
+async def _related_by_ids(collection, ids: list[str], page_size: int = BOND_PAGE) -> list[dict]:
+    """Every defendant or arrest row for these ids.
+
+    One prolific defendant must not use up the page and hide another person's
+    arrest. The cursor keeps going until that chunk is exhausted.
+    """
+    found: list[dict] = []
+    seen: set = set()
+    step = max(int(page_size or BOND_PAGE), 1)
+    for start in range(0, len(ids), step):
+        chunk = ids[start:start + step]
+        last_id = None
+        while True:
+            query: dict = {"$or": [
+                {"Defendant_ID": {"$in": chunk}},
+                {"defendant_id": {"$in": chunk}},
+            ]}
+            if last_id is not None:
+                query["_id"] = {"$gt": last_id}
+            cursor = collection.find(query)
+            if hasattr(cursor, "sort"):
+                cursor = cursor.sort("_id", 1)
+            page = await _to_list(cursor, step)
+            if not page:
+                break
+            for row in page:
+                marker = row.get("_id")
+                if marker is not None and marker in seen:
+                    continue
+                if marker is not None:
+                    seen.add(marker)
+                found.append(row)
+            tail = page[-1].get("_id")
+            if tail is None or tail == last_id or len(page) < step:
+                break
+            last_id = tail
+    return found
+
+
+async def load_active_clients(db, page_size: int = BOND_PAGE) -> list[ClientIdentity]:
+    """Open bonds (active, monitoring, alert, and reinstated), plus defendant and arrest identifiers."""
+    bonds = await _page_bonds(db, page_size)
+    defendant_ids = []
+    for bond in bonds:
+        for key in ("Defendant_ID", "defendant_id"):
+            value = str(bond.get(key) or "").strip()
+            if value:
+                defendant_ids.append(value)
+    defendants: list[dict] = []
+    arrests: list[dict] = []
+    if defendant_ids:
+        unique_ids = list(dict.fromkeys(defendant_ids))
+        defendants = await _related_by_ids(db.defendants, unique_ids, page_size)
+        arrests = await _related_by_ids(db.arrests, unique_ids, page_size)
+    by_defendant: dict[str, list[dict]] = {}
+    for doc in defendants:
+        for key in ("Defendant_ID", "defendant_id"):
+            value = str(doc.get(key) or "").strip()
+            if value:
+                by_defendant.setdefault(value, []).append(doc)
+    arrests_by_defendant: dict[str, list[dict]] = {}
+    for doc in arrests:
+        for key in ("Defendant_ID", "defendant_id"):
+            value = str(doc.get(key) or "").strip()
+            if value:
+                arrests_by_defendant.setdefault(value, []).append(doc)
+
+    clients = []
+    for bond in bonds:
+        defendant_id = str(bond.get("Defendant_ID") or bond.get("defendant_id") or "").strip()
+        bond_case_id = str(bond.get("Bond_Case_ID") or bond.get("bond_case_id") or bond.get("_id") or "").strip()
+        related = [bond, *by_defendant.get(defendant_id, []), *arrests_by_defendant.get(defendant_id, [])]
+        names: list[str] = []
+        numbers: set[str] = set()
+        source_sets = []
+        for doc in related:
+            names.extend(_collect_names(doc))
+            found = _collect_dobs(doc)
+            if found:
+                source_sets.append(found)
+            numbers |= _collect_numbers(doc)
+        dobs: set[str] = set()
+        for found in source_sets:
+            dobs |= found
+        dob_conflict = len(dobs) > 1
+        deduped = tuple(dict.fromkeys(names))
+        if not bond_case_id or not deduped:
+            continue
+        clients.append(ClientIdentity(
+            bond_case_id=bond_case_id,
+            defendant_id=defendant_id,
+            names=deduped,
+            dobs=frozenset(dobs),
+            numbers=frozenset(numbers),
+            status=str(bond.get("status") or "active"),
+            dob_conflict=dob_conflict,
+        ))
+    return clients
+
+
+async def _active_bond_ids(db, page_size: int = BOND_PAGE) -> set[str]:
+    """Current active bond_case_ids from ``active_bonds``."""
+    bonds = await _page_bonds(db, page_size)
+    ids: set[str] = set()
+    for bond in bonds:
+        bond_case_id = str(
+            bond.get("Bond_Case_ID") or bond.get("bond_case_id") or bond.get("_id") or ""
+        ).strip()
+        if bond_case_id:
+            ids.add(bond_case_id)
+    return ids
+
+
+async def _bond_live_status(db, bond_case_id: str) -> str:
+    """Return ``active``, ``inactive``, ``missing``, or ``error`` from ``active_bonds``."""
+    bonds = getattr(db, "active_bonds", None) if db is not None else None
+    bond_id = str(bond_case_id or "").strip()
+    if not bond_id:
+        return "missing"
+    if bonds is None:
+        return "error"
+    clauses: list[dict] = [
+        {"Bond_Case_ID": bond_id},
+        {"bond_case_id": bond_id},
+        {"_id": bond_id},
+    ]
+    try:
+        from bson import ObjectId
+
+        if ObjectId.is_valid(bond_id):
+            clauses.append({"_id": ObjectId(bond_id)})
+    except Exception:
+        pass
+    try:
+        active_row = await bonds.find_one({
+            "status": {"$in": list(ACTIVE_STATUSES)},
+            "$or": clauses,
+        })
+        if active_row is not None:
+            return "active"
+        any_row = await bonds.find_one({"$or": clauses})
+        return "missing" if any_row is None else "inactive"
+    except Exception as exc:
+        log.warning("Federal bond-risk bond status recheck failed: %s", type(exc).__name__)
+        return "error"
+
+
+async def _bond_is_active(db, bond_case_id: str, *, require_record: bool = True) -> bool:
+    """Confirm ``bond_case_id`` still has an active status in ``active_bonds``.
+
+    When ``require_record`` is True (all DB-loaded scans), a missing record or
+    lookup error fails closed and returns False.
+    """
+    bond_id = str(bond_case_id or "").strip()
+    if not bond_id:
+        return False
+    bonds = getattr(db, "active_bonds", None) if db is not None else None
+    if bonds is None:
+        return not require_record
+    state = await _bond_live_status(db, bond_id)
+    if state == "active":
+        return True
+    if state == "missing":
+        return not require_record
+    return False
+
+
+class _ScanStop(Exception):
+    def __init__(self, warning: str, skipped: str):
+        self.warning = warning
+        self.skipped = skipped
+
+
+def _scan_stopped(base: dict, stop: _ScanStop) -> dict:
+    payload = {**base, "skipped": stop.skipped, "warning": stop.warning, "rows_written": 0}
+    if stop.skipped in {
+        "search_failed", "search_truncated", "index_unavailable",
+        "party_hydration_failed", "entry_hydration_failed",
+        "unauthorized", "rate_limited",
+    }:
+        payload["success"] = False
+    return payload
+
+
+def _stop_if_blocked(result: dict) -> None:
+    """Stop the scan before any staff row is written."""
+    if result.get("status_code") == 401 or result.get("error") in {"unauthorized", "no_token"}:
+        raise _ScanStop(
+            result.get("warning") or "CourtListener returned 401. Scan stopped before any alert was written.",
+            "unauthorized",
+        )
+    if result.get("skipped") == "maintenance":
+        raise _ScanStop(
+            "CourtListener maintenance window. Scan skipped.",
+            "maintenance",
+        )
+    if (
+        (
+            result.get("status_code") == 429
+            and result.get("skipped") != "quota_exhausted"
+        )
+        or result.get("error") in {"ReadTimeout", "ConnectError"}
+    ):
+        raise _ScanStop(
+            "CourtListener rate limit or connection failure. Scan stopped with no alerts written.",
+            "rate_limited",
+        )
+
+
+def _events_from_text(
+    text: str,
+    filing_id: str,
+    party_names: list[str] | None = None,
+    filing_date: str = "",
+) -> list[DocketEvent]:
+    names = list(party_names or [])
+    general_named = parties_affected_by_text(text, names)
+    day = _normalize_filing_date(filing_date)
+    events: list[DocketEvent] = []
+    for event_type, label in classify_bond_risk(text):
+        if event_type in _ACTOR_SENSITIVE:
+            named = _actor_event_parties(text, event_type, names)
+        else:
+            named = general_named
+        events.append(DocketEvent(event_type, label, filing_id, named, day))
+    return events
+
+
+def _hit_entry_date(hit: dict) -> str:
+    """Docket-entry date on a search hit. Case initiation (``dateFiled``) is ignored."""
+    direct = _first_text(hit, "entry_date_filed", "entryDateFiled")
+    if direct:
+        return direct
+    for doc in hit.get("recap_documents") or []:
+        if isinstance(doc, dict):
+            found = _first_text(doc, "entry_date_filed", "entryDateFiled")
+            if found:
+                return found
+    return ""
+
+
+def _norm_filing_text(value: str) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().lower())
+
+
+def _linked_entry_id(doc: dict) -> str:
+    for key in ("docket_entry_id", "docketEntryId", "entry_id"):
+        if doc.get(key):
+            return str(doc[key])
+    nested = doc.get("docket_entry")
+    if isinstance(nested, dict) and nested.get("id"):
+        return str(nested["id"])
+    if isinstance(nested, str):
+        tail = nested.rstrip("/").split("/")[-1]
+        if tail.isdigit():
+            return tail
+    return ""
+
+
+def _entry_document_ids(entry: dict) -> list[str]:
+    raw = entry.get("recap_documents")
+    if raw is None:
+        raw = entry.get("recap_document")
+    if isinstance(raw, dict):
+        raw = [raw]
+    found = []
+    for doc in raw or []:
+        if isinstance(doc, dict) and doc.get("id"):
+            found.append(str(doc["id"]))
+        elif str(doc).isdigit():
+            found.append(str(doc))
+    return found
+
+
+def _hit_docket_id(hit: dict, search_type: str) -> str:
+    for key in ("docket_id", "docketId"):
+        if hit.get(key):
+            return str(hit.get(key))
+    if search_type in {"r", "d"} and hit.get("id"):
+        return str(hit.get("id"))
+    return ""
+
+
+def _extend_events(
+    docket: DocketView,
+    text: str,
+    filing_id: str,
+    party_names: list[str] | None = None,
+    filing_date: str = "",
+) -> None:
+    """Keep every filing. A later copy of the same filing can add the party it names."""
+    if not filing_id:
+        return
+    resolved_parties = list(party_names or [party.name for party in docket.parties])
+    have = {(event.event_type, event.filing_id): event for event in docket.events}
+    for event in _events_from_text(text, filing_id, resolved_parties, filing_date=filing_date):
+        key = (event.event_type, event.filing_id)
+        existing = have.get(key)
+        if existing is not None:
+            if event.affected_names:
+                existing.affected_names = tuple(dict.fromkeys((*existing.affected_names, *event.affected_names)))
+            if not existing.filing_date and event.filing_date:
+                existing.filing_date = event.filing_date
+            continue
+        docket.events.append(event)
+        have[key] = event
+
+
+def select_seed_batch(seeds: list[dict], offset: int, ceiling: int) -> tuple[list[dict], int, bool]:
+    """One slice of the seed list, then the offset for the next scan.
+
+    The slice does not wrap. A later scan starts at ``next_offset`` so a docket
+    past this batch is hydrated instead of being skipped on every run.
+    """
+    ordered = sorted(seeds, key=lambda seed: str(seed.get("id") or ""))
+    if not ordered:
+        return [], 0, False
+    limit = max(int(ceiling or 1), 1)
+    start = int(offset or 0)
+    if start < 0 or start >= len(ordered):
+        start = 0
+    batch = ordered[start:start + limit]
+    next_offset = start + len(batch)
+    if next_offset >= len(ordered):
+        next_offset = 0
+    return batch, next_offset, len(batch) < len(ordered)
+
+
+def _tenant_scope_token() -> str:
+    """Empty while multi-tenant is off or for Shamrock (tenant #1).
+
+    Pre-tenancy rows belong to Shamrock and keep their unprefixed keys after
+    the tenancy backfill stamps ``tenant_id = "shamrock"``. Other tenants
+    receive their sanitized slug so globally unique keys (``_id``,
+    ``(source, source_id)``, ``(type, claim_key)``) never collide with
+    Shamrock or with one another.
+    """
+    from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
+    from dashboard.tenancy.context import current_tenant_id
+    from dashboard.tenancy.flag import multi_tenant_enabled
+
+    if not multi_tenant_enabled():
+        return ""
+    tenant = re.sub(r"[^a-z0-9_-]", "", (current_tenant_id() or "").strip().lower())
+    if tenant == SHAMROCK_TENANT_ID:
+        return ""
+    return tenant or "unscoped"
+
+
+def _search_before_id(search_type: str) -> str:
+    """One date checkpoint per search type. A shared id collides across tenants."""
+    token = _tenant_scope_token()
+    base = f"search_before:{search_type}"
+    return base if not token else f"{base}:{token}"
+
+
+def _oldest_entry_day(hits: list) -> str:
+    days = []
+    for hit in hits or []:
+        if not isinstance(hit, dict):
+            continue
+        day = str(_hit_entry_date(hit) or "")[:10]
+        if len(day) == 10 and day[4] == "-" and day[7] == "-":
+            days.append(day)
+    return min(days) if days else ""
+
+
+async def _search_checkpoint(db, search_type: str) -> tuple[str, str]:
+    """Saved upper date and the CourtListener ``next`` URL, if a slice remains."""
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return "", ""
+    row = await collection.find_one({"_id": _search_before_id(search_type)}) or {}
+    return str(row.get("before") or "")[:10], str(row.get("resume_url") or "")
+
+
+async def _save_search_checkpoint(db, search_type: str, day: str = "", resume_url: str = "") -> None:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return
+    await collection.update_one(
+        {"_id": _search_before_id(search_type)},
+        {"$set": {
+            "before": str(day or "")[:10],
+            "resume_url": str(resume_url or ""),
+            "updated_at": _now(),
+        }},
+        upsert=True,
+    )
+
+
+def _seed_cursor_id() -> str:
+    """One cursor document per tenant. A shared ``_id`` collides when the proxy is on."""
+    token = _tenant_scope_token()
+    return "seed_cursor" if not token else f"seed_cursor:{token}"
+
+
+async def _seed_offset(db) -> int:
+    collection = getattr(db, "federal_bond_risk_state", None)
+    if collection is None:
+        return 0
+    row = await collection.find_one({"_id": _seed_cursor_id()})
+    try:
+        return max(int((row or {}).get("offset") or 0), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+async def _save_seed_offset(db, offset: int) -> None:
+    collection = getattr(db, "federal_bond_risk_state", None)
+    if collection is None:
+        return
+    await collection.update_one(
+        {"_id": _seed_cursor_id()},
+        {"$set": {"offset": int(offset), "updated_at": _now()}},
+        upsert=True,
+    )
+
+
+_HIT_KEEP_KEYS = (
+    "id", "docket_id", "docketId", "court_id", "court",
+    "docketNumber", "docket_number", "caseName", "case_name",
+    "case_name_full", "pacer_case_id", "cause",
+    "entry_date_filed", "entryDateFiled",
+    "description", "short_description", "snippet", "_search_type",
+)
+_DOC_KEEP_KEYS = (
+    "id", "pacer_doc_id", "docket_entry_id", "docketEntryId",
+    "entry_id", "docket_entry", "entry_date_filed", "entryDateFiled",
+    "description", "short_description", "snippet",
+)
+
+
+def _pending_slice_id() -> str:
+    """One durable seed snapshot per tenant for capped/in-progress slices."""
+    token = _tenant_scope_token()
+    return "pending_slice" if not token else f"pending_slice:{token}"
+
+
+def _compact_seed(seed: dict) -> dict:
+    """Keep only the search-hit fields ``_hydrate`` uses so snapshots stay small."""
+    compact_hits = []
+    for hit in seed.get("hits") or []:
+        if not isinstance(hit, dict):
+            continue
+        slim = {key: hit[key] for key in _HIT_KEEP_KEYS if key in hit and hit[key] is not None}
+        docs = hit.get("recap_documents")
+        if isinstance(docs, list):
+            slim["recap_documents"] = [
+                {key: doc[key] for key in _DOC_KEEP_KEYS if key in doc and doc[key] is not None}
+                for doc in docs
+                if isinstance(doc, dict)
+            ]
+        compact_hits.append(slim)
+    return {"id": str(seed.get("id") or ""), "hits": compact_hits}
+
+
+async def _load_pending_slice(db) -> Optional[tuple[list[dict], list[tuple[str, str, str]], list[str], bool]]:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return None
+    row = await collection.find_one({"_id": _pending_slice_id()}) or {}
+    seeds = [seed for seed in (row.get("seeds") or []) if isinstance(seed, dict) and seed.get("id")]
+    if not seeds:
+        return None
+    checkpoints = [
+        (str(cp.get("search_type") or ""), str(cp.get("day") or ""), str(cp.get("resume_url") or ""))
+        for cp in (row.get("pending_checkpoints") or [])
+        if isinstance(cp, dict) and cp.get("search_type")
+    ]
+    notes = [str(note) for note in (row.get("search_notes") or []) if note]
+    return seeds, checkpoints, notes, bool(row.get("commit_checkpoints", True))
+
+
+async def _save_pending_slice(
+    db,
+    seeds: list[dict],
+    pending_checkpoints: list[tuple[str, str, str]],
+    search_notes: list[str],
+    *,
+    commit_checkpoints: bool,
+) -> bool:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return False
+    try:
+        await collection.update_one(
+            {"_id": _pending_slice_id()},
+            {"$set": {
+                "seeds": [_compact_seed(seed) for seed in seeds],
+                "pending_checkpoints": [
+                    {"search_type": st, "day": day, "resume_url": resume_url}
+                    for st, day, resume_url in pending_checkpoints
+                ],
+                "search_notes": list(search_notes),
+                "commit_checkpoints": bool(commit_checkpoints),
+                "updated_at": _now(),
+            }},
+            upsert=True,
+        )
+        return True
+    except Exception as exc:
+        log.warning("Federal bond-risk pending slice was not saved: %s", type(exc).__name__)
+        return False
+
+
+async def _clear_pending_slice(db) -> None:
+    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    if collection is None:
+        return
+    await collection.update_one(
+        {"_id": _pending_slice_id()},
+        {"$set": {
+            "seeds": [],
+            "pending_checkpoints": [],
+            "search_notes": [],
+            "commit_checkpoints": False,
+            "updated_at": _now(),
+        }},
+        upsert=True,
+    )
+
+
+def _courtlistener_account_key(client=None, api_token: Optional[str] = None) -> str:
+    """Stable hashed identifier for the CourtListener API credential."""
+    token = api_token
+    if token is None and client is not None:
+        token = getattr(client, "api_token", None)
+    if token is None:
+        token = os.getenv("COURTLISTENER_API_TOKEN", "")
+    cleaned = str(token or "").strip()
+    if not cleaned:
+        return "default"
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:12]
+
+
+def _shared_quota_collection(db):
+    """Unwrap tenant scoping for API-account-level quota and scan-lease docs.
+
+    These coordination documents store only non-PII timestamps, CAS
+    revisions, and opaque lease UUIDs for a shared CourtListener token.
+    Tenant business state (checkpoints, pending slices, alerts) stays
+    tenant-scoped on ``db``.
+    """
+    if db is None:
+        return None
+    from dashboard.tenancy.scope import TenantScopedCollection, TenantScopedDatabase
+
+    raw_db = db._raw if isinstance(db, TenantScopedDatabase) else db
+    collection = getattr(raw_db, "federal_bond_risk_state", None)
+    if isinstance(collection, TenantScopedCollection):
+        return collection._raw
+    return collection
+
+
+def _scan_lease_id(account_key: Optional[str] = None) -> str:
+    """One durable scan lease per CourtListener API account across tenants."""
+    key = (account_key or "").strip() or _courtlistener_account_key()
+    return f"scan_lease:{key}"
+
+
+async def _acquire_scan_lease(db, *, account_key: Optional[str] = None) -> Optional[str]:
+    collection = _shared_quota_collection(db)
+    if collection is None:
+        return "in_memory"
+    lease_id = _scan_lease_id(account_key)
+    owner = uuid.uuid4().hex
+    now_iso = _now()
+    expires_iso = (datetime.now(timezone.utc) + SCAN_LEASE_TTL).isoformat()
+    try:
+        try:
+            await collection.update_one(
+                {"_id": lease_id},
+                {"$setOnInsert": {"lease_owner": "", "lease_expires_at": "", "updated_at": now_iso}},
+                upsert=True,
+            )
+        except Exception as exc:
+            if not _duplicate_key(exc):
+                raise
+        res = await collection.update_one(
+            {
+                "_id": lease_id,
+                "$or": [
+                    {"lease_owner": ""},
+                    {"lease_owner": {"$exists": False}},
+                    {"lease_expires_at": ""},
+                    {"lease_expires_at": {"$lt": now_iso}},
+                    {"lease_expires_at": {"$exists": False}},
+                ],
+            },
+            {"$set": {
+                "lease_owner": owner,
+                "lease_acquired_at": now_iso,
+                "lease_expires_at": expires_iso,
+                "updated_at": now_iso,
+            }},
+        )
+        return owner if getattr(res, "matched_count", 0) == 1 else None
+    except Exception as exc:
+        log.warning("Federal bond-risk scan lease failed: %s", type(exc).__name__)
+        return None
+
+
+async def _release_scan_lease(db, owner: Optional[str], *, account_key: Optional[str] = None) -> None:
+    if not owner or owner == "in_memory":
+        return
+    collection = _shared_quota_collection(db)
+    if collection is None:
+        return
+    try:
+        await collection.update_one(
+            {"_id": _scan_lease_id(account_key), "lease_owner": owner},
+            {"$set": {"lease_owner": "", "lease_expires_at": "", "updated_at": _now()}},
+        )
+    except Exception as exc:
+        log.warning("Federal bond-risk scan lease release failed: %s", type(exc).__name__)
+
+
+def _request_quota_id(account_key: Optional[str] = None) -> str:
+    """One durable rolling request-quota doc per CourtListener API account."""
+    key = (account_key or "").strip() or _courtlistener_account_key()
+    return f"request_quota:{key}"
+
+
+def _quota_rev_filter(quota_id: str, rev: int) -> dict:
+    if int(rev or 0) == 0:
+        return {
+            "_id": quota_id,
+            "$or": [
+                {"quota_revision": 0},
+                {"quota_revision": {"$exists": False}},
+                {"quota_revision": None},
+            ],
+        }
+    return {"_id": quota_id, "quota_revision": int(rev)}
+
+
+def _client_request_count(client) -> Optional[int]:
+    count = getattr(client, "_requests_made", None)
+    if isinstance(count, bool) or not isinstance(count, int):
+        return None
+    return count
+
+
+def _call_request_cost(client, before_count: Optional[int], result: Optional[dict]) -> int:
+    if before_count is not None:
+        after = _client_request_count(client)
+        if after is not None and after >= before_count:
+            return after - before_count
+    if isinstance(result, dict) and result.get("skipped") in {"no_token", "maintenance", "quota_exhausted"}:
+        return 0
+    if isinstance(result, dict) and result.get("pages_fetched") is not None:
+        return max(int(result.get("pages_fetched") or 0), 0)
+    return 1
+
+
+@dataclass
+class _RequestQuota:
+    timestamps: list[float] = field(default_factory=list)
+    run_limit: int = MAX_REQUESTS_PER_RUN
+    minute_limit: int = MAX_REQUESTS_PER_MINUTE
+    hour_limit: int = MAX_REQUESTS_PER_HOUR
+    day_limit: int = MAX_REQUESTS_PER_DAY
+    run_used: int = 0
+    account_key: str = ""
+
+    @staticmethod
+    def _prune_values(values: list, ts_now: float) -> list[float]:
+        day_cutoff = ts_now - 86400.0
+        cleaned: list[float] = []
+        for item in values or []:
+            try:
+                val = float(item)
+            except (TypeError, ValueError):
+                continue
+            if val >= day_cutoff:
+                cleaned.append(val)
+        return cleaned[-500:]
+
+    def prune(self, now: Optional[float] = None) -> float:
+        ts_now = time.time() if now is None else float(now)
+        self.timestamps = self._prune_values(self.timestamps, ts_now)
+        return ts_now
+
+    def minute_used(self, now: Optional[float] = None) -> int:
+        ts_now = self.prune(now)
+        cutoff = ts_now - 60.0
+        return sum(1 for ts in self.timestamps if ts >= cutoff)
+
+    def hour_used(self, now: Optional[float] = None) -> int:
+        ts_now = self.prune(now)
+        cutoff = ts_now - 3600.0
+        return sum(1 for ts in self.timestamps if ts >= cutoff)
+
+    def day_used(self, now: Optional[float] = None) -> int:
+        ts_now = self.prune(now)
+        cutoff = ts_now - 86400.0
+        return sum(1 for ts in self.timestamps if ts >= cutoff)
+
+    def _available_for(self, values: list[float], ts_now: float) -> int:
+        hour_cutoff = ts_now - 3600.0
+        hour_count = sum(1 for ts in values if ts >= hour_cutoff)
+        day_count = len(values)
+        return max(
+            0,
+            min(
+                self.run_limit - self.run_used,
+                self.hour_limit - hour_count,
+                self.day_limit - day_count,
+            ),
+        )
+
+    def remaining(self, now: Optional[float] = None) -> int:
+        ts_now = self.prune(now)
+        return self._available_for(self.timestamps, ts_now)
+
+    async def reserve(
+        self,
+        db,
+        requested: int,
+        *,
+        min_required: int = 1,
+    ) -> tuple[int, float]:
+        """Atomically reserve up to ``requested`` request slots via CAS."""
+        wanted = max(int(requested or 0), 1)
+        needed = max(int(min_required or 1), 1)
+        collection = _shared_quota_collection(db)
+        if collection is None:
+            ts_now = self.prune()
+            available = self._available_for(self.timestamps, ts_now)
+            grant = min(wanted, available)
+            if grant < needed:
+                return 0, 0.0
+            self.timestamps = [*self.timestamps, *([ts_now] * grant)][-500:]
+            self.run_used += grant
+            return grant, ts_now
+        quota_id = _request_quota_id(self.account_key)
+        for _ in range(8):
+            ts_now = time.time()
+            try:
+                row = await collection.find_one({"_id": quota_id})
+                if row is None:
+                    try:
+                        await collection.update_one(
+                            {"_id": quota_id},
+                            {"$setOnInsert": {"timestamps": [], "quota_revision": 0, "updated_at": _now()}},
+                            upsert=True,
+                        )
+                    except Exception as exc:
+                        if not _duplicate_key(exc):
+                            raise
+                    row = await collection.find_one({"_id": quota_id}) or {}
+                rev = int(row.get("quota_revision") or 0)
+                stored = self._prune_values(row.get("timestamps") or [], ts_now)
+                available = self._available_for(stored, ts_now)
+                grant = min(wanted, available)
+                if grant < needed:
+                    self.timestamps = stored
+                    return 0, 0.0
+                new_timestamps = [*stored, *([ts_now] * grant)][-500:]
+                res = await collection.update_one(
+                    _quota_rev_filter(quota_id, rev),
+                    {"$set": {
+                        "timestamps": new_timestamps,
+                        "quota_revision": rev + 1,
+                        "updated_at": _now(),
+                    }},
+                )
+                if getattr(res, "matched_count", 0) == 1:
+                    self.timestamps = new_timestamps
+                    self.run_used += grant
+                    return grant, ts_now
+            except Exception as exc:
+                log.warning("Federal bond-risk quota reserve failed: %s", type(exc).__name__)
+                return 0, 0.0
+        log.warning("Federal bond-risk quota reserve failed after CAS retries")
+        return 0, 0.0
+
+    async def reconcile(
+        self,
+        db,
+        reserved: int,
+        reserve_ts: float,
+        actual: int,
+    ) -> None:
+        """Atomically refund unused reserved slots or append extra retry calls."""
+        delta = max(int(actual or 0), 0) - max(int(reserved or 0), 0)
+        if delta == 0:
+            return
+        collection = _shared_quota_collection(db)
+        if collection is None:
+            ts_now = self.prune()
+            updated = list(self.timestamps)
+            if delta < 0:
+                updated = self._refund_slots(updated, reserve_ts, -delta)
+            else:
+                updated.extend([ts_now] * delta)
+            self.timestamps = updated[-500:]
+            self.run_used = max(0, self.run_used + delta)
+            return
+        quota_id = _request_quota_id(self.account_key)
+        for _ in range(8):
+            ts_now = time.time()
+            try:
+                row = await collection.find_one({"_id": quota_id}) or {}
+                rev = int(row.get("quota_revision") or 0)
+                stored = self._prune_values(row.get("timestamps") or [], ts_now)
+                if delta < 0:
+                    updated = self._refund_slots(stored, reserve_ts, -delta)
+                else:
+                    updated = [*stored, *([ts_now] * delta)][-500:]
+                res = await collection.update_one(
+                    _quota_rev_filter(quota_id, rev),
+                    {"$set": {
+                        "timestamps": updated,
+                        "quota_revision": rev + 1,
+                        "updated_at": _now(),
+                    }},
+                )
+                if getattr(res, "matched_count", 0) == 1:
+                    self.timestamps = updated
+                    self.run_used = max(0, self.run_used + delta)
+                    return
+            except Exception as exc:
+                log.warning("Federal bond-risk quota reconcile failed: %s", type(exc).__name__)
+                return
+        log.warning("Federal bond-risk quota reconcile failed after CAS retries")
+
+    @staticmethod
+    def _refund_slots(values: list[float], reserve_ts: float, count: int) -> list[float]:
+        out = list(values)
+        remaining = max(int(count or 0), 0)
+        idx = len(out) - 1
+        while idx >= 0 and remaining > 0:
+            if abs(float(out[idx]) - float(reserve_ts)) < 1e-6:
+                out.pop(idx)
+                remaining -= 1
+            idx -= 1
+        return out
+
+    @staticmethod
+    def _replace_slots(
+        values: list[float],
+        old_ts: float,
+        new_ts: float,
+        count: int,
+    ) -> list[float]:
+        out = list(values)
+        needed = max(int(count or 0), 0)
+        replaced = 0
+        idx = len(out) - 1
+        while idx >= 0 and replaced < needed:
+            if abs(float(out[idx]) - float(old_ts)) < 1e-6:
+                out.pop(idx)
+                replaced += 1
+            idx -= 1
+        if replaced:
+            out.extend([float(new_ts)] * replaced)
+        return sorted(out)[-500:]
+
+    async def mark_dispatched(
+        self,
+        db,
+        reserved: int,
+        reserve_ts: float,
+    ) -> float:
+        """Update reserved slot timestamps to actual HTTP dispatch time."""
+        count = max(int(reserved or 0), 0)
+        if count == 0:
+            return reserve_ts
+        collection = _shared_quota_collection(db)
+        if collection is None:
+            dispatch_ts = time.time()
+            pruned = self._prune_values(self.timestamps, dispatch_ts)
+            self.timestamps = self._replace_slots(pruned, reserve_ts, dispatch_ts, count)
+            return dispatch_ts
+        quota_id = _request_quota_id(self.account_key)
+        for _ in range(8):
+            dispatch_ts = time.time()
+            try:
+                row = await collection.find_one({"_id": quota_id}) or {}
+                rev = int(row.get("quota_revision") or 0)
+                stored = self._prune_values(row.get("timestamps") or [], dispatch_ts)
+                updated = self._replace_slots(stored, reserve_ts, dispatch_ts, count)
+                if updated == stored:
+                    self.timestamps = stored
+                    return reserve_ts
+                res = await collection.update_one(
+                    _quota_rev_filter(quota_id, rev),
+                    {"$set": {
+                        "timestamps": updated,
+                        "quota_revision": rev + 1,
+                        "updated_at": _now(),
+                    }},
+                )
+                if getattr(res, "matched_count", 0) == 1:
+                    self.timestamps = updated
+                    return dispatch_ts
+            except Exception as exc:
+                log.warning("Federal bond-risk quota dispatch stamp failed: %s", type(exc).__name__)
+                return reserve_ts
+        log.warning("Federal bond-risk quota dispatch stamp failed after CAS retries")
+        return reserve_ts
+
+    async def pace(
+        self,
+        pause_s: float,
+        *,
+        already_reserved: int = 0,
+        min_delay: float = 0.0,
+    ) -> float:
+        wait = max(0.0, float(min_delay or 0.0))
+        ts_now = self.prune()
+        reserved = max(int(already_reserved or 0), 0)
+        prior_used = max(0, self.run_used - reserved)
+        prior_timestamps = (
+            self.timestamps[:-reserved]
+            if reserved > 0 and len(self.timestamps) >= reserved
+            else list(self.timestamps)
+        )
+        if pause_s > 0:
+            pace_wait = 0.0
+            recent = sorted(ts for ts in prior_timestamps if ts >= ts_now - 60.0)
+            if prior_used > 0:
+                pace_wait = float(pause_s)
+            elif recent:
+                pace_wait = max(0.0, float(pause_s) - (ts_now - recent[-1]))
+            if len(recent) >= self.minute_limit:
+                window_wait = max(0.0, (recent[-self.minute_limit] + 60.0) - ts_now)
+                pace_wait = max(pace_wait, window_wait)
+            wait = max(wait, pace_wait)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        return wait
+
+
+async def _load_request_quota(
+    db,
+    *,
+    run_limit: Optional[int] = None,
+    account_key: Optional[str] = None,
+) -> _RequestQuota:
+    effective_run = max(int(run_limit or MAX_REQUESTS_PER_RUN), 1)
+    account = (account_key or "").strip() or _courtlistener_account_key()
+    collection = _shared_quota_collection(db)
+    raw_timestamps: list[float] = []
+    if collection is not None:
+        try:
+            row = await collection.find_one({"_id": _request_quota_id(account)}) or {}
+            for item in row.get("timestamps") or []:
+                try:
+                    raw_timestamps.append(float(item))
+                except (TypeError, ValueError):
+                    continue
+        except Exception as exc:
+            log.warning("Federal bond-risk request quota read failed: %s", type(exc).__name__)
+    quota = _RequestQuota(timestamps=raw_timestamps, run_limit=effective_run, account_key=account)
+    quota.prune()
+    return quota
+
+
+@dataclass
+class _CollectedSlice:
+    views: list[DocketView]
+    batch_seeds: list[dict]
+    unhydrated_seeds: list[dict]
+    failed_seed_ids: set[str]
+    pending_checkpoints: list[tuple[str, str, str]]
+    commit_checkpoints: bool
+    from_pending_slice: bool
+    search_failures: list[str]
+    party_failures: list[str]
+    entry_failures: list[str]
+    brief_failures: list[str]
+    search_notes: list[str]
+    quota_throttled: bool = False
+    quota_deferred: bool = False
+    requests_made: int = 0
+
+
+async def _collect_dockets(
+    client,
+    pause_s: float,
+    db=None,
+    *,
+    quota: Optional[_RequestQuota] = None,
+) -> _CollectedSlice:
+    """Search recent RECAP docket/document pages (or resume a stored slice), then hydrate.
+
+    Search checkpoints and unfinished slices are persisted durably only after
+    all returned seeds and matches for the current scan have been processed.
+    Requests are paced and reserved atomically against ``quota`` to stay within
+    CourtListener's account limits.
+
+    Caption surnames are not a filter. A lead-defendant caption with "et al."
+    still has to be hydrated so co-defendant parties can be matched.
+    """
+    quota = quota or await _load_request_quota(db, account_key=_courtlistener_account_key(client))
+    client_gated = callable(getattr(client, "set_request_gate", None)) and getattr(client, "_request_gate", None) is not None
+    failures: list[str] = []
+    search_notes: list[str] = []
+    pending_checkpoints: list[tuple[str, str, str]] = []
+    commit_checkpoints = True
+    from_pending_slice = False
+    quota_throttled = False
+
+    saved_slice = await _load_pending_slice(db) if db is not None else None
+    if saved_slice is not None:
+        ordered_seeds = sorted(saved_slice[0], key=lambda seed: str(seed.get("id") or ""))
+        pending_checkpoints = list(saved_slice[1])
+        search_notes = list(saved_slice[2])
+        commit_checkpoints = saved_slice[3]
+        from_pending_slice = True
+        if quota.remaining() < 3:
+            return _CollectedSlice(
+                views=[],
+                batch_seeds=[],
+                unhydrated_seeds=ordered_seeds,
+                failed_seed_ids=set(),
+                pending_checkpoints=pending_checkpoints,
+                commit_checkpoints=commit_checkpoints,
+                from_pending_slice=True,
+                search_failures=[],
+                party_failures=[],
+                entry_failures=[],
+                brief_failures=[],
+                search_notes=search_notes,
+                quota_throttled=True,
+                quota_deferred=True,
+                requests_made=quota.run_used,
+            )
+    else:
+        if quota.remaining() < len(FEDERAL_SEARCH_TYPES):
+            return _CollectedSlice(
+                views=[],
+                batch_seeds=[],
+                unhydrated_seeds=[],
+                failed_seed_ids=set(),
+                pending_checkpoints=[],
+                commit_checkpoints=False,
+                from_pending_slice=False,
+                search_failures=[],
+                party_failures=[],
+                entry_failures=[],
+                brief_failures=[],
+                search_notes=[],
+                quota_throttled=True,
+                quota_deferred=True,
+                requests_made=quota.run_used,
+            )
+        window = filing_window_start()
+        seeds: dict[str, dict] = {}
+        successes = 0
+        stuck: list[str] = []
+        for idx, search_type in enumerate(FEDERAL_SEARCH_TYPES):
+            types_left_after = len(FEDERAL_SEARCH_TYPES) - idx - 1
+            available = quota.remaining() - types_left_after
+            if available <= 0:
+                quota_throttled = True
+                commit_checkpoints = False
+                break
+            search_max_pages = min(
+                MAX_SEARCH_PAGES,
+                max(1, available // 2) if available >= 4 else max(1, available),
+            )
+            cursor, resume = await _search_checkpoint(db, search_type)
+            result: Optional[dict] = None
+            if client_gated:
+                granted = search_max_pages
+                result = await client.search_recent(
+                    search_type=search_type,
+                    query=BOND_RISK_QUERY,
+                    courts=list(FL_FEDERAL_COURT_IDS),
+                    entry_date_filed_after=window,
+                    entry_date_filed_before=None if resume else (cursor or None),
+                    start_url=resume or None,
+                    page_size=20,
+                    max_pages=granted,
+                    pause_s=pause_s,
+                    until_entry_before=window,
+                )
+            else:
+                granted, reserve_ts = await quota.reserve(db, search_max_pages, min_required=1)
+                if granted == 0:
+                    quota_throttled = True
+                    commit_checkpoints = False
+                    break
+                if await quota.pace(pause_s, already_reserved=granted) > 0:
+                    reserve_ts = await quota.mark_dispatched(db, granted, reserve_ts)
+                before_calls = _client_request_count(client)
+                try:
+                    result = await client.search_recent(
+                        search_type=search_type,
+                        query=BOND_RISK_QUERY,
+                        courts=list(FL_FEDERAL_COURT_IDS),
+                        entry_date_filed_after=window,
+                        entry_date_filed_before=None if resume else (cursor or None),
+                        start_url=resume or None,
+                        page_size=20,
+                        max_pages=granted,
+                        pause_s=pause_s,
+                        until_entry_before=window,
+                    )
+                finally:
+                    actual_cost = (
+                        _call_request_cost(client, before_calls, result)
+                        if result is not None or before_calls is not None
+                        else 1
+                    )
+                    await quota.reconcile(db, granted, reserve_ts, actual_cost)
+            _stop_if_blocked(result)
+            if result.get("skipped") == "quota_exhausted":
+                quota_throttled = True
+                commit_checkpoints = False
+                break
+            if result.get("quota_exhausted"):
+                quota_throttled = True
+                commit_checkpoints = False
+            if not result.get("success"):
+                detail = result.get("error") or f"HTTP {result.get('status_code') or 'error'}"
+                failures.append(f"{search_type} {detail}")
+                log.warning("Federal bond-risk search %s failed: %s", search_type, detail)
+                continue
+            successes += 1
+            if result.get("truncated"):
+                oldest = _oldest_entry_day(result.get("results") or [])
+                resume_url = str(result.get("resume_url") or "")
+                if resume_url and resume_url != resume:
+                    pending_checkpoints.append((search_type, oldest or cursor, resume_url))
+                    search_notes.append(
+                        f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest or 'the cutoff date'}. "
+                        "The next scan continues from the remaining search cursor."
+                    )
+                elif oldest and (not cursor or oldest < cursor):
+                    pending_checkpoints.append((search_type, oldest, ""))
+                    search_notes.append(
+                        f"Search {search_type} stopped at the 1,000-hit ceiling on {oldest}. "
+                        "The next scan continues with the older filings."
+                    )
+                else:
+                    stuck.append(search_type)
+            else:
+                pending_checkpoints.append((search_type, "", ""))
+            for hit in result.get("results") or []:
+                if not isinstance(hit, dict):
+                    continue
+                # dateFiled is the day the case was opened. A new warrant on an
+                # older case is entry_date_filed. Only an entry date outside the
+                # window drops the hit. A case date never does.
+                entry_day = _hit_entry_date(hit)
+                if entry_day and not filing_in_window(entry_day, window):
+                    continue
+                docket_id = _hit_docket_id(hit, search_type)
+                if not str(docket_id).isdigit():
+                    continue
+                court_id = _court_slug(hit)
+                if court_id and court_id not in FL_FEDERAL_COURTS:
+                    continue
+                number = _first_text(hit, "docketNumber", "docket_number")
+                if number and _CIVIL_DOCKET.search(number) and not _CRIMINAL_DOCKET.search(number):
+                    continue
+                key = docket_id or canonical_identifier(number) or ""
+                if not key:
+                    continue
+                seed = seeds.setdefault(key, {"id": docket_id, "hits": []})
+                tagged = dict(hit)
+                tagged["_search_type"] = search_type
+                seed["hits"].append(tagged)
+
+        if successes == 0 and failures:
+            raise _ScanStop(
+                "CourtListener search failed for every source ("
+                + "; ".join(failures)
+                + "). No alerts were written.",
+                "search_failed",
+            )
+        if successes == 0 and quota_throttled:
+            return _CollectedSlice(
+                views=[],
+                batch_seeds=[],
+                unhydrated_seeds=[],
+                failed_seed_ids=set(),
+                pending_checkpoints=[],
+                commit_checkpoints=False,
+                from_pending_slice=False,
+                search_failures=[],
+                party_failures=[],
+                entry_failures=[],
+                brief_failures=[],
+                search_notes=[],
+                quota_throttled=True,
+                quota_deferred=True,
+                requests_made=quota.run_used,
+            )
+        if stuck:
+            raise _ScanStop(
+                "CourtListener search hit the 1,000-hit ceiling and the date window "
+                "could not move (" + ", ".join(stuck) + "). No alerts were written.",
+                "search_truncated",
+            )
+        ordered_seeds = sorted(seeds.values(), key=lambda seed: str(seed.get("id") or ""))
+        commit_checkpoints = (not bool(failures)) and (not quota_throttled)
+
+    limit = max(int(HYDRATE_CEILING or 1), 1)
+    batch = ordered_seeds[:limit]
+    unhydrated_seeds = ordered_seeds[limit:]
+
+    views: list[DocketView] = []
+    party_failures: list[str] = []
+    entry_failures: list[str] = []
+    brief_failures: list[str] = []
+    failed_seed_ids: set[str] = set()
+    entry_attempts = 0
+    for idx, seed in enumerate(batch):
+        if quota.remaining() < 3:
+            unhydrated_seeds = [*batch[idx:], *unhydrated_seeds]
+            batch = batch[:idx]
+            quota_throttled = True
+            break
+        view, party_error, entry_error, brief_error, budget_deferred = await _hydrate(
+            client, seed, pause_s, quota=quota, db=db,
+        )
+        if budget_deferred:
+            unhydrated_seeds = [*batch[idx:], *unhydrated_seeds]
+            batch = batch[:idx]
+            quota_throttled = True
+            break
+        sid = str(seed.get("id") or "")
+        if party_error:
+            party_failures.append(party_error)
+            if sid:
+                failed_seed_ids.add(sid)
+            continue
+        entry_attempts += 1
+        if entry_error:
+            entry_failures.append(entry_error)
+            if sid:
+                failed_seed_ids.add(sid)
+        if brief_error:
+            brief_failures.append(brief_error)
+            if sid:
+                failed_seed_ids.add(sid)
+        if view and (view.events or view.seen_filing_ids or view.entries_complete) and is_fl_federal_criminal(view.court_id, view.docket_number):
+            views.append(view)
+    if batch and party_failures and len(party_failures) == len(batch):
+        raise _ScanStop(
+            "CourtListener party lists failed for every docket ("
+            + "; ".join(party_failures[:8])
+            + "). No alerts were written.",
+            "party_hydration_failed",
+        )
+    hard_entry_failures = list(entry_failures)
+    if entry_attempts and hard_entry_failures and len(hard_entry_failures) == entry_attempts:
+        raise _ScanStop(
+            "CourtListener docket entries failed for every docket ("
+            + "; ".join(hard_entry_failures[:8])
+            + "). No alerts were written.",
+            "entry_hydration_failed",
+        )
+    return _CollectedSlice(
+        views=views,
+        batch_seeds=batch,
+        unhydrated_seeds=unhydrated_seeds,
+        failed_seed_ids=failed_seed_ids,
+        pending_checkpoints=pending_checkpoints,
+        commit_checkpoints=commit_checkpoints,
+        from_pending_slice=from_pending_slice,
+        search_failures=failures,
+        party_failures=party_failures,
+        entry_failures=entry_failures,
+        brief_failures=brief_failures,
+        search_notes=search_notes,
+        quota_throttled=quota_throttled,
+        quota_deferred=False,
+        requests_made=quota.run_used,
+    )
+
+
+async def _hydrate(
+    client,
+    seed: dict,
+    pause_s: float = 0.0,
+    *,
+    quota: Optional[_RequestQuota] = None,
+    db=None,
+) -> tuple[Optional[DocketView], str, str, str, bool]:
+    hits = seed.get("hits") or []
+    first = hits[0] if hits else {}
+    docket_id = str(seed.get("id") or "")
+    brief: dict = {}
+    parties: list[dict] = []
+    entries: list[dict] = []
+    if not str(docket_id).isdigit():
+        return None, "", "", "", False
+    seed_start_remaining = quota.remaining() if quota is not None else None
+    client_gated = (
+        quota is not None
+        and callable(getattr(client, "set_request_gate", None))
+        and getattr(client, "_request_gate", None) is not None
+    )
+
+    def _can_defer_seed() -> bool:
+        return quota is not None and (
+            (seed_start_remaining is not None and seed_start_remaining < quota.run_limit)
+            or quota.run_used < quota.run_limit
+        )
+
+    brief_res: Optional[dict] = None
+    if client_gated:
+        if quota.remaining() < 1:
+            return None, "", "", "", True
+        brief_res = await client.get_docket_brief(int(docket_id))
+    else:
+        if quota is not None:
+            granted_brief, reserve_ts = await quota.reserve(db, 1, min_required=1)
+            if granted_brief == 0:
+                return None, "", "", "", True
+            if await quota.pace(pause_s, already_reserved=granted_brief) > 0:
+                reserve_ts = await quota.mark_dispatched(db, granted_brief, reserve_ts)
+        else:
+            granted_brief, reserve_ts = 0, 0.0
+        before_calls = _client_request_count(client)
+        try:
+            brief_res = await client.get_docket_brief(int(docket_id))
+        finally:
+            if quota is not None:
+                actual_cost = (
+                    _call_request_cost(client, before_calls, brief_res)
+                    if brief_res is not None or before_calls is not None
+                    else 1
+                )
+                await quota.reconcile(db, granted_brief, reserve_ts, actual_cost)
+    _stop_if_blocked(brief_res)
+    if brief_res.get("skipped") == "quota_exhausted":
+        return None, "", "", "", True
+    brief_error = ""
+    if not brief_res.get("success"):
+        detail = brief_res.get("error") or f"HTTP {brief_res.get('status_code') or 'error'}"
+        log.warning("Docket %s brief unavailable: %s", docket_id, detail)
+        brief_error = f"{docket_id} {detail}"
+    else:
+        data = brief_res.get("data") or {}
+        brief = data if isinstance(data, dict) else {}
+
+    party_res: Optional[dict] = None
+    if client_gated:
+        party_cap = min(50, max(0, quota.remaining() - 1))
+        if party_cap <= 0:
+            if _can_defer_seed():
+                return None, "", "", "", True
+            return None, f"{docket_id} party_list_truncated", "", "", False
+        granted_parties = party_cap
+        party_res = await client.list_docket_parties(
+            int(docket_id), page_size=20, max_pages=granted_parties, pause_s=pause_s,
+        )
+    else:
+        if quota is not None:
+            party_cap = min(50, max(1, quota.remaining() - 1))
+            granted_parties, reserve_ts = await quota.reserve(db, party_cap, min_required=1)
+            if granted_parties == 0:
+                if _can_defer_seed():
+                    return None, "", "", "", True
+                return None, f"{docket_id} party_list_truncated", "", "", False
+            if await quota.pace(pause_s, already_reserved=granted_parties) > 0:
+                reserve_ts = await quota.mark_dispatched(db, granted_parties, reserve_ts)
+        else:
+            granted_parties, reserve_ts = 50, 0.0
+            party_cap = 50
+            if pause_s:
+                await asyncio.sleep(pause_s)
+        before_calls = _client_request_count(client)
+        try:
+            party_res = await client.list_docket_parties(
+                int(docket_id), page_size=20, max_pages=granted_parties, pause_s=pause_s,
+            )
+        finally:
+            if quota is not None:
+                actual_cost = (
+                    _call_request_cost(client, before_calls, party_res)
+                    if party_res is not None or before_calls is not None
+                    else 1
+                )
+                await quota.reconcile(db, granted_parties, reserve_ts, actual_cost)
+    _stop_if_blocked(party_res)
+    if party_res.get("skipped") == "quota_exhausted":
+        if _can_defer_seed():
+            return None, "", "", "", True
+        return None, f"{docket_id} party_list_truncated", "", "", False
+    if not party_res.get("success"):
+        # Without parties we cannot see a docket DOB, so we do not guess.
+        detail = party_res.get("error") or f"HTTP {party_res.get('status_code') or 'error'}"
+        log.warning("Docket %s parties unavailable: %s", docket_id, detail)
+        return None, f"{docket_id} {detail}", "", "", False
+    if party_res.get("truncated"):
+        pages_fetched = int(party_res.get("pages_fetched") or 0)
+        budget_stopped = (pages_fetched > 0 and pages_fetched >= granted_parties) or (
+            quota is not None and quota.remaining() <= 1
+        )
+        if (
+            quota is not None
+            and budget_stopped
+            and granted_parties < 50
+            and _can_defer_seed()
+        ):
+            return None, "", "", "", True
+        log.warning("Docket %s party list was truncated", docket_id)
+        return None, f"{docket_id} party_list_truncated", "", "", False
+    parties = [row for row in (party_res.get("results") or []) if isinstance(row, dict)]
+
+    window = filing_window_start()
+    entry_res: Optional[dict] = None
+    if client_gated:
+        entry_cap = min(MAX_ENTRY_PAGES, max(0, quota.remaining()))
+        if entry_cap <= 0:
+            if _can_defer_seed():
+                return None, "", "", "", True
+            log.warning("Docket %s exhausted request budget before entries", docket_id)
+            return None, "", f"{docket_id} entry_list_truncated", "", False
+        granted_entries = entry_cap
+        entry_res = await client.list_docket_entries(
+            int(docket_id),
+            page_size=20,
+            max_pages=granted_entries,
+            pause_s=pause_s,
+            until_date=window,
+        )
+    else:
+        if quota is not None:
+            entry_cap = min(MAX_ENTRY_PAGES, max(1, quota.remaining()))
+            granted_entries, reserve_ts = await quota.reserve(db, entry_cap, min_required=1)
+            if granted_entries == 0:
+                if _can_defer_seed():
+                    return None, "", "", "", True
+                log.warning("Docket %s exhausted request budget before entries", docket_id)
+                return None, "", f"{docket_id} entry_list_truncated", "", False
+            if await quota.pace(pause_s, already_reserved=granted_entries) > 0:
+                reserve_ts = await quota.mark_dispatched(db, granted_entries, reserve_ts)
+        else:
+            granted_entries, reserve_ts = MAX_ENTRY_PAGES, 0.0
+            if pause_s:
+                await asyncio.sleep(pause_s)
+        before_calls = _client_request_count(client)
+        try:
+            entry_res = await client.list_docket_entries(
+                int(docket_id),
+                page_size=20,
+                max_pages=granted_entries,
+                pause_s=pause_s,
+                until_date=window,
+            )
+        finally:
+            if quota is not None:
+                actual_cost = (
+                    _call_request_cost(client, before_calls, entry_res)
+                    if entry_res is not None or before_calls is not None
+                    else 1
+                )
+                await quota.reconcile(db, granted_entries, reserve_ts, actual_cost)
+    _stop_if_blocked(entry_res)
+    if entry_res.get("skipped") == "quota_exhausted":
+        if _can_defer_seed():
+            return None, "", "", "", True
+        log.warning("Docket %s exhausted request budget during entries", docket_id)
+        return None, "", f"{docket_id} entry_list_truncated", "", False
+    entry_error = ""
+    if entry_res.get("success") and entry_res.get("truncated"):
+        pages_fetched = int(entry_res.get("pages_fetched") or 0)
+        budget_stopped = (pages_fetched > 0 and pages_fetched >= granted_entries) or (
+            quota is not None and quota.remaining() <= 0
+        )
+        if (
+            quota is not None
+            and budget_stopped
+            and granted_entries < MAX_ENTRY_PAGES
+            and _can_defer_seed()
+        ):
+            return None, "", "", "", True
+        # Still inside the lookback window when the safety ceiling was hit.
+        # A partial list would hide a warrant or release, so this docket stops.
+        log.warning("Docket %s entry list did not cover the lookback window", docket_id)
+        return None, "", f"{docket_id} entry_list_truncated", "", False
+    entries_complete = bool(entry_res.get("success") and not entry_res.get("truncated"))
+    if entry_res.get("success"):
+        entries = [
+            row for row in (entry_res.get("results") or [])
+            if isinstance(row, dict) and filing_in_window(str(row.get("date_filed") or ""), window)
+        ]
+    else:
+        detail = entry_res.get("error") or f"HTTP {entry_res.get('status_code') or 'error'}"
+        log.warning("Docket %s entries unavailable: %s", docket_id, detail)
+        entry_error = f"{docket_id} {detail}"
+
+    court_id = _court_slug(brief) or _court_slug(first)
+    docket_number = _first_text(brief, "docket_number") or _first_text(first, "docketNumber", "docket_number")
+    case_name = (
+        _first_text(brief, "case_name_full", "case_name")
+        or _first_text(first, "caseName", "case_name", "case_name_full")
+    )
+    pacer = _first_text(brief, "pacer_case_id") or _first_text(first, "pacer_case_id")
+    cause = _first_text(brief, "cause") or _first_text(first, "cause")
+    names = defendant_names_from_caption(case_name)
+    party_rows: list[DocketParty] = []
+    excluded_party_names: list[str] = []
+    for party in parties:
+        party_name = str(party.get("name") or "").strip()
+        if not party_name:
+            continue
+        role = party_role_for_docket(party, docket_id)
+        if role == "non_defendant":
+            excluded_party_names.append(party_name)
+            continue
+        names.append(party_name)
+        party_dobs = party_dobs_for_docket(party, docket_id)
+        party_rows.append(DocketParty(name=party_name, dobs=frozenset(party_dobs), role=role))
+    view = DocketView(
+        docket_id=docket_id,
+        court_id=court_id,
+        court_name=(SE_US_COURTS.get(court_id) or {}).get("name") or court_id.upper(),
+        docket_number=docket_number,
+        case_name=case_name,
+        pacer_case_id=pacer,
+        cause=cause,
+        names=names,
+        parties=party_rows,
+        absolute_url=f"https://www.courtlistener.com/docket/{docket_id}/" if docket_id else "",
+        entries_complete=entries_complete,
+        entry_window_start=window,
+        excluded_party_names=excluded_party_names,
+    )
+    for value in (docket_number, pacer):
+        ident = canonical_identifier(value)
+        if ident:
+            view.numbers.add(ident)
+    doc_to_entry: dict[str, str] = {}
+    text_to_entry: dict[str, str] = {}
+    entry_dates: dict[str, str] = {}
+    for entry in entries:
+        description = str(entry.get("description") or "")
+        entry_token = entry.get("id") or entry.get("entry_number") or ""
+        if entry_token:
+            filing = f"entry:{entry_token}"
+        elif description:
+            filing = "entry:" + hashlib.sha256(description.encode()).hexdigest()[:12]
+        else:
+            filing = ""
+        entry_date = _normalize_filing_date(str(entry.get("date_filed") or ""))
+        for doc_id in _entry_document_ids(entry):
+            if entry_token:
+                doc_to_entry[doc_id] = str(entry_token)
+        if description and filing.startswith("entry:"):
+            text_to_entry.setdefault(_norm_filing_text(description), filing)
+        if filing:
+            view.seen_filing_ids.add(filing)
+            if entry_date:
+                entry_dates[filing] = entry_date
+        _extend_events(
+            view,
+            description,
+            filing,
+            [party.name for party in view.parties],
+            filing_date=entry_date,
+        )
+    for hit in hits:
+        party_names = [party.name for party in view.parties]
+        hit_date = _normalize_filing_date(_hit_entry_date(hit))
+        if hit.get("_search_type") == "rd":
+            blob = " ".join(
+                str(hit.get(key) or "")
+                for key in ("description", "short_description", "snippet")
+            )
+            _attach_document(
+                view,
+                hit,
+                blob,
+                doc_to_entry,
+                text_to_entry,
+                party_names,
+                entry_dates=entry_dates,
+                fallback_date=hit_date,
+            )
+        for doc in hit.get("recap_documents") or []:
+            if not isinstance(doc, dict):
+                continue
+            blob = " ".join(
+                str(doc.get(key) or "") for key in ("description", "short_description", "snippet")
+            )
+            _attach_document(
+                view,
+                doc,
+                blob,
+                doc_to_entry,
+                text_to_entry,
+                party_names,
+                entry_dates=entry_dates,
+                fallback_date=hit_date,
+            )
+    return view, "", entry_error, brief_error, False
+
+
+def _attach_document(
+    view: DocketView,
+    doc: dict,
+    blob: str,
+    doc_to_entry: dict[str, str],
+    text_to_entry: dict[str, str],
+    party_names: list[str],
+    *,
+    entry_dates: Optional[dict[str, str]] = None,
+    fallback_date: str = "",
+) -> None:
+    """Classify one RECAP document, using its docket entry as the filing id when known."""
+    doc_date = _normalize_filing_date(_hit_entry_date(doc)) or _normalize_filing_date(fallback_date)
+    linked = _linked_entry_id(doc) or doc_to_entry.get(str(doc.get("id") or ""))
+    if not linked:
+        linked_filing = text_to_entry.get(_norm_filing_text(blob), "")
+    else:
+        linked_filing = f"entry:{linked}"
+    if linked_filing:
+        view.seen_filing_ids.add(linked_filing)
+        linked_date = (entry_dates or {}).get(linked_filing) or doc_date
+        _extend_events(view, blob, linked_filing, party_names, filing_date=linked_date)
+        return
+    doc_id = doc.get("id") or doc.get("pacer_doc_id") or ""
+    if not doc_id and blob.strip():
+        doc_id = hashlib.sha256(_norm_filing_text(blob).encode()).hexdigest()[:12]
+    filing_id = f"doc:{doc_id}" if doc_id else ""
+    if filing_id:
+        view.seen_filing_ids.add(filing_id)
+    _extend_events(view, blob, filing_id, party_names, filing_date=doc_date)
+
+
+def _event_document(decision: MatchDecision, docket: DocketView, source_id: str) -> dict:
+    confirmed = decision.status == "confirmed"
+    title, message = _staff_copy(decision, docket)
+    return {
+        "source": SOURCE,
+        "source_id": source_id,
+        "monitor": "federal_bond_risk",
+        "match_status": decision.status,
+        "auto_linked": confirmed,
+        "ambiguous": decision.ambiguous,
+        "confirmations": list(decision.confirmations),
+        "confidence": _match_confidence({
+            "match_status": decision.status,
+            "confirmations": decision.confirmations,
+            "ambiguous": decision.ambiguous,
+        }),
+        "bond_case_id": decision.client.bond_case_id if confirmed else "",
+        "candidate_bond_case_id": decision.client.bond_case_id,
+        "defendant_id": decision.client.defendant_id if confirmed else "",
+        "candidate_defendant_id": decision.client.defendant_id,
+        "matched_defendant_id": decision.client.defendant_id if confirmed else None,
+        "defendant_name": decision.client.names[0],
+        "court_id": docket.court_id,
+        "court_name": docket.court_name,
+        "docket_id": docket.docket_id,
+        "docket_number": docket.docket_number,
+        "case_name": docket.case_name,
+        "absolute_url": docket.absolute_url,
+        "event_type": decision.event_type,
+        "event_severity": "critical" if decision.event_type in {
+            "failure_to_appear", "warrant", "revocation_of_release",
+        } else "high",
+        "description": message,
+        "title": title,
+        "filing_id": decision.filing_id,
+        "filing_date": _normalize_filing_date(decision.filing_date),
+        "acknowledged": False,
+        "detected_at": _now(),
+        "client_messages": 0,
+        "slack_delivered": False,
+        "alert_complete": False,
+        "slack_attempts": 0,
+        "notification_written": False,
+        "notification_status": "",
+        "match_revision": 0,
+    }
+
+
+def _notification(decision: MatchDecision, docket: DocketView, source_id: str) -> dict:
+    title, message = _staff_copy(decision, docket)
+    confirmed = decision.status == "confirmed"
+    return redact_internal_keys({
+        "notification_id": uuid.uuid4().hex[:12],
+        "type": "federal_bond_risk",
+        "icon": "⚖️",
+        "priority": "critical" if confirmed else "high",
+        "color": "#dc2626" if confirmed else "#f59e0b",
+        "title": title,
+        "message": message,
+        "entity_id": decision.client.bond_case_id,
+        "entity_type": "federal_bond_risk",
+        "metadata": {
+            "match_status": decision.status,
+            "auto_linked": confirmed,
+            "ambiguous": decision.ambiguous,
+            "confirmations": list(decision.confirmations),
+            "court_id": docket.court_id,
+            "court_name": docket.court_name,
+            "docket_number": docket.docket_number,
+            "docket_id": docket.docket_id,
+            "event_type": decision.event_type,
+            "filing_id": decision.filing_id,
+            "source_id": source_id,
+            "absolute_url": docket.absolute_url,
+            "candidate_bond_case_id": decision.client.bond_case_id,
+        },
+        "read": False,
+        "dismissed": False,
+        "created_at": _now(),
+    })
+
+
+def _duplicate_key(exc: Exception) -> bool:
+    if getattr(exc, "code", None) == 11000:
+        return True
+    return "duplicate key" in str(exc).lower() or "E11000" in str(exc)
+
+
+async def _index_present(collection, name: str) -> bool:
+    listed = getattr(collection, "list_indexes", None)
+    if listed is not None:
+        cursor = listed()
+        rows = await cursor.to_list(length=None) if hasattr(cursor, "to_list") else []
+        return any(row.get("name") == name and row.get("unique") for row in rows or [])
+    recorded = getattr(collection, "indexes", None)
+    if not recorded:
+        return False
+    return any(kwargs.get("name") == name and kwargs.get("unique") is True for _keys, kwargs in recorded)
+
+
+async def _ensure_unique_index(collection, keys, name: str, partial: dict) -> bool:
+    create = getattr(collection, "create_index", None)
+    if collection is None or create is None:
+        return False
+    try:
+        await create(keys, unique=True, name=name, partialFilterExpression=partial, background=True)
+    except Exception as exc:
+        log.warning("Federal bond-risk index %s was not created: %s", name, type(exc).__name__)
+        return False
+    return await _index_present(collection, name)
+
+
+async def ensure_federal_bond_alert_index(db) -> None:
+    """Unique claim keys for the alert row, its notification, and its audit.
+
+    A scan that cannot create or see an index stops before any alert.
+    """
+    events_ready = await _ensure_unique_index(
+        getattr(db, "docket_events", None),
+        [("source", 1), ("source_id", 1)],
+        EVENT_INDEX,
+        {"source": SOURCE},
+    )
+    notes_ready = await _ensure_unique_index(
+        getattr(db, "notifications", None),
+        [("type", 1), ("claim_key", 1)],
+        NOTIFICATION_INDEX,
+        {"type": "federal_bond_risk"},
+    )
+    audits_ready = await _ensure_unique_index(
+        getattr(db, "audit_events", None),
+        [("source", 1), ("event_id", 1)],
+        AUDIT_INDEX,
+        {"source": SOURCE},
+    )
+    if not events_ready or not notes_ready or not audits_ready:
+        raise _ScanStop(
+            "Federal bond-risk unique index was not created. Scan stopped before any alert was written.",
+            "index_unavailable",
+        )
+
+
+async def _claim_insert(db, document: dict) -> str:
+    """Insert the alert once. Returns ``inserted`` or ``exists``.
+
+    One upsert plus the unique ``(source, source_id)`` index is the claim.
+    A concurrent scan that loses the race does not insert a second row.
+    """
+    try:
+        result = await db.docket_events.update_one(
+            {"source": SOURCE, "source_id": document["source_id"]},
+            {"$setOnInsert": document},
+            upsert=True,
+        )
+    except Exception as exc:
+        if _duplicate_key(exc):
+            return "exists"
+        raise
+    if getattr(result, "upserted_id", None):
+        return "inserted"
+    return "exists"
+
+
+def _notification_claim_key(source_id: str, status: str, revision: int = 0) -> str:
+    """One key per transition. A later return to the same status is a new key."""
+    token = _tenant_scope_token()
+    prefix = f"{token}:" if token and not source_id.startswith(f"{token}:") else ""
+    return f"{prefix}{source_id}:{status}:{int(revision or 0)}"
+
+
+def _next_notification_revision(existing: Optional[dict], new_status: str) -> int:
+    stored = int((existing or {}).get("notification_revision") or 0)
+    prior = str((existing or {}).get("match_status") or "")
+    if prior and prior != new_status:
+        return stored + 1
+    return stored
+
+
+def _next_match_revision(existing: Optional[dict]) -> int:
+    """Monotonic revision bumped on every state or evidence transition."""
+    return int((existing or {}).get("match_revision") or 0) + 1
+
+
+def _match_cas_filter(row: dict, expected_status: str) -> dict:
+    """Compare-and-set guard binding updates to _id, match_status, notification_revision, and match_revision."""
+    notif_rev = int(row.get("notification_revision") or 0)
+    match_rev = int(row.get("match_revision") or 0)
+    notif_clause: dict = (
+        {"$or": [
+            {"notification_revision": 0},
+            {"notification_revision": {"$exists": False}},
+            {"notification_revision": None},
+        ]}
+        if notif_rev == 0
+        else {"notification_revision": notif_rev}
+    )
+    match_clause: dict = (
+        {"$or": [
+            {"match_revision": 0},
+            {"match_revision": {"$exists": False}},
+            {"match_revision": None},
+        ]}
+        if match_rev == 0
+        else {"match_revision": match_rev}
+    )
+    return {
+        "_id": row.get("_id"),
+        "match_status": expected_status,
+        "$and": [notif_clause, match_clause],
+    }
+
+
+def _notification_version_filter(source_id: str, status: str, revision: int = 0) -> dict:
+    revision = int(revision or 0)
+    version: dict = (
+        {"$or": [
+            {"notification_revision": 0},
+            {"notification_revision": {"$exists": False}},
+            {"notification_revision": None},
+        ]}
+        if revision == 0
+        else {"notification_revision": revision}
+    )
+    status_match: dict = {"$or": [
+        {"match_status": status},
+        {"match_status": {"$exists": False}},
+        {"match_status": None},
+    ]}
+    return {"source": SOURCE, "source_id": source_id, "$and": [status_match, version]}
+
+
+async def _mark_notification(db, source_id: str, status: str, revision: int = 0) -> bool:
+    result = await db.docket_events.update_one(
+        _notification_version_filter(source_id, status, revision),
+        {"$set": {"notification_written": True, "notification_status": status}},
+    )
+    return bool(getattr(result, "matched_count", 0))
+
+
+async def _ensure_notification(db, note: dict, source_id: str, status: str, revision: int = 0) -> bool:
+    """Insert the CRM notification once, gated on the current docket_event revision."""
+    claim = await db.docket_events.update_one(
+        _notification_version_filter(source_id, status, revision),
+        {"$set": {"notification_claim_at": _now(), "notification_claim_status": status}},
+    )
+    if not getattr(claim, "matched_count", 0):
+        return False
+    claim_key = _notification_claim_key(source_id, status, revision)
+    stored = dict(note)
+    stored["type"] = "federal_bond_risk"
+    stored["claim_key"] = claim_key
+    upserted = False
+    try:
+        result = await db.notifications.update_one(
+            {"type": "federal_bond_risk", "claim_key": claim_key},
+            {"$setOnInsert": stored},
+            upsert=True,
+        )
+        upserted = bool(getattr(result, "upserted_id", None))
+    except Exception as exc:
+        if not _duplicate_key(exc):
+            log.warning("Federal bond-risk notification was not written: %s", type(exc).__name__)
+            return False
+        return await _mark_notification(db, source_id, status, revision)
+    if upserted or getattr(result, "matched_count", 0):
+        if await _mark_notification(db, source_id, status, revision):
+            return True
+        if upserted:
+            delete_one = getattr(db.notifications, "delete_one", None)
+            if delete_one is not None:
+                try:
+                    await delete_one({"type": "federal_bond_risk", "claim_key": claim_key})
+                except Exception as exc:
+                    log.warning("Federal bond-risk stale notification cleanup failed: %s", type(exc).__name__)
+        return False
+    return False
+
+
+def _match_confidence(row: Optional[dict]) -> float:
+    """Numeric confidence in [0.0, 1.0] derived from match status and confirmations."""
+    if not row:
+        return 0.0
+    status = str(row.get("match_status") or "")
+    confirmations = [str(c) for c in (row.get("confirmations") or []) if c]
+    if status == "confirmed":
+        if "dob" in confirmations and "case_number" in confirmations:
+            return 1.0
+        if confirmations:
+            return 0.95
+        return 0.9
+    if status == "possible":
+        return 0.25 if row.get("ambiguous") else 0.5
+    return 0.0
+
+
+def _audit_payload(source_id: str, before: dict, after: dict, reason: str, evidence: dict) -> dict:
+    now = _now()
+    return {
+        "event_id": str(uuid.uuid4()),
+        "event_type": "federal_bond_risk_match_changed",
+        "action": "federal_bond_risk_match_changed",
+        "entity_type": "docket_event",
+        "entity_id": source_id,
+        "actor": "system",
+        "agent_name": "federal_bond_risk",
+        "source": SOURCE,
+        "confidence": _match_confidence(after),
+        "reason": reason,
+        "old_state": before,
+        "new_state": after,
+        "evidence": evidence,
+        "timestamp": now,
+        "created_at": now,
+    }
+
+
+def _pending_audits(*sources) -> list[dict]:
+    """Pending audits from each source, one copy of each event id."""
+    merged: list[dict] = []
+    seen: set[str] = set()
+    for source in sources:
+        if isinstance(source, list):
+            rows = source
+        else:
+            rows = (source or {}).get("audit_pending") or []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            event_id = str(item.get("event_id") or "")
+            if event_id:
+                if event_id in seen:
+                    continue
+                seen.add(event_id)
+            merged.append(item)
+    return merged
+
+
+def _queue_match_audit(
+    document: dict,
+    source_id: str,
+    before: dict,
+    after: dict,
+    reason: str,
+    evidence: dict,
+    prior: Optional[dict] = None,
+) -> dict:
+    """Keep this audit, and any still-unwritten earlier audits, on the row."""
+    payload = _audit_payload(source_id, before, after, reason, evidence)
+    document["audit_pending"] = _pending_audits(prior, document, [payload])
+    return payload
+
+
+async def _insert_audit(db, payload: dict) -> bool:
+    """Claim one immutable audit. Overlapping scans share the ``event_id``."""
+    collection = getattr(db, "audit_events", None)
+    event_id = str(payload.get("event_id") or "")
+    if collection is None or not event_id:
+        return False
+    stored = dict(payload)
+    stored["source"] = SOURCE
+    stored["event_id"] = event_id
+    try:
+        await collection.update_one(
+            {"source": SOURCE, "event_id": event_id},
+            {"$setOnInsert": stored},
+            upsert=True,
+        )
+    except Exception as exc:
+        if _duplicate_key(exc):
+            return True
+        log.warning("Federal bond-risk audit was not written: %s", type(exc).__name__)
+        return False
+    return True
+
+
+async def _clear_pending_audit(db, source_id: str, event_id: str) -> None:
+    """Drop one completed audit. A newer pending item is not rewritten away."""
+    events = getattr(db, "docket_events", None)
+    if events is None or not source_id or not event_id:
+        return
+    try:
+        await events.update_one(
+            {"source": SOURCE, "source_id": source_id},
+            {"$pull": {"audit_pending": {"event_id": event_id}}},
+        )
+    except Exception as exc:
+        log.warning("Federal bond-risk pending audit was not cleared: %s", type(exc).__name__)
+
+
+async def _remember_audit(db, source_id: str, payload: dict) -> None:
+    events = getattr(db, "docket_events", None)
+    if events is None or not source_id:
+        return
+    event_id = str(payload.get("event_id") or "")
+    if not event_id:
+        return
+    try:
+        await events.update_one(
+            {"source": SOURCE, "source_id": source_id},
+            {"$addToSet": {"audit_pending": payload}},
+        )
+    except Exception as exc:
+        log.warning("Federal bond-risk pending audit was not stored: %s", type(exc).__name__)
+
+
+async def _flush_match_audit(db, source_id: str, payload: dict) -> bool:
+    """Write one queued audit. A failed insert stays on the row for the next scan."""
+    if await _insert_audit(db, payload):
+        await _clear_pending_audit(db, source_id, str(payload.get("event_id") or ""))
+        return True
+    await _remember_audit(db, source_id, payload)
+    return False
+
+
+async def retry_pending_audits(db) -> int:
+    """Write audits that were saved on the row after insert_one failed."""
+    written = 0
+    async for page in _each_page(db.docket_events, {"source": SOURCE}):
+        for row in page:
+            pending = [item for item in (row.get("audit_pending") or []) if isinstance(item, dict)]
+            if not pending:
+                continue
+            failed = False
+            for item in pending:
+                if not await _insert_audit(db, item):
+                    failed = True
+                    break
+                written += 1
+                await _clear_pending_audit(db, str(row.get("source_id") or ""), str(item.get("event_id") or ""))
+            if failed:
+                return written
+    return written
+
+
+def _stored_notification(row: dict) -> dict:
+    """Build a CRM notification from a stored alert, including withdrawn rows."""
+    source_id = str(row.get("source_id") or "")
+    status = str(row.get("match_status") or "possible")
+    if status == "withdrawn" or (status != "confirmed" and bool(row.get("downgrade_reason"))):
+        return _downgrade_note(row, source_id)
+    confirmed = status == "confirmed" and bool(row.get("auto_linked"))
+    return redact_internal_keys({
+        "notification_id": uuid.uuid4().hex[:12],
+        "type": "federal_bond_risk",
+        "icon": "⚖️",
+        "priority": "critical" if confirmed else "high",
+        "color": "#dc2626" if confirmed else "#f59e0b",
+        "title": row.get("title") or "Federal bond risk",
+        "message": row.get("description") or "",
+        "entity_id": row.get("bond_case_id") or row.get("candidate_bond_case_id") or "",
+        "entity_type": "federal_bond_risk",
+        "metadata": {
+            "match_status": status,
+            "auto_linked": confirmed,
+            "ambiguous": bool(row.get("ambiguous")),
+            "confirmations": list(row.get("confirmations") or []),
+            "court_id": row.get("court_id") or "",
+            "court_name": row.get("court_name") or "",
+            "docket_number": row.get("docket_number") or "",
+            "docket_id": row.get("docket_id") or "",
+            "event_type": row.get("event_type") or "",
+            "filing_id": row.get("filing_id") or "",
+            "source_id": source_id,
+            "absolute_url": row.get("absolute_url") or "",
+            "candidate_bond_case_id": row.get("candidate_bond_case_id") or row.get("bond_case_id") or "",
+        },
+        "read": False,
+        "dismissed": False,
+        "created_at": _now(),
+    })
+
+
+async def retry_pending_notifications(
+    db,
+    *,
+    skip_source_ids: Optional[set[str]] = None,
+    statuses: Optional[set[str]] = None,
+) -> int:
+    """Write CRM notifications for any stored row (including withdrawn) whose write failed."""
+    written = 0
+    async for page in _each_page(db.docket_events, {"source": SOURCE}):
+        for row in page:
+            source_id = str(row.get("source_id") or "")
+            status = str(row.get("match_status") or "")
+            if not source_id or not status:
+                continue
+            if skip_source_ids and source_id in skip_source_ids:
+                continue
+            if statuses is not None and status not in statuses:
+                continue
+            written_flag = row.get("notification_written")
+            if written_flag is None:
+                continue
+            if written_flag is True and str(row.get("notification_status") or "") == status:
+                continue
+            revision = int(row.get("notification_revision") or 0)
+            if not await _ensure_notification(
+                db, _stored_notification(row), source_id, status, revision,
+            ):
+                return written
+            written += 1
+    return written
+
+
+def _match_state(row: dict) -> dict:
+    return {
+        "match_status": row.get("match_status") or "",
+        "auto_linked": bool(row.get("auto_linked")),
+        "ambiguous": bool(row.get("ambiguous")),
+        "bond_case_id": row.get("bond_case_id") or "",
+        "candidate_bond_case_id": row.get("candidate_bond_case_id") or row.get("bond_case_id") or "",
+        "defendant_id": row.get("defendant_id") or row.get("matched_defendant_id") or "",
+        "candidate_defendant_id": (
+            row.get("candidate_defendant_id")
+            or row.get("defendant_id")
+            or row.get("matched_defendant_id")
+            or ""
+        ),
+        "defendant_name": row.get("defendant_name") or "",
+        "confirmations": list(row.get("confirmations") or []),
+        "confidence": _match_confidence(row),
+    }
+
+
+def _match_state_changed(existing: dict, document: dict) -> bool:
+    """True when match evidence changed even though match_status stayed the same."""
+    before = _match_state(existing)
+    after = _match_state(document)
+    before["confirmations"] = sorted(before["confirmations"])
+    after["confirmations"] = sorted(after["confirmations"])
+    return before != after
+
+
+def _identity_changed(existing: dict, document: dict) -> bool:
+    """True when the linked or candidate bond/defendant identity changed."""
+    before = _match_state(existing)
+    after = _match_state(document)
+    return any(
+        before[key] != after[key]
+        for key in (
+            "bond_case_id",
+            "candidate_bond_case_id",
+            "defendant_id",
+            "candidate_defendant_id",
+            "defendant_name",
+        )
+    )
+
+
+def _match_evidence(row: dict, reason: str) -> dict:
+    return {
+        "reason": reason,
+        "docket_id": row.get("docket_id") or "",
+        "docket_number": row.get("docket_number") or "",
+        "filing_id": row.get("filing_id") or "",
+        "event_type": row.get("event_type") or "",
+        "confirmations": list(row.get("confirmations") or []),
+        "candidate_bond_case_id": row.get("candidate_bond_case_id") or row.get("bond_case_id") or "",
+        "candidate_defendant_id": row.get("candidate_defendant_id") or row.get("defendant_id") or "",
+        "defendant_name": row.get("defendant_name") or "",
+    }
+
+
+def _downgrade_copy(name: str, event_label: str, reason: str = "") -> tuple[str, str]:
+    title = f"Federal bond risk link withdrawn — {event_label}"
+    if reason == "filing_removed_from_docket":
+        message = (
+            f"Previously linked for {name}. {event_label} is no longer present in the "
+            "recent court docket listing. The bond link was withdrawn for staff review."
+        )
+    else:
+        message = (
+            f"Previously linked for {name}. {event_label} no longer confirms. "
+            "Newer court identity evidence removed the bond link and left it for staff review."
+        )
+    return _redact_sensitive(title), _redact_sensitive(message)
+
+
+def _mutable_update(document: dict) -> dict:
+    """Fields safe to ``$set``. Lists that other scans append stay off this update."""
+    skipped = {"_id", "audit_pending", "match_history", "_history_event"}
+    return {key: value for key, value in document.items() if key not in skipped}
+
+
+def _transition_update(document: dict, audit: Optional[dict] = None) -> dict:
+    """Commit a match change without replacing pending audits or history."""
+    update: dict = {"$set": _mutable_update(document)}
+    history_event = document.get("_history_event")
+    if history_event:
+        update["$push"] = {"match_history": history_event}
+    if audit:
+        update["$addToSet"] = {"audit_pending": audit}
+    return update
+
+
+def _with_downgrade_audit(existing: dict, document: dict, reason: str) -> dict:
+    """Replace a confirmed link and keep the previous bond attachment in history."""
+    now = _now()
+    updated = _mutable_update(document)
+    updated["detected_at"] = existing.get("detected_at") or updated.get("detected_at") or now
+    updated["downgraded_at"] = now
+    updated["downgraded_from"] = existing.get("match_status") or "confirmed"
+    updated["downgrade_reason"] = reason
+    updated["prior_bond_case_id"] = existing.get("bond_case_id") or ""
+    updated["prior_matched_defendant_id"] = existing.get("matched_defendant_id")
+    updated["_history_event"] = {
+        "at": now,
+        "from": existing.get("match_status") or "confirmed",
+        "to": updated.get("match_status"),
+        "reason": reason,
+        "auto_linked": bool(existing.get("auto_linked")),
+        "bond_case_id": existing.get("bond_case_id") or "",
+        "matched_defendant_id": existing.get("matched_defendant_id"),
+    }
+    updated["slack_delivered"] = False
+    updated["alert_complete"] = False
+    updated["slack_claim"] = False
+    updated["slack_claim_at"] = ""
+    updated["slack_attempts"] = int(existing.get("slack_attempts") or 0)
+    updated["notification_written"] = False
+    updated["notification_status"] = ""
+    name = str(updated.get("defendant_name") or existing.get("defendant_name") or "the client")
+    label = str(existing.get("event_type") or updated.get("event_type") or "filing").replace("_", " ")
+    title, message = _downgrade_copy(name, label, reason)
+    updated["title"] = title
+    updated["description"] = message
+    return updated
+
+
+def _downgrade_note(document: dict, source_id: str) -> dict:
+    status = str(document.get("match_status") or "possible")
+    return redact_internal_keys({
+        "notification_id": uuid.uuid4().hex[:12],
+        "type": "federal_bond_risk",
+        "icon": "⚖️",
+        "priority": "high",
+        "color": "#f59e0b",
+        "title": document.get("title") or "Federal bond risk link withdrawn",
+        "message": document.get("description") or "",
+        "entity_id": document.get("candidate_bond_case_id") or document.get("prior_bond_case_id") or "",
+        "entity_type": "federal_bond_risk",
+        "metadata": {
+            "match_status": status,
+            "auto_linked": False,
+            "downgraded_from": "confirmed",
+            "downgrade_reason": document.get("downgrade_reason") or "",
+            "court_id": document.get("court_id") or "",
+            "court_name": document.get("court_name") or "",
+            "docket_number": document.get("docket_number") or "",
+            "docket_id": document.get("docket_id") or "",
+            "event_type": document.get("event_type") or "",
+            "filing_id": document.get("filing_id") or "",
+            "source_id": source_id,
+            "absolute_url": document.get("absolute_url") or "",
+            "candidate_bond_case_id": document.get("candidate_bond_case_id") or document.get("prior_bond_case_id") or "",
+        },
+        "read": False,
+        "dismissed": False,
+        "created_at": _now(),
+    })
+
+
+def _clear_downgrade_fields(document: dict) -> None:
+    """Remove prior downgrade/withdrawal markers when a row is upgraded or restored."""
+    document["downgraded_at"] = ""
+    document["downgraded_from"] = ""
+    document["downgrade_reason"] = ""
+    document["prior_bond_case_id"] = ""
+    document["prior_matched_defendant_id"] = None
+
+
+async def _store_decision(
+    db,
+    decision: MatchDecision,
+    docket: DocketView,
+    *,
+    require_active_record: bool = False,
+) -> str:
+    """Insert, upgrade, or downgrade one staff row.
+
+    Returns ``new``, ``upgraded``, ``downgraded``, ``restored``, ``withdrawn``,
+    ``inactive``, ``retry_slack``, or ``duplicate``.
+    A Slack retry does not write another CRM notification. The row is not
+    complete until Slack delivery is recorded. A confirmed link that later
+    evidence no longer supports is replaced and the previous attachment is kept
+    on ``match_history``.
+    """
+    source_id = _source_id(docket, decision)
+    existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+    still_active = (
+        str(decision.client.status or "").strip().lower() in ACTIVE_STATUSES
+        and await _bond_is_active(
+            db, decision.client.bond_case_id, require_record=require_active_record,
+        )
+    )
+    if not still_active:
+        if existing and existing.get("match_status") in {"confirmed", "possible"}:
+            if await _withdraw_row(db, existing, "client_no_longer_active"):
+                return "withdrawn"
+        return "inactive"
+    document = _event_document(decision, docket, source_id)
+    if existing and not document.get("filing_date") and existing.get("filing_date"):
+        document["filing_date"] = existing["filing_date"]
+    document["notification_revision"] = _next_notification_revision(existing, decision.status)
+    note = _notification(decision, docket, source_id)
+    restore = bool(
+        existing
+        and existing.get("match_status") == "withdrawn"
+        and decision.status in {"confirmed", "possible"}
+    )
+    upgrade = bool(
+        existing
+        and existing.get("match_status") == "possible"
+        and decision.status == "confirmed"
+    )
+    downgrade = bool(
+        existing
+        and existing.get("match_status") == "confirmed"
+        and existing.get("auto_linked")
+        and decision.status != "confirmed"
+    )
+    if upgrade:
+        document["detected_at"] = existing.get("detected_at") or document["detected_at"]
+        document["upgraded_at"] = _now()
+        document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
+        document["slack_claim"] = False
+        document["slack_claim_at"] = ""
+        document["match_revision"] = _next_match_revision(existing)
+        _clear_downgrade_fields(document)
+        audit = _queue_match_audit(
+            document, source_id, _match_state(existing), _match_state(document),
+            "possible_upgraded_to_confirmed", _match_evidence(document, "possible_upgraded_to_confirmed"),
+            prior=existing,
+        )
+        result = await db.docket_events.update_one(
+            _match_cas_filter(existing, "possible"),
+            _transition_update(document, audit),
+        )
+        if not getattr(result, "matched_count", 0):
+            return "duplicate"
+        await _flush_match_audit(db, source_id, audit)
+        await _ensure_notification(
+            db, note, source_id, decision.status, document["notification_revision"],
+        )
+        return "upgraded"
+    if restore:
+        document["detected_at"] = existing.get("detected_at") or document["detected_at"]
+        document["slack_attempts"] = 0
+        document["slack_claim"] = False
+        document["slack_claim_at"] = ""
+        document["slack_delivered"] = False
+        document["alert_complete"] = False
+        document["match_revision"] = _next_match_revision(existing)
+        document["_history_event"] = {
+            "at": _now(),
+            "from": "withdrawn",
+            "to": decision.status,
+            "reason": "withdrawn_restored",
+            "auto_linked": bool(existing.get("auto_linked")),
+            "bond_case_id": existing.get("prior_bond_case_id") or existing.get("bond_case_id") or "",
+            "matched_defendant_id": existing.get("prior_matched_defendant_id") or existing.get("matched_defendant_id"),
+        }
+        _clear_downgrade_fields(document)
+        audit = _queue_match_audit(
+            document, source_id, _match_state(existing), _match_state(document),
+            "withdrawn_restored", _match_evidence(document, "withdrawn_restored"),
+            prior=existing,
+        )
+        result = await db.docket_events.update_one(
+            _match_cas_filter(existing, "withdrawn"),
+            _transition_update(document, audit),
+        )
+        if not getattr(result, "matched_count", 0):
+            return "duplicate"
+        await _flush_match_audit(db, source_id, audit)
+        await _ensure_notification(
+            db, note, source_id, decision.status, document["notification_revision"],
+        )
+        return "restored"
+    if downgrade:
+        document["match_revision"] = _next_match_revision(existing)
+        document = _with_downgrade_audit(existing, document, "identity_no_longer_confirms")
+        audit = _queue_match_audit(
+            document, source_id, _match_state(existing), _match_state(document),
+            "identity_no_longer_confirms", _match_evidence(document, "identity_no_longer_confirms"),
+            prior=existing,
+        )
+        result = await db.docket_events.update_one(
+            _match_cas_filter(existing, "confirmed"),
+            _transition_update(document, audit),
+        )
+        if not getattr(result, "matched_count", 0):
+            return "duplicate"
+        await _flush_match_audit(db, source_id, audit)
+        await _ensure_notification(
+            db, _downgrade_note(document, source_id), source_id, decision.status,
+            document["notification_revision"],
+        )
+        return "downgraded"
+    if existing:
+        if _match_state_changed(existing, document):
+            identity_changed = _identity_changed(existing, document)
+            document["detected_at"] = existing.get("detected_at") or document["detected_at"]
+            document["updated_at"] = _now()
+            document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
+            if identity_changed:
+                rev = int(existing.get("notification_revision") or 0) + 1
+                document["notification_revision"] = rev
+                document["notification_written"] = False
+                document["notification_status"] = ""
+                document["slack_delivered"] = False
+                document["alert_complete"] = False
+                document["slack_claim"] = False
+                document["slack_claim_at"] = ""
+                document["slack_delivered_at"] = ""
+            else:
+                document["slack_delivered"] = bool(existing.get("slack_delivered"))
+                document["alert_complete"] = bool(existing.get("alert_complete"))
+                document["slack_claim"] = bool(existing.get("slack_claim"))
+                if existing.get("slack_delivered_at"):
+                    document["slack_delivered_at"] = existing["slack_delivered_at"]
+                if existing.get("slack_last_attempt_at"):
+                    document["slack_last_attempt_at"] = existing["slack_last_attempt_at"]
+                if existing.get("slack_claim_at"):
+                    document["slack_claim_at"] = existing["slack_claim_at"]
+                document["notification_written"] = bool(existing.get("notification_written"))
+                document["notification_status"] = existing.get("notification_status") or ""
+                rev = int(existing.get("notification_revision") or 0)
+                document["notification_revision"] = rev
+            if existing.get("upgraded_at"):
+                document["upgraded_at"] = existing["upgraded_at"]
+            document["match_revision"] = _next_match_revision(existing)
+            document["_history_event"] = {
+                "at": _now(),
+                "from": existing.get("match_status") or decision.status,
+                "to": decision.status,
+                "reason": "match_evidence_updated",
+                "auto_linked": bool(document.get("auto_linked")),
+                "bond_case_id": document.get("bond_case_id") or "",
+                "matched_defendant_id": document.get("matched_defendant_id"),
+                "candidate_bond_case_id": document.get("candidate_bond_case_id") or "",
+                "candidate_defendant_id": document.get("candidate_defendant_id") or "",
+                "defendant_name": document.get("defendant_name") or "",
+                "confidence": _match_confidence(document),
+            }
+            audit = _queue_match_audit(
+                document, source_id, _match_state(existing), _match_state(document),
+                "match_evidence_updated", _match_evidence(document, "match_evidence_updated"),
+                prior=existing,
+            )
+            result = await db.docket_events.update_one(
+                _match_cas_filter(existing, decision.status),
+                _transition_update(document, audit),
+            )
+            if not getattr(result, "matched_count", 0):
+                return "duplicate"
+            await _flush_match_audit(db, source_id, audit)
+            if (
+                identity_changed
+                or not existing.get("notification_written")
+                or existing.get("notification_status") != decision.status
+            ):
+                await _ensure_notification(db, note, source_id, decision.status, rev)
+            return "updated"
+        if document.get("filing_date") and not existing.get("filing_date"):
+            await db.docket_events.update_one(
+                _match_cas_filter(existing, decision.status),
+                {"$set": {"filing_date": document["filing_date"]}},
+            )
+        if (
+            not existing.get("notification_written")
+            or existing.get("notification_status") != decision.status
+        ):
+            await _ensure_notification(
+                db, note, source_id, decision.status,
+                _next_notification_revision(existing, decision.status),
+            )
+        if not existing.get("slack_delivered"):
+            return "retry_slack"
+        return "duplicate"
+    audit = _queue_match_audit(
+        document, source_id, {}, _match_state(document),
+        "match_recorded", _match_evidence(document, "match_recorded"),
+        prior=existing,
+    )
+    claimed = await _claim_insert(db, document)
+    if claimed != "inserted":
+        winner = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+        if winner and (
+            winner.get("match_status") != decision.status
+            or _match_state_changed(winner, document)
+        ):
+            return await _store_decision(
+                db, decision, docket, require_active_record=require_active_record,
+            )
+        if winner and not winner.get("notification_written"):
+            await _ensure_notification(
+                db, note, source_id, decision.status,
+                _next_notification_revision(winner, decision.status),
+            )
+        if winner and not winner.get("slack_delivered"):
+            return "retry_slack"
+        return "duplicate"
+    await _ensure_notification(
+        db, note, source_id, decision.status, document["notification_revision"],
+    )
+    await _flush_match_audit(db, source_id, audit)
+    log.info(
+        "Federal bond-risk %s court=%s event=%s filing=%s auto_linked=%s",
+        decision.status, docket.court_id, decision.event_type, decision.filing_id,
+        decision.status == "confirmed",
+    )
+    return "new"
+
+
+async def _withdraw_row(db, row: dict, reason: str) -> bool:
+    """Withdraw one active alert row, recording its immutable audit and notification."""
+    source_id = str(row.get("source_id") or "")
+    prior_status = row.get("match_status")
+    document = _mutable_update(row)
+    document["match_status"] = "withdrawn"
+    document["auto_linked"] = False
+    document["ambiguous"] = False
+    document["bond_case_id"] = ""
+    document["defendant_id"] = ""
+    document["matched_defendant_id"] = None
+    document["confirmations"] = []
+    document["confidence"] = 0.0
+    document["notification_revision"] = _next_notification_revision(row, "withdrawn")
+    document["match_revision"] = _next_match_revision(row)
+    document = _with_downgrade_audit(row, document, reason)
+    audit = _queue_match_audit(
+        document, source_id, _match_state(row), _match_state(document),
+        reason, _match_evidence(document, reason),
+        prior=row,
+    )
+    result = await db.docket_events.update_one(
+        _match_cas_filter(row, str(prior_status or "")),
+        _transition_update(document, audit),
+    )
+    if getattr(result, "matched_count", 0) and source_id:
+        await _flush_match_audit(db, source_id, audit)
+        await _ensure_notification(
+            db, _downgrade_note(document, source_id), source_id, "withdrawn",
+            document["notification_revision"],
+        )
+        return True
+    return False
+
+
+async def _unlink_inactive_bond_ids(db, active: set[str]) -> list[str]:
+    """A stored confirmed or possible row whose bond is closed is not posted."""
+    unlinked_ids: list[str] = []
+    async for page in _each_page(
+        db.docket_events,
+        {"source": SOURCE, "match_status": {"$in": ["confirmed", "possible"]}},
+    ):
+        for row in page:
+            candidate_bonds = [
+                bond for bond in dict.fromkeys((
+                    str(row.get("bond_case_id") or "").strip(),
+                    str(row.get("candidate_bond_case_id") or "").strip(),
+                )) if bond
+            ]
+            if any(bond in active for bond in candidate_bonds):
+                continue
+            # Re-verify live bond status before withdrawing so a bond reinstated
+            # after ``active`` was snapshotted (or a lookup error) never causes a false unlink.
+            still_open = False
+            for bond in candidate_bonds:
+                if await _bond_live_status(db, bond) in {"active", "error"}:
+                    still_open = True
+                    break
+            if still_open:
+                continue
+            source_id = str(row.get("source_id") or "")
+            if await _withdraw_row(db, row, "client_no_longer_active") and source_id:
+                unlinked_ids.append(source_id)
+    return unlinked_ids
+
+
+async def _unlink_inactive_clients(db, clients: list[ClientIdentity]) -> list[str]:
+    """A stored confirmed or possible row whose bond is closed is not posted."""
+    return await _unlink_inactive_bond_ids(db, {client.bond_case_id for client in clients})
+
+
+def _filing_in_covered_window(row: dict, window_start: str) -> bool:
+    """True only when the stored row has a known filing date inside ``window_start``."""
+    raw = _normalize_filing_date(str(row.get("filing_date") or ""))
+    if not raw:
+        return False
+    return filing_in_window(raw, window_start)
+
+
+async def _withdraw_stale_confirmations(db, docket: DocketView, decisions: list[MatchDecision]) -> list[str]:
+    """Withdraw active alerts whose filing no longer matches or disappeared in-window."""
+    filing_ids = {fid for fid in docket.seen_filing_ids if fid} | {
+        event.filing_id for event in docket.events if event.filing_id
+    }
+    if not filing_ids and not docket.entries_complete:
+        return []
+    window_start = docket.entry_window_start or filing_window_start()
+    still_open = {_source_id(docket, decision) for decision in decisions}
+    withdrawn: list[str] = []
+    async for page in _each_page(
+        db.docket_events, {"source": SOURCE, "docket_id": str(docket.docket_id)},
+    ):
+        for row in page:
+            source_id = str(row.get("source_id") or "")
+            if row.get("match_status") not in {"confirmed", "possible"}:
+                continue
+            if source_id in still_open:
+                continue
+            row_filing = str(row.get("filing_id") or "")
+            if row_filing in filing_ids:
+                reason = "identity_no_longer_matches"
+            elif (
+                docket.entries_complete
+                and row_filing.startswith(("entry:", "doc:"))
+                and _filing_in_covered_window(row, window_start)
+            ):
+                reason = "filing_removed_from_docket"
+            else:
+                continue
+            if await _withdraw_row(db, row, reason) and source_id:
+                withdrawn.append(source_id)
+    return withdrawn
+
+
+def _slack_version_filter(source_id: str, match_status: str, revision: int) -> dict:
+    """The claim and the delivery stamp both name this match version."""
+    revision = int(revision or 0)
+    if revision == 0:
+        version: dict = {"$or": [
+            {"notification_revision": 0},
+            {"notification_revision": {"$exists": False}},
+            {"notification_revision": None},
+        ]}
+    else:
+        version = {"notification_revision": revision}
+    return {
+        "source": SOURCE,
+        "source_id": source_id,
+        "match_status": match_status,
+        "$and": [version],
+    }
+
+
+async def _record_slack(
+    db, source_id: str, delivered: bool, attempts: int, *, match_status: str, revision: int,
+) -> None:
+    """Store whether Slack accepted this version. A newer transition is left unsent."""
+    now = _now()
+    fields = {
+        "slack_delivered": delivered,
+        "alert_complete": delivered,
+        "slack_attempts": attempts,
+        "slack_last_attempt_at": now,
+        "slack_claim": False,
+    }
+    if delivered:
+        fields["slack_delivered_at"] = now
+    await db.docket_events.update_one(
+        {
+            **_slack_version_filter(source_id, match_status, revision),
+            "slack_delivered": {"$ne": True},
+        },
+        {"$set": fields},
+    )
+
+
+async def _claim_slack_delivery(db, source_id: str, *, match_status: str, revision: int = 0) -> Optional[dict]:
+    """Claim one undelivered version and return that stored row.
+
+    A claim older than 30 minutes can be taken again. The filter names the
+    match status and revision that were read, so a downgrade that lands first
+    is not posted from the earlier snapshot.
+    """
+    cutoff = (datetime.now(timezone.utc) - SLACK_CLAIM_TTL).isoformat()
+    claim_at = _now()
+    result = await db.docket_events.update_one(
+        {
+            **_slack_version_filter(source_id, match_status, revision),
+            "slack_delivered": {"$ne": True},
+            "$and": [
+                *_slack_version_filter(source_id, match_status, revision)["$and"],
+                {"$or": [
+                    {"slack_claim": {"$ne": True}},
+                    {"slack_claim_at": ""},
+                    {"slack_claim_at": {"$lt": cutoff}},
+                    {"slack_claim_at": {"$exists": False}},
+                ]},
+            ],
+        },
+        {"$set": {"slack_claim": True, "slack_claim_at": claim_at}},
+    )
+    if getattr(result, "matched_count", 0) != 1:
+        return None
+    fresh = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+    if not fresh:
+        return None
+    if (
+        str(fresh.get("match_status") or "") != match_status
+        or int(fresh.get("notification_revision") or 0) != int(revision or 0)
+    ):
+        if fresh.get("slack_claim") and fresh.get("slack_claim_at") == claim_at:
+            await db.docket_events.update_one(
+                {"source": SOURCE, "source_id": source_id, "slack_claim_at": claim_at},
+                {"$set": {"slack_claim": False, "slack_claim_at": ""}},
+            )
+        return None
+    return fresh
+
+
+def _alert_stored(row: dict, notifier) -> bool:
+    """Repost a stored alert. The filing does not have to still be in search results."""
+    title = str(row.get("title") or "Federal bond risk")
+    message = str(row.get("description") or "")
+    confirmed = bool(row.get("auto_linked"))
+    try:
+        return bool(notifier.notify_alert(
+            title=title[:140],
+            message=message,
+            level="critical" if confirmed else "warning",
+            details={
+                "court": row.get("court_name") or "",
+                "docket": row.get("docket_number") or "",
+                "event": row.get("event_type") or "",
+                "filing_id": row.get("filing_id") or "",
+                "match_status": row.get("match_status") or "",
+                "auto_linked": confirmed,
+                "bond_case_id": row.get("bond_case_id") or row.get("candidate_bond_case_id") or "",
+            },
+            source="FederalBondRisk",
+            bridge=False,
+        ))
+    except Exception as exc:
+        log.warning("Federal bond-risk Slack retry failed: %s", type(exc).__name__)
+        return False
+
+
+async def retry_pending_slack(db, notifier, limit: int = 200) -> tuple[int, int, int]:
+    """Retry alerts whose Slack post never succeeded, independent of this search.
+
+    Returns sent, still pending, and claimed attempts. A failed post counts
+    toward the per-run cap.
+    """
+    cursor = db.docket_events.find({"source": SOURCE, "slack_delivered": False})
+    if hasattr(cursor, "sort"):
+        cursor = cursor.sort("_id", 1)
+    rows = await _to_list(cursor, limit)
+    sent = 0
+    pending = 0
+    attempted = 0
+    for row in rows:
+        if attempted >= MAX_SLACK:
+            pending += 1
+            continue
+        source_id = str(row.get("source_id") or "")
+        match_status = str(row.get("match_status") or "")
+        revision = int(row.get("notification_revision") or 0)
+        claimed = await _claim_slack_delivery(
+            db, source_id, match_status=match_status, revision=revision,
+        ) if source_id else None
+        if not claimed:
+            pending += 1
+            continue
+        attempted += 1
+        delivered = _alert_stored(claimed, notifier)
+        attempts = int(claimed.get("slack_attempts") or 0) + 1
+        await _record_slack(
+            db, source_id, delivered, attempts,
+            match_status=match_status, revision=revision,
+        )
+        if delivered:
+            sent += 1
+        else:
+            pending += 1
+    return sent, pending, attempted
+
+
+def _alert_slack(decision: MatchDecision, docket: DocketView, notifier) -> bool:
+    title, message = _staff_copy(decision, docket)
+    confirmed = decision.status == "confirmed"
+    try:
+        return bool(notifier.notify_alert(
+            title=title[:140],
+            message=message,
+            level="critical" if confirmed else "warning",
+            details={
+                "court": docket.court_name,
+                "docket": docket.docket_number,
+                "event": decision.event_type,
+                "filing_id": decision.filing_id,
+                "match_status": decision.status,
+                "auto_linked": confirmed,
+                "bond_case_id": decision.client.bond_case_id if confirmed else "",
+            },
+            source="FederalBondRisk",
+            bridge=False,
+        ))
+    except Exception as exc:
+        log.warning("Federal bond-risk Slack failed: %s", type(exc).__name__)
+        return False
+
+
+async def list_federal_bond_alerts(db, limit: int = 50) -> list[dict]:
+    try:
+        cursor = db.docket_events.find({"source": SOURCE})
+        if hasattr(cursor, "sort"):
+            cursor = cursor.sort("detected_at", -1)
+        rows = await _to_list(cursor, min(max(int(limit or 50), 1), 100))
+    except Exception as exc:
+        log.warning("Federal bond-risk list failed: %s", type(exc).__name__)
+        return []
+    cleaned = []
+    for row in rows:
+        item = dict(row)
+        if "_id" in item:
+            item["_id"] = str(item["_id"])
+        cleaned.append(item)
+    return cleaned
+
+
+async def run_federal_bond_risk_scan(
+    db,
+    *,
+    client=None,
+    notifier=None,
+    pause_s: float = DEFAULT_PAUSE_S,
+    clients: Optional[list[ClientIdentity]] = None,
+    max_requests: Optional[int] = None,
+) -> dict:
+    """Scan Florida federal criminal dockets. Flag off and missing token skip cleanly."""
+    health = federal_bond_risk_health()
+    base = {
+        "success": True,
+        "rows_written": 0,
+        "confirmed": 0,
+        "possible": 0,
+        "slack_sent": 0,
+        "client_messages": 0,
+        **health,
+    }
+    if not health["enabled"]:
+        return {**base, "skipped": "flag_off"}
+    if not health["token_configured"]:
+        return {**base, "skipped": "no_token"}
+
+    owns_client = client is None
+    if client is None:
+        from dashboard.services.courtlistener_client import CourtListenerClient
+
+        client = CourtListenerClient(api_token=os.getenv("COURTLISTENER_API_TOKEN", "").strip())
+    account_key = _courtlistener_account_key(client)
+    prior_gate = getattr(client, "_request_gate", None)
+    gate_bound = False
+    lease_owner: Optional[str] = None
+    try:
+        try:
+            await ensure_federal_bond_alert_index(db)
+        except _ScanStop as stop:
+            return _scan_stopped(base, stop)
+        if notifier is None:
+            from writers.slack_notifier import SlackNotifier
+
+            notifier = SlackNotifier()
+        lease_owner = await _acquire_scan_lease(db, account_key=account_key)
+        if lease_owner is None:
+            return {
+                **base,
+                "skipped": "scan_in_progress",
+                "incomplete_coverage": False,
+                "warning": "Another federal bond-risk scan is already in progress.",
+                "bonds_considered": 0,
+                "dockets_reviewed": 0,
+                "requests_made": 0,
+            }
+        await retry_pending_audits(db)
+        attempted_notifications: set[str] = set()
+        loaded_clients = clients is None
+        if clients is None:
+            clients = await load_active_clients(db)
+        if loaded_clients:
+            attempted_notifications.update(await _unlink_inactive_clients(db, clients) or [])
+        if not clients:
+            await retry_pending_notifications(db, skip_source_ids=attempted_notifications)
+            slack_sent, slack_pending, slack_attempts = await retry_pending_slack(db, notifier)
+            return {
+                **base,
+                "skipped": "no_active_clients",
+                "bonds_considered": 0,
+                "slack_sent": slack_sent,
+                "slack_pending": slack_pending,
+            }
+        quota = await _load_request_quota(db, run_limit=max_requests, account_key=account_key)
+        if callable(getattr(client, "set_request_gate", None)):
+            async def _request_gate(attempt: int, min_delay: float = 0.0) -> bool:
+                granted, reserve_ts = await quota.reserve(db, 1, min_required=1)
+                if granted == 0:
+                    return False
+                if await quota.pace(pause_s, already_reserved=1, min_delay=min_delay) > 0:
+                    await quota.mark_dispatched(db, 1, reserve_ts)
+                return True
+
+            client.set_request_gate(_request_gate)
+            gate_bound = True
+        try:
+            collected = await _collect_dockets(client, pause_s, db, quota=quota)
+        except _ScanStop as stop:
+            await retry_pending_notifications(
+                db, skip_source_ids=attempted_notifications, statuses={"withdrawn"},
+            )
+            slack_sent, slack_pending, _attempts = await retry_pending_slack(db, notifier)
+            stopped = _scan_stopped(base, stop)
+            stopped["slack_sent"] = slack_sent
+            stopped["slack_pending"] = slack_pending
+            stopped["requests_made"] = quota.run_used
+            return stopped
+        if collected.quota_deferred:
+            await retry_pending_notifications(db, skip_source_ids=attempted_notifications)
+            slack_sent, slack_pending, _attempts = await retry_pending_slack(db, notifier)
+            return {
+                **base,
+                "skipped": "quota_exhausted",
+                "truncated": True,
+                "incomplete_coverage": False,
+                "warning": (
+                    f"CourtListener request quota reached ({quota.hour_used()}/{quota.hour_limit} hourly, "
+                    f"{quota.day_used()}/{quota.day_limit} daily); scan deferred until the window resets."
+                ),
+                "bonds_considered": len(clients),
+                "dockets_reviewed": 0,
+                "requests_made": collected.requests_made,
+                "slack_sent": slack_sent,
+                "slack_pending": slack_pending,
+            }
+        dockets = collected.views
+        search_failures = collected.search_failures
+        party_failures = collected.party_failures
+        entry_failures = collected.entry_failures
+        brief_failures = collected.brief_failures
+        search_notes = collected.search_notes
+        seeds_truncated = bool(collected.unhydrated_seeds) or bool(search_notes)
+        if seeds_truncated or collected.quota_throttled:
+            base["truncated"] = True
+
+        # Re-check active bonds after search/hydration so a bond closed during a
+        # long CourtListener scan is withdrawn immediately and never stored.
+        mid_scan_unlinked: list[str] = []
+        if loaded_clients:
+            active_ids = await _active_bond_ids(db)
+            mid_scan_unlinked = await _unlink_inactive_bond_ids(db, active_ids)
+            attempted_notifications.update(mid_scan_unlinked)
+            clients = [client for client in clients if client.bond_case_id in active_ids]
+
+        decisions: list[tuple[MatchDecision, DocketView]] = []
+        by_docket: dict[str, tuple[DocketView, list[MatchDecision]]] = {}
+        for docket in dockets:
+            group = decide_matches(clients, docket)
+            by_docket[str(docket.docket_id)] = (docket, group)
+            for decision in group:
+                decisions.append((decision, docket))
+
+        written = len(mid_scan_unlinked)
+        confirmed = 0
+        possible = len(mid_scan_unlinked)
+        rows_capped = False
+        capped_docket_ids: set[str] = set()
+        for decision, docket in decisions:
+            source_id = _source_id(docket, decision)
+            if loaded_clients and not await _bond_is_active(
+                db, decision.client.bond_case_id, require_record=True,
+            ):
+                existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+                if existing and existing.get("match_status") in {"confirmed", "possible"}:
+                    if await _withdraw_row(db, existing, "client_no_longer_active"):
+                        attempted_notifications.add(source_id)
+                        written += 1
+                        possible += 1
+                continue
+            existing = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
+            if not existing and written >= MAX_ROWS:
+                rows_capped = True
+                base["truncated"] = True
+                capped_docket_ids.add(str(docket.docket_id))
+                continue
+            outcome = await _store_decision(
+                db, decision, docket, require_active_record=loaded_clients,
+            )
+            if outcome == "inactive":
+                continue
+            attempted_notifications.add(source_id)
+            if outcome in {"duplicate", "retry_slack"}:
+                continue
+            written += 1
+            if outcome in {"downgraded", "withdrawn"} or decision.status != "confirmed":
+                possible += 1
+            else:
+                confirmed += 1
+        withdrawn_ids: list[str] = []
+        for docket, group in by_docket.values():
+            if str(docket.docket_id) in collected.failed_seed_ids:
+                continue
+            withdrawn_ids.extend(await _withdraw_stale_confirmations(db, docket, group))
+        attempted_notifications.update(withdrawn_ids)
+        written += len(withdrawn_ids)
+        possible += len(withdrawn_ids)
+        # Persist any capped, failed-hydration, or unhydrated seeds as a durable
+        # snapshot so subsequent scans drain the exact slice without losing
+        # older hits if newer filings arrive; only advance live search cursors
+        # once the captured slice is drained and all search sources succeeded.
+        retry_ids = collected.failed_seed_ids | capped_docket_ids
+        retry_batch = [
+            seed for seed in collected.batch_seeds
+            if str(seed.get("id") or "") in retry_ids
+        ]
+        remaining_seeds = [*retry_batch, *collected.unhydrated_seeds]
+        incomplete_coverage = bool(
+            search_failures or party_failures or entry_failures or brief_failures
+        )
+        if incomplete_coverage and (
+            seeds_truncated or collected.pending_checkpoints or search_failures
+        ):
+            base["truncated"] = True
+        if db is not None:
+            if remaining_seeds:
+                saved = await _save_pending_slice(
+                    db,
+                    remaining_seeds,
+                    collected.pending_checkpoints if collected.commit_checkpoints else [],
+                    search_notes,
+                    commit_checkpoints=collected.commit_checkpoints,
+                )
+                if not saved:
+                    incomplete_coverage = True
+                base["truncated"] = True
+            else:
+                if collected.from_pending_slice:
+                    await _clear_pending_slice(db)
+                if collected.commit_checkpoints and not incomplete_coverage:
+                    for search_type, day, resume_url in collected.pending_checkpoints:
+                        await _save_search_checkpoint(db, search_type, day, resume_url)
+        # Re-check active bonds one more time before emitting CRM or Slack alerts
+        # so a bond closed during decision persistence is withdrawn first.
+        if loaded_clients:
+            late_unlinked = await _unlink_inactive_bond_ids(db, await _active_bond_ids(db))
+            attempted_notifications.update(late_unlinked)
+            written += len(late_unlinked)
+            possible += len(late_unlinked)
+        # Notification and Slack retries run only after this scan's evidence has
+        # been reconciled, so an outdated pre-downgrade alert is never sent.
+        await retry_pending_notifications(db, skip_source_ids=attempted_notifications)
+        slack_sent, slack_pending, _slack_attempts = await retry_pending_slack(db, notifier)
+        warnings = []
+        if rows_capped:
+            warnings.append(
+                "New matches exceeded the per-scan row cap. "
+                "The remaining dockets from this search slice were saved for the next scan."
+            )
+        if collected.quota_throttled:
+            warnings.append(
+                "CourtListener request budget reached for this scan; remaining dockets were saved for the next scan."
+            )
+        elif seeds_truncated:
+            warnings.append(
+                "Matching dockets remain after this hydration batch. "
+                "The next scan continues with the rest."
+            )
+        if search_failures:
+            warnings.append(
+                "CourtListener search failed for "
+                f"{len(search_failures)} source(s): " + "; ".join(search_failures[:8])
+            )
+        if party_failures:
+            warnings.append(
+                "CourtListener party list failed for "
+                f"{len(party_failures)} docket(s): " + "; ".join(party_failures[:8])
+            )
+        if entry_failures:
+            warnings.append(
+                "CourtListener docket entries failed for "
+                f"{len(entry_failures)} docket(s): " + "; ".join(entry_failures[:8])
+            )
+        if brief_failures:
+            warnings.append(
+                "CourtListener docket brief failed for "
+                f"{len(brief_failures)} docket(s): " + "; ".join(brief_failures[:8])
+            )
+        warnings.extend(search_notes)
+        return {
+            **base,
+            "skipped": None,
+            "incomplete_coverage": incomplete_coverage,
+            "warning": " ".join(warnings) or None,
+            "bonds_considered": len(clients),
+            "dockets_reviewed": len(dockets),
+            "requests_made": collected.requests_made,
+            "rows_written": written,
+            "confirmed": confirmed,
+            "possible": possible,
+            "slack_sent": slack_sent,
+            "slack_pending": slack_pending,
+            "client_messages": 0,
+        }
+    finally:
+        if gate_bound:
+            client.set_request_gate(prior_gate)
+        await _release_scan_lease(db, lease_owner, account_key=account_key)
+        if owns_client:
+            close = getattr(client, "close", None)
+            if close:
+                await close()

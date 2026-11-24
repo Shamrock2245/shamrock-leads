@@ -303,9 +303,13 @@ class OSINTService:
                 "email": req.email,
                 "phone": req.phone,
                 "license_plate": req.license_plate,
+                "image_url": req.image_url,
                 "full_name": req.full_name,
+                "dob": req.dob,
                 "deep_scan": req.deep_scan,
                 "second_opinion": req.second_opinion,
+                "top_sites": req.top_sites,
+                "derive_usernames": req.derive_usernames,
             },
             "status": "running",
             "progress": progress,
@@ -370,9 +374,12 @@ class OSINTService:
                 "email": req.email,
                 "phone": req.phone,
                 "license_plate": req.license_plate,
+                "image_url": getattr(req, "image_url", None),
                 "deep_scan": req.deep_scan,
                 "engines": engines_list,
                 "second_opinion": req.second_opinion,
+                "top_sites": getattr(req, "top_sites", None),
+                "derive_usernames": getattr(req, "derive_usernames", True),
             }
             async with httpx.AsyncClient(timeout=OSINT_WORKER_TIMEOUT) as client:
                 r = await client.post(
@@ -422,6 +429,7 @@ class OSINTService:
                 "progress": worker_result.get("progress") or {},
                 "accounts": worker_result.get("accounts") or [],
                 "entities": worker_result.get("entities") or [],
+                "geo_points": worker_result.get("geo_points") or [],
                 "total_accounts": int(worker_result.get("total_accounts") or 0),
                 "total_entities": int(worker_result.get("total_entities") or 0),
                 "platforms_found": worker_result.get("platforms_found") or [],
@@ -790,50 +798,82 @@ class OSINTService:
         return doc
 
     async def export_csv(self, scan_id: str) -> Optional[str]:
-        """Flat CSV of accounts + entities."""
+        """Sectioned, spreadsheet-friendly CSV built from the shared report.
+
+        Sections mirror the PDF: summary, inputs, recovery leads, next steps,
+        accounts, other findings, risk signals, engine log. Every row starts
+        with a Section column so the file sorts and filters cleanly in Excel
+        or Google Sheets.
+        """
         doc = await self.get_scan(scan_id, include_raw=False)
         if not doc:
             return None
 
+        from dashboard.services.osint_report import build_osint_report
+        report = build_osint_report(doc)
+        h = report["header"]
+        k = report["kpis"]
+
+        def safe(v: Any) -> str:
+            # Spreadsheet formula injection guard (=, +, -, @). Also keeps
+            # +1 phone numbers from being turned into numbers by Excel.
+            s = "" if v is None else str(v)
+            return "'" + s if s[:1] in ("=", "+", "-", "@", "\t", "\r") else s
+
         output = io.StringIO()
         writer = redacting_csv_writer(output)
 
-        # Accounts section
-        writer.writerow([
-            "Type", "Platform", "URL", "Username", "Source",
-            "Confidence", "Category", "Relevance",
-        ])
-        for acct in doc.get("accounts") or []:
-            writer.writerow([
-                "account",
-                acct.get("platform", ""),
-                acct.get("url", ""),
-                acct.get("username", ""),
-                acct.get("source", ""),
-                acct.get("confidence", ""),
-                acct.get("category", ""),
-                acct.get("relevance", "unreviewed"),
-            ])
+        def row(*cells: Any) -> None:
+            writer.writerow([safe(c) for c in cells])
 
-        # Entities section
-        writer.writerow([])
-        writer.writerow([
-            "Type", "Entity Type", "Value", "Source",
-            "Module", "Confidence", "Context", "Relevance",
-        ])
-        for ent in doc.get("entities") or []:
-            writer.writerow([
-                "entity",
-                ent.get("type", ""),
-                ent.get("value", ""),
-                ent.get("source", ""),
-                ent.get("module", ""),
-                ent.get("confidence", ""),
-                ent.get("context", ""),
-                ent.get("relevance", "unreviewed"),
-            ])
+        row("Section", "Field / Type", "Value", "Detail", "Source", "Status / Confidence", "Link")
+        row("Summary", "Subject", h["subject_name"], h["subject_type"], "", h["status"], "")
+        row("Summary", "Case / Subject ID", h["subject_id"], "", "", "", "")
+        row("Summary", "Scan ID", h["scan_id"], h["created_at"], h["requested_by"], "", "")
+        row("Summary", "Totals",
+            f"{k['locations']} locations · {k['contacts']} contact points · {k['accounts']} accounts",
+            f"{k['platforms']} platforms · {k['entities']} entities", "",
+            f"risk +{k['risk_score']} (advisory)", "")
+        if report["ai_summary"]:
+            row("Summary", "AI summary", report["ai_summary"], "", "", "", "")
+        for label, value in report["inputs"]:
+            row("Search input", label, value, "", "", "", "")
+        row("Search input", "Engines", ", ".join(h["engines"]), "", "", "", "")
 
-        return output.getvalue()
+        for loc in report["leads"]["locations"]:
+            row("Lead: location", "location", loc["value"], loc["detail"], loc["source"], "", loc["map_url"])
+        for c in report["leads"]["contacts"]:
+            row("Lead: contact", c["type"], c["value"], c["context"], c["source"], c["new"], "")
+        for hd in report["leads"]["handles"]:
+            row("Lead: handle", "username", "@" + hd["handle"], hd["platforms"], hd["sources"],
+                f"{hd['new']} · {hd['platform_count']} sites", "")
+        for v in report["leads"]["vehicle"]:
+            row("Lead: vehicle (HIBF)", "plate audit", v["value"], v["context"], v["source"], "", "")
+        for b in report["leads"]["breaches"]:
+            row("Lead: breach", "breach", b["value"], b["context"], b["source"], "", "")
+
+        for i, step in enumerate(report["next_steps"], 1):
+            row("Next step", str(i), step, "", "", "", "")
+
+        for cat, accs in report["accounts_by_category"]:
+            for a in accs:
+                row(f"Account: {cat}", a["platform"], a["username"], a["relevance"], a["source"],
+                    a["confidence"], a["url"])
+
+        for e in report["other_entities"]:
+            row("Other finding", e["type"], e["value"], e["context"], e["source"], e["confidence"], "")
+
+        for s in report["signals"]:
+            row("Risk signal (advisory)", s["type"], s["detail"], "", "", s["severity"], "")
+
+        for eng in report["engine_log"]:
+            row("Engine log", eng["engine"], f"{eng['found']} found", eng["note"], eng["engine_id"],
+                eng["status"], "")
+        for w in report["warnings"]:
+            row("Warning", "", w, "", "", "", "")
+
+        # UTF-8 BOM so Excel opens accented names and emoji correctly.
+        return "\ufeff" + output.getvalue()
 
     async def export_pdf(self, scan_id: str) -> Optional[bytes]:
         """Generate a PDF summary report."""

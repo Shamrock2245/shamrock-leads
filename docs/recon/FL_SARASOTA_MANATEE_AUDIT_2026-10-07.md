@@ -53,5 +53,6 @@
 | Manatee prod **write** smoke, then Health → `verified_public` decision | Leads Ops → Chief of Staff |
 | Manatee bond / statute / degree / DOB / address: only on `/bookings/<id>` detail pages (CF-blocked). Check from residential egress whether they load; if they do, add a detail fetch in a follow-up | Leads Ops check, then Scraper Watch |
 | Sarasota: reopen needs a booking number + booking timestamp on an ordinary-access official page | Source-side block (Sarasota SO) |
+| 2026-11-13 fetch plan (owner directive): Mac relay, then stealth + SolveCaptcha, then fail closed. Both stay `fail_closed`. A `viewInmate.php` id is not a booking number. | `scrapers/access_strategy.py` |
 | Charlotte shares Manatee's Revize design and still emits `Bond_Amount="0"` and has none of these guards. Not changed here, to keep this PR to the two owner-priority counties | Scraper Watch follow-up (CoS to schedule) |
 | ~~The existing `auto` resolver and `cf_browser` still use APE/Warren proxies and Patchright + init-script patches.~~ Decided 2026-10-07 (owner via CoS): removed from Manatee. `MANATEE_EGRESS_MODE=direct` is the only mode, the browser is stock Playwright with no proxy, and `tests/test_manatee_no_proxy_path.py` proves no proxy or stealth path is reachable. Charlotte keeps its resolver for now | Done for Manatee; Charlotte is CoS / Brendan |

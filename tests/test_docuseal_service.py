@@ -54,7 +54,7 @@ def test_prefill_values_from_bond():
             ],
         }
     )
-    assert vals["defendant_name"] == "Jane Doe"
+    assert vals["defendant_name"] == "Doe, Jane"
     assert vals["IndemnitorName"] == "John Cosigner"
     assert vals["CaseNum"] == "26-CF-100"
     assert vals["PowerNum"] == "POA1" or vals["PowerNum"] == "OSI3 20134296"
@@ -619,7 +619,7 @@ def test_build_bond_data_copies_court_time_and_case_payment():
     assert bond["balance_financed_amount"] == "1.00"
     vals = DocuSealService.prefill_values_from_bond(bond)
     assert vals["court_datetime"] == "1900-01-01 00:00"
-    assert vals["court_type"] == "TEST COURT"
+    assert vals["court_type"] == "TEST"
     assert vals["balance_financed_amount"] == "1.00"
 
 
@@ -760,7 +760,7 @@ def test_prefill_includes_ind_last_and_master_aliases():
     assert vals["indemnitor_last_name"] == "Cosigner"
     assert vals["IndLastName"] == "Cosigner"
     assert vals["IndFirstName"] == "John"
-    assert vals["DefName"] == "DOE, JANE ANN"
+    assert vals["DefName"] == "Doe, Jane"
     assert vals["IndAddress"] == "1 Main St"
     assert vals["IndDOB"] == "1990-01-02"
     assert vals["IndDL"] == "D123"

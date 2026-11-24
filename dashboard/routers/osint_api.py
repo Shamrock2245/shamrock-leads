@@ -131,12 +131,15 @@ async def initiate_scan(
     """
     _require_admin(request, x_admin_key, x_admin_token)
 
-    # Validate at least one search identifier
-    has_identifier = any([body.full_name, body.usernames, body.email, body.phone])
+    # Validate at least one search identifier (plate-only and photo-only scans are valid)
+    has_identifier = any([
+        body.full_name, body.usernames, body.email, body.phone,
+        body.license_plate, body.image_url,
+    ])
     if not has_identifier:
         raise HTTPException(
             status_code=422,
-            detail="At least one identifier required: full_name, usernames, email, or phone.",
+            detail="At least one identifier required: full_name, usernames, email, phone, license_plate, or image_url.",
         )
 
     svc = get_osint_service()

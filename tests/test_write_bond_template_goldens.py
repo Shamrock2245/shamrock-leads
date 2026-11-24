@@ -439,6 +439,7 @@ def _full_body(surety_id):
     )
     indemnitor = _person(
         last_name="INDEMNITOR",
+        dl="TEST-DL-0002",
         phone="555-0110",
         phone2="555-0111",
         work_phone="555-0112",
@@ -468,6 +469,7 @@ def _full_body(surety_id):
     )
     coindemnitor = _person(
         last_name="COINDEMNITOR",
+        dl="TEST-DL-0003",
         phone="555-0118",
         relationship="TEST CO RELATION",
     )
@@ -746,10 +748,10 @@ def test_write_bond_full_template_fields(monkeypatch, surety_id):
 
     assert set(report["fields"]) == set(field_map) & names
     assert report["dropped_payload_keys"] == sorted(set(field_map) - names)
-    assert report["fields"]["defendant_name"]["value"] == "TEST DEFENDANT"
+    assert report["fields"]["defendant_name"]["value"] == "Defendant, Test"
     assert report["fields"]["indemnitor_name"]["value"] == "TEST INDEMNITOR / TEST COINDEMNITOR"
     assert report["fields"]["charges_summary"]["value"] == joined
-    assert report["fields"]["court_type"]["value"] == "TEST COURT"
+    assert report["fields"]["court_type"]["value"] == "TEST"
     assert "1900-01-01" in json.dumps(report["fields"])
     assert "000-00-0000" in json.dumps(report["fields"])
     assert "TEST-DL-0000" in json.dumps(report["fields"])

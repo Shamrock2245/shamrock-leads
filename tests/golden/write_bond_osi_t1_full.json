@@ -330,7 +330,7 @@
         "defendant",
         "indemnitor"
       ],
-      "value": "TEST COURT"
+      "value": "TEST"
     },
     "def_attorney_address": {
       "readonly": false,
@@ -810,7 +810,7 @@
         "defendant",
         "indemnitor"
       ],
-      "value": "TEST DEFENDANT"
+      "value": "Defendant, Test"
     },
     "defendant_previous_employment": {
       "readonly": false,
@@ -970,7 +970,7 @@
         "defendant",
         "indemnitor"
       ],
-      "value": "TEST-DL-0000"
+      "value": "TEST-DL-0002"
     },
     "indemnitor_dob": {
       "readonly": false,

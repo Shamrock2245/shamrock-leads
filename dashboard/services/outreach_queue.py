@@ -69,7 +69,22 @@ async def process_outreach_queue(db=None) -> dict:
     """
     queue_col = get_collection("outreach_queue") if db is None else db["outreach_queue"]
     now = datetime.now(timezone.utc)
-    
+
+    # Reclaim any orphaned messages left in 'sending' for > 5 minutes (e.g. worker restart)
+    stale_cutoff = now - timedelta(minutes=5)
+    try:
+        reclaimed = await queue_col.update_many(
+            {"status": "sending", "updated_at": {"$lte": stale_cutoff}},
+            {"$set": {"status": "pending", "next_attempt": now, "updated_at": now}},
+        )
+        if getattr(reclaimed, "modified_count", 0) > 0:
+            logger.warning(
+                "[outreach_queue] Reclaimed %d stale 'sending' message(s) back to pending",
+                reclaimed.modified_count,
+            )
+    except Exception:
+        pass
+
     # Query for pending messages whose next_attempt time is now or in the past
     query = {
         "status": "pending",
@@ -140,15 +155,20 @@ async def process_outreach_queue(db=None) -> dict:
             blocked += 1
         elif success:
             logger.info("[outreach_queue] ✅ Successfully sent queued message %s to ...%s", msg_id, phone[-4:])
+            sent_update = {
+                "status": "sent",
+                "sent_at": now_updated,
+                "updated_at": now_updated,
+            }
+            if isinstance(res, dict):
+                msg_data = res.get("data") if isinstance(res.get("data"), dict) else {}
+                if msg_data.get("guid"):
+                    sent_update["bb_message_guid"] = msg_data["guid"]
+                if res.get("fallback_channel"):
+                    sent_update["channel"] = res["fallback_channel"]
             await queue_col.update_one(
                 {"_id": msg_id},
-                {
-                    "$set": {
-                        "status": "sent",
-                        "sent_at": now_updated,
-                        "updated_at": now_updated
-                    }
-                }
+                {"$set": sent_update},
             )
             sent += 1
         else:

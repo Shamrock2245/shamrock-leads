@@ -68,6 +68,7 @@ bb_webhook_bp = APIRouter(prefix="/api", tags=["bb_webhook_receiver"])
 BB_WEBHOOK_EVENTS = [
     "new-message",
     "updated-message",
+    "message-send-error",
     "chat-read-status-changed",
     "typing-indicator",
 ]
@@ -743,9 +744,120 @@ async def _handle_new_message(event_data: dict, db) -> dict:
     return {"processed": True, "matched": False}
 
 
+async def _handle_delivery_failure(message: dict, error_code: int | str = 0) -> dict:
+    """Handle an asynchronous iMessage delivery failure (red '!' / error != 0).
+
+    Records the failure in MongoDB and, when enabled and eligible, performs a
+    one-time transport failover to ``SMS;-;`` (macOS Text Message Forwarding
+    -> RCS/SMS) for the exact already-authorized message.
+    """
+    msg_guid = message.get("guid", "")
+    _, chat_guid, e164, _ = _extract_sender_and_chat(message)
+    msg_text = (message.get("text") or "").strip()
+    now = datetime.now(timezone.utc)
+
+    if msg_guid:
+        fail_update = {
+            "delivery_failed": True,
+            "bb_error_code": error_code,
+            "delivery_failed_at": now.isoformat(),
+        }
+        for coll_name in ("imessage_outreach", "outreach_queue"):
+            try:
+                await get_collection(coll_name).update_one(
+                    {"bb_message_guid": msg_guid},
+                    {"$set": fail_update},
+                )
+            except Exception:
+                pass
+
+    auto_fallback = os.getenv("BB_AUTO_SMS_FALLBACK_ON_ERROR", "true").lower() in ("1", "true", "yes")
+    if not auto_fallback:
+        return {"processed": True, "delivery_failed": True, "sms_fallback": "disabled"}
+
+    if chat_guid.startswith("SMS;-;"):
+        return {"processed": True, "delivery_failed": True, "sms_fallback": "already_sms"}
+
+    if not e164:
+        return {"processed": True, "delivery_failed": True, "sms_fallback": "no_phone"}
+
+    # Atomic idempotency guard: never send duplicate SMS fallbacks if BB fires
+    # both updated-message(error!=0) and message-send-error for the same guid.
+    fallback_key = msg_guid or f"{e164}:{hash(msg_text)}"
+    try:
+        fb_coll = get_collection("bb_sms_fallback_log")
+        existing = await fb_coll.find_one({"original_msg_guid": fallback_key})
+        if existing:
+            return {"processed": True, "delivery_failed": True, "sms_fallback": "already_attempted"}
+        await fb_coll.update_one(
+            {"original_msg_guid": fallback_key},
+            {"$set": {"original_msg_guid": fallback_key, "chat_guid": chat_guid, "created_at": now.isoformat()}},
+            upsert=True,
+        )
+    except Exception:
+        pass
+
+    if not msg_text and msg_guid:
+        for coll_name in ("outreach_queue", "imessage_outreach"):
+            try:
+                doc = await get_collection(coll_name).find_one({"bb_message_guid": msg_guid})
+                if doc and doc.get("message"):
+                    msg_text = str(doc["message"]).strip()
+                    break
+                if doc and doc.get("preview"):
+                    # Do not send truncated preview text
+                    continue
+            except Exception:
+                pass
+
+    if not msg_text:
+        return {"processed": True, "delivery_failed": True, "sms_fallback": "skipped_empty_text"}
+
+    from dashboard.services.bb_client import get_bb_client
+    bb = get_bb_client(e164)
+    if not bb:
+        return {"processed": True, "delivery_failed": True, "sms_fallback": "no_bb_server"}
+
+    logger.warning(
+        "🔄 iMessage delivery failed (err=%s, guid=%s) for ...%s — failing over to SMS/RCS",
+        error_code, msg_guid[:8] if msg_guid else "?", e164[-4:],
+    )
+    res = await bb.send_text(f"SMS;-;{e164}", msg_text, purpose="sms_fallback")
+    fb_ok = bool(res and res.get("success"))
+    fb_guid = ((res.get("data") or {}).get("guid") if isinstance(res, dict) and isinstance(res.get("data"), dict) else None)
+    try:
+        await get_collection("bb_sms_fallback_log").update_one(
+            {"original_msg_guid": fallback_key},
+            {"$set": {
+                "sms_fallback_sent": fb_ok,
+                "sms_fallback_guid": fb_guid,
+                "sms_fallback_blocked": bool(res and res.get("blocked")),
+                "sms_fallback_error": None if fb_ok else (res or {}).get("error") or (res or {}).get("reason"),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }},
+            upsert=True,
+        )
+    except Exception:
+        pass
+
+    return {
+        "processed": True,
+        "delivery_failed": True,
+        "sms_fallback": "sent" if fb_ok else ("blocked" if (res or {}).get("blocked") else "failed"),
+        "sms_fallback_guid": fb_guid,
+    }
+
+
+async def _handle_message_send_error(event_data: dict) -> dict:
+    """Handle BlueBubbles ``message-send-error`` webhook event."""
+    message = _extract_bb_message(event_data)
+    error_code = message.get("error") or event_data.get("error") or "send_error"
+    return await _handle_delivery_failure(message, error_code=error_code)
+
+
 async def _handle_updated_message(event_data: dict) -> dict:
-    """Update delivery and read receipt status in MongoDB."""
-    message = event_data.get("message") or event_data.get("data") or {}
+    """Update delivery, read receipt, and error status in MongoDB."""
+    message = _extract_bb_message(event_data)
     msg_guid = message.get("guid", "")
     if not msg_guid:
         return {"processed": False}
@@ -765,6 +877,16 @@ async def _handle_updated_message(event_data: dict) -> dict:
             {"$set": update}
         )
         logger.debug("📬 Updated message status for %s: %s", msg_guid[:8], update)
+
+    error_code = message.get("error") or 0
+    try:
+        has_error = int(error_code) != 0
+    except (TypeError, ValueError):
+        has_error = bool(error_code)
+
+    if has_error and message.get("isFromMe", True):
+        fail_res = await _handle_delivery_failure(message, error_code=error_code)
+        return {"processed": True, "updated": bool(update), **fail_res}
 
     return {"processed": True, "updated": bool(update)}
 
@@ -808,6 +930,8 @@ async def receive_bb_event(request: Request):
         result = await _handle_new_message(event_data, db)
     elif event_type == "updated-message":
         result = await _handle_updated_message(event_data)
+    elif event_type == "message-send-error":
+        result = await _handle_message_send_error(event_data)
     elif event_type in ("typing-indicator", "chat-read-status-changed"):
         # Log but no action needed
         result = {"processed": True, "action": "logged_only"}

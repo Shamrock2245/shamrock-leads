@@ -3,10 +3,11 @@ Manatee County Arrest Scraper: Revize CMS roster, residential egress only
 =========================================================================
 Source: Manatee County Sheriff's Office
 URL: https://manatee-sheriff.revize.com/bookings
-Method: stock Playwright Chromium (no Patchright, no stealth context, no
-proxy) loading the public roster table from a host whose own exit is US
-residential: Brendan's home relay that Leads Ops runs. There is no proxy,
-SOCKS, APE/Warren, CAPTCHA-solver or stealth path in this module.
+Method: while ``SOURCE_CONTRACT_VALIDATED`` is False, ``scrape`` returns []
+and makes no request. Owner directive 2026-11-13: a later reopen fetches
+through ``scrapers.access_strategy`` (Mac relay, then stealth browser +
+SolveCaptcha, then fail closed). This module still does not import Patchright
+or a proxy. There is no SOCKS, APE/Warren, or proxy path.
 
 Source contract (columns mapped by header, never by position):
     Booking # | Last Name | First Name | Middle | Charge | Arrest Date | Released
@@ -57,6 +58,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 from core.models import ArrestRecord
+from scrapers.access_strategy import MANATEE_JAIL
 from scrapers.base_scraper import BaseScraper
 from scrapers.scraper_resilience import EgressBlocked, ParseDriftError
 
@@ -554,6 +556,10 @@ _EXTRACT_JS = r"""() => {
 
 
 class ManateeCountyScraper(BaseScraper):
+
+    # Owner directive 2026-11-13: Mac relay, then stealth browser + SolveCaptcha,
+    # then fail closed. Declared here. Not used while the flag below is False.
+    ACCESS_PLAN = MANATEE_JAIL
 
     # FAIL CLOSED 2026-10-09 (docs/recon/FL_MANATEE_SOURCE_RECON_2026-10-09.md). The Revize roster
     # answers a Cloudflare challenge (HTTP 403 ``cf-mitigated: challenge``) on

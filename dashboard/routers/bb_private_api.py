@@ -106,10 +106,16 @@ class BlueBubblesClient:
         await client.unsend_message("msg-guid-here")
     """
 
-    def __init__(self, base_url: str, password: str, timeout: float = 15.0):
+    def __init__(self, base_url: str, password: str, timeout: float = 15.0,
+                 fallback_urls: list[str] | None = None):
         self.base_url = base_url.rstrip("/")
         self.password = password
         self.timeout = timeout
+        self.fallback_urls = [
+            u.rstrip("/")
+            for u in (fallback_urls or [])
+            if u and u.rstrip("/") != self.base_url
+        ]
 
     async def _consent_gate(self, recipient, purpose: str | None) -> dict | None:
         """Per-recipient STOP/TCPA gate (see dashboard.services.sms_consent_ledger).
@@ -138,13 +144,35 @@ class BlueBubblesClient:
             blocked = await _suspended_send_result()
             if blocked:
                 return blocked
-        url = f"{self.base_url}{path}"
         merged_params = self._params(params)
+        candidate_urls = [self.base_url] + [u for u in self.fallback_urls if u != self.base_url]
+        last_res: dict | None = None
+        for idx, base in enumerate(candidate_urls):
+            url = f"{base}{path}"
+            res = await self._single_http_request(method, url, path, merged_params, json_body)
+            # Retry on next transport URL (e.g. Tailscale -> frp) only for transport/tunnel failures
+            is_transport_err = (
+                res.get("status_code") in (0, 502, 503, 504)
+                or res.get("error") in ("unreachable", "timeout")
+                or (res.get("error") == "non_json_response" and (res.get("status_code") or 0) >= 500)
+            )
+            if res.get("success") or not is_transport_err:
+                if idx > 0 and res.get("success"):
+                    logger.warning("BB transport failover succeeded via %s (%s %s)", base, method, path)
+                    self.base_url = base
+                return res
+            last_res = res
+            if idx + 1 < len(candidate_urls):
+                logger.warning(
+                    "BB primary transport %s failed (%s), failing over to backup URL for %s %s",
+                    base, res.get("error") or res.get("status_code"), method, path,
+                )
+        return last_res or {"success": False, "error": "unreachable", "status_code": 0}
+
+    async def _single_http_request(self, method: str, url: str, path: str,
+                                   merged_params: dict, json_body: dict | None) -> dict:
+        """Execute a single HTTP request against one BlueBubbles base URL."""
         try:
-            # Headers required to bypass tunnel browser interstitial pages:
-            #   - ngrok free-tier: ngrok-skip-browser-warning
-            #   - ngrok: ngrok-skip-browser-warning header (already set above)
-            #   Both headers are safe to send together for either tunnel type.
             headers = {
                 "ngrok-skip-browser-warning": "true",
                 "User-Agent": "ShamrockLeads-Dashboard/1.0 (BlueBubbles-Client)",
@@ -157,8 +185,6 @@ class BlueBubblesClient:
                     json=json_body,
                     timeout=self.timeout,
                 )
-                # Safely parse JSON — BB can return HTML (ngrok interstitial,
-                # tunnel 502, Cloudflare challenge) which isn't valid JSON.
                 content_type = r.headers.get("content-type", "")
                 try:
                     data = r.json()
@@ -244,13 +270,88 @@ class BlueBubblesClient:
         if selected_message_guid:
             body["selectedMessageGuid"] = selected_message_guid
         res = await self._request("POST", "/api/v1/message/text", json_body=body)
-        # Auto-fallback: If private-api encounters an uninitialized chat (500 Chat does not exist),
-        # automatically fallback to apple-script which triggers native Messages creation.
-        if not res.get("success") and method == "private-api":
+        if res.get("success") or res.get("blocked") or res.get("error") == "tenant_suspended":
+            return res
+
+        # Auto-fallback 1: If private-api encounters an uninitialized chat (500 Chat does not exist)
+        # or Private API failure, retry with apple-script which triggers native Messages creation.
+        if method == "private-api":
             body["method"] = "apple-script"
             logger.info("[bb] private-api send error on %s, falling back to apple-script method", chat_guid)
-            return await self._request("POST", "/api/v1/message/text", json_body=body)
+            res = await self._request("POST", "/api/v1/message/text", json_body=body)
+            if res.get("success") or res.get("blocked") or res.get("error") == "tenant_suspended":
+                return res
+
+        # Auto-fallback 2: For universal ("any;-;") or explicit SMS ("SMS;-;") chats,
+        # escalate to explicit SMS;-; (Text Message Forwarding -> RCS/SMS) and /api/v1/chat/new
+        # when the chat does not yet exist in macOS chat.db or iMessage routing fails.
+        if chat_guid.startswith(("any;-;", "SMS;-;")) and ";-;" in chat_guid:
+            raw_addr = chat_guid.split(";-;", 1)[1]
+            digits = "".join(ch for ch in raw_addr if ch.isdigit())
+            if "@" not in raw_addr and len(digits) == 10:
+                addr = f"+1{digits}"
+            elif "@" not in raw_addr and len(digits) == 11 and digits.startswith("1"):
+                addr = f"+{digits}"
+            else:
+                addr = raw_addr
+            if chat_guid.startswith("any;-;"):
+                sms_guid = f"SMS;-;{addr}"
+                sms_body = {
+                    "chatGuid": sms_guid,
+                    "message": message,
+                    "tempGuid": f"shamrock-sms-{uuid.uuid4()}",
+                    "method": "apple-script",
+                }
+                logger.info("[bb] any;-; send failed for ...%s, falling back to %s (SMS/RCS)", addr[-4:], sms_guid[:8])
+                sms_res = await self._request("POST", "/api/v1/message/text", json_body=sms_body)
+                if sms_res.get("success"):
+                    sms_res["fallback_channel"] = "sms"
+                    return sms_res
+                if sms_res.get("blocked") or sms_res.get("error") == "tenant_suspended":
+                    return sms_res
+
+            # Final fallback: create the SMS/RCS chat directly via /api/v1/chat/new
+            logger.info("[bb] Creating new SMS/RCS chat via /api/v1/chat/new for ...%s", addr[-4:])
+            chat_res = await self.create_chat(
+                addr,
+                message=message,
+                service="SMS",
+                method="apple-script",
+                purpose=purpose,
+            )
+            if chat_res.get("success"):
+                chat_res["fallback_channel"] = "sms"
+            return chat_res
+
         return res
+
+    async def create_chat(
+        self,
+        address: str,
+        message: str | None = None,
+        service: str = "SMS",
+        method: str = "apple-script",
+        purpose: str | None = None,
+    ) -> dict:
+        """Create a 1:1 chat (e.g. brand-new SMS/RCS thread) and optionally send an initial message.
+
+        BlueBubbles Server 1.9.x often rejects ``/api/v1/message/text`` with
+        ``500 Chat does not exist`` for a phone number that has never had an
+        SMS/RCS thread in macOS ``chat.db``. ``POST /api/v1/chat/new`` with
+        ``service="SMS"`` forces Messages.app to create the Text Message
+        Forwarding (RCS/SMS) thread.
+        """
+        blocked = await self._consent_gate(address, purpose)
+        if blocked:
+            return blocked
+        body: dict = {
+            "addresses": [address],
+            "service": service,
+            "method": method,
+        }
+        if message:
+            body["message"] = message
+        return await self._request("POST", "/api/v1/chat/new", json_body=body)
 
     async def get_messages(self, after: int | None = None,
                            limit: int = 50, sort: str = "DESC") -> dict:

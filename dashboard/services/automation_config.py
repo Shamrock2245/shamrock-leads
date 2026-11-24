@@ -101,9 +101,24 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "mode": "review",               # "review" | "full_auto"
         "stale_minutes": 30,            # Consider abandoned after 30 min
+        "nudge_2_hours": 4,             # Second follow-up after 4 hours
+        "nudge_3_hours": 24,            # Final follow-up after 24 hours
         "max_per_cycle": 10,            # Rate-limit per cycle
         "interval_seconds": 3600,       # Check every hour
         "cooldown_hours": 24,           # Don't re-nudge within 24h
+        "slack_digest": True,
+    },
+
+    # ── Google Review Harvester (post-bond / post-discharge reputation loop) ──
+    "review_harvester": {
+        "enabled": True,
+        "mode": "review",               # "review" | "full_auto"
+        "min_days_after_bond": 2,       # Wait 2 days after bond posting / discharge
+        "max_days_after_bond": 30,      # Don't ask after 30 days
+        "dedup_days": 180,              # Never ask the same phone twice within 180d
+        "max_per_cycle": 10,
+        "interval_seconds": 86400,      # Daily
+        "review_url": "https://g.page/r/shamrockbailbonds/review",
         "slack_digest": True,
     },
 
@@ -227,6 +242,12 @@ DEFAULT_CONFIG = {
     "docket_monitor": {
         "enabled": True,
         "interval_seconds": 14400,       # 4 hours
+    },
+    # Scheduler may run. FEDERAL_BOND_RISK_ALERTS still defaults off, so the
+    # cycle does not call CourtListener or write staff alerts until that flag is on.
+    "federal_bond_risk": {
+        "enabled": True,
+        "interval_seconds": 21600,       # 6 hours
     },
     "court_intel": {
         "enabled": True,

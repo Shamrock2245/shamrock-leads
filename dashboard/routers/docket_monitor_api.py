@@ -36,6 +36,11 @@ async def monitoring_status():
     try:
         monitor = _get_monitor()
         stats = await monitor.get_monitoring_stats()
+        try:
+            from dashboard.services.federal_bond_risk import federal_bond_risk_health
+            stats["federal_bond_risk"] = federal_bond_risk_health()
+        except Exception as exc:
+            stats["federal_bond_risk"] = {"warning": type(exc).__name__}
         return stats
     except Exception as e:
         log.error("Status error: %s", e)
@@ -183,3 +188,32 @@ async def risk_timeline(bond_case_id):
                         "timeline": timeline, "total_risk_shift": round(cumulative, 3)}
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+@docket_monitor_bp.get("/federal-bond-risk")
+async def federal_bond_risk_status(limit: int = Query(default=50)):
+    """Staff list of Florida federal bond-risk rows, plus the flag and token warning."""
+    try:
+        from dashboard.services.federal_bond_risk import (
+            federal_bond_risk_health,
+            list_federal_bond_alerts,
+        )
+        db = get_db()
+        health = federal_bond_risk_health()
+        alerts = await list_federal_bond_alerts(db, limit=min(int(limit or 50), 100))
+        return {"success": True, "alerts": alerts, "count": len(alerts), **health}
+    except Exception as e:
+        log.error("Federal bond-risk status error: %s", type(e).__name__)
+        return JSONResponse({"success": False, "error": "status_failed"}, status_code=500)
+
+
+@docket_monitor_bp.post("/federal-bond-risk/scan")
+async def federal_bond_risk_scan():
+    """Run one scan. The feature flag and API token still gate any CourtListener call."""
+    try:
+        from dashboard.services.federal_bond_risk import run_federal_bond_risk_scan
+        db = get_db()
+        return await run_federal_bond_risk_scan(db)
+    except Exception as e:
+        log.error("Federal bond-risk scan error: %s", type(e).__name__)
+        return JSONResponse({"success": False, "error": "scan_failed"}, status_code=500)

@@ -92,6 +92,110 @@ async def _run_docket_monitor():
     result = await run_docket_scan(get_db(), limit=100)
     logger.info("[DocketMonitor] ✅ %d bonds, %d events", result.get("bonds_scanned", 0), result.get("events_found", 0))
 
+def _alert_federal_bond_risk_outage(
+    title: str,
+    message: str,
+    *,
+    level: str,
+    details: dict,
+) -> None:
+    """Send an operational Slack alert to #alerts on a failed or degraded federal scan."""
+    try:
+        from writers.slack_notifier import SlackNotifier
+
+        SlackNotifier().notify_alert(
+            title=title[:140],
+            message=message,
+            level=level,
+            details=details,
+            source="FederalBondRisk",
+            bridge=False,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[FederalBondRisk] operational Slack alert failed: %s",
+            type(exc).__name__,
+        )
+
+
+async def _run_federal_bond_risk():
+    """Florida federal bond-risk scan. No CourtListener call unless the flag and token are set.
+
+    Expected skips (flag off, no token, maintenance, no open bonds) are logged
+    and the cycle completes. A scan that reports ``success: false`` or
+    ``incomplete_coverage: true`` (partial search-source or hydration outages)
+    alerts ``#alerts`` and raises so the cron runner does not treat it as
+    healthy.
+    """
+    from dashboard.services.federal_bond_risk import run_federal_bond_risk_scan
+    from dashboard.extensions import get_db
+    try:
+        result = await run_federal_bond_risk_scan(get_db())
+    except Exception as exc:
+        _alert_federal_bond_risk_outage(
+            "Federal bond-risk scan crashed",
+            f"Scheduled federal bond-risk scan raised {type(exc).__name__}.",
+            level="error",
+            details={"error_type": type(exc).__name__},
+        )
+        raise
+    if result.get("success") is False:
+        skipped = result.get("skipped") or "failed"
+        warning = result.get("warning") or ""
+        logger.warning(
+            "[FederalBondRisk] scan failed skipped=%s warning=%s",
+            skipped,
+            warning,
+        )
+        _alert_federal_bond_risk_outage(
+            f"Federal bond-risk scan failed ({skipped})",
+            warning or f"Federal bond-risk scan stopped with status {skipped}.",
+            level="error",
+            details={"skipped": skipped, "rows_written": result.get("rows_written", 0)},
+        )
+        raise RuntimeError(f"Federal bond-risk scan failed: {skipped}")
+    if result.get("skipped"):
+        logger.info(
+            "[FederalBondRisk] skipped=%s warning=%s",
+            result.get("skipped"),
+            "yes" if result.get("warning") else "no",
+        )
+    elif result.get("incomplete_coverage"):
+        warning = result.get("warning") or "incomplete coverage"
+        logger.warning(
+            "[FederalBondRisk] incomplete scan rows=%s confirmed=%s possible=%s warning=%s",
+            result.get("rows_written", 0),
+            result.get("confirmed", 0),
+            result.get("possible", 0),
+            warning,
+        )
+        _alert_federal_bond_risk_outage(
+            "Federal bond-risk scan incomplete coverage",
+            warning,
+            level="warning",
+            details={
+                "rows_written": result.get("rows_written", 0),
+                "confirmed": result.get("confirmed", 0),
+                "possible": result.get("possible", 0),
+            },
+        )
+        raise RuntimeError(f"Federal bond-risk scan incomplete: {warning}")
+    elif result.get("warning"):
+        logger.warning(
+            "[FederalBondRisk] rows=%s confirmed=%s possible=%s warning=%s",
+            result.get("rows_written", 0),
+            result.get("confirmed", 0),
+            result.get("possible", 0),
+            result.get("warning"),
+        )
+    else:
+        logger.info(
+            "[FederalBondRisk] rows=%s confirmed=%s possible=%s",
+            result.get("rows_written", 0),
+            result.get("confirmed", 0),
+            result.get("possible", 0),
+        )
+
 async def _run_court_intel():
     from dashboard.services.court_data_ingestor import run_ingestion
     from dashboard.extensions import get_db
@@ -430,6 +534,26 @@ async def _run_intake_recovery():
             await digest_intake_recovery(result)
         except Exception as e:
             logger.debug("[IntakeRecovery] digest: %s", e)
+
+
+async def _run_review_harvester():
+    from dashboard.services.review_harvester_service import ReviewHarvesterService
+    from dashboard.services.automation_config import get_automation_config
+    from dashboard.extensions import get_db
+    from datetime import datetime, timezone
+    db = get_db()
+    cfg = (await get_automation_config(db)).get("review_harvester") or {}
+    result = await ReviewHarvesterService(db).scan_and_harvest(cfg)
+    await db["automation_run_log"].insert_one({
+        "automation": "review_harvester",
+        "run_at": datetime.now(timezone.utc),
+        "result": result,
+    })
+    if result.get("sent") or result.get("review_queued"):
+        logger.info(
+            "[ReviewHarvester] mode=%s sent=%s review_queued=%s",
+            result.get("mode"), result.get("sent", 0), result.get("review_queued", 0),
+        )
 
 
 async def _run_poa_low_stock():
@@ -887,6 +1011,8 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("outreach_queue",     "OutreachQueue",       30,  10, _run_outreach_queue),
     CronDef("alpha_engine",       "AlphaEngine",       14400, 180, _run_alpha_engine),
     CronDef("docket_monitor",     "DocketMonitor",     14400, 120, _run_docket_monitor),
+    # Flag FEDERAL_BOND_RISK_ALERTS defaults off, so this cycle does not call CourtListener.
+    CronDef("federal_bond_risk",  "FederalBondRisk",   21600, 180, _run_federal_bond_risk),
     CronDef("court_intel",        "CourtIntel",        21600,  60, _run_court_intel),
     CronDef("nlp_enrichment",     "NLP-Enrich",         7200,  90, _run_nlp_enrichment),
     CronDef("bb_health",          "BB-Health",           600,  30, _run_bb_health),
@@ -906,6 +1032,7 @@ CRON_REGISTRY: List[CronDef] = [
     CronDef("speed_to_contact",   "SpeedToContact",     1800,  90, _run_speed_to_contact, default_enabled=True),
     CronDef("paperwork_chase",    "PaperworkChase",     3600, 150, _run_paperwork_chase, default_enabled=True),
     CronDef("intake_recovery",    "IntakeRecovery",     3600, 200, _run_intake_recovery, default_enabled=True),
+    CronDef("review_harvester",    "ReviewHarvester",   86400, 360, _run_review_harvester, default_enabled=True),
     CronDef("intake_fanout_retry", "IntakeFanout",       300,  75, _run_intake_fanout_retry, default_enabled=True),
     CronDef("lead_fanout_retry",  "LeadFanout",          300,  90, _run_lead_fanout_retry, default_enabled=True),
     CronDef("poa_low_stock",      "POALowStock",       21600, 240, _run_poa_low_stock, default_enabled=True),
@@ -963,6 +1090,32 @@ async def _ensure_all_indexes():
         await _idx("defendants", [("total_arrests", -1)], name="idx_total_arrests", background=True)
         await _idx("defendants", [("active", 1)], name="idx_active", background=True)
         await _idx("arrests", [("defendant_id", 1)], name="idx_defendant_id", background=True, sparse=True)
+        # Federal bond-risk alerts claim on (source, source_id). Other docket
+        # events are outside the partial filter, so their source_ids can repeat.
+        await _idx(
+            "docket_events",
+            [("source", 1), ("source_id", 1)],
+            unique=True,
+            name="idx_federal_bond_risk_source",
+            partialFilterExpression={"source": "courtlistener_federal_bond_risk"},
+            background=True,
+        )
+        await _idx(
+            "notifications",
+            [("type", 1), ("claim_key", 1)],
+            unique=True,
+            name="idx_federal_bond_risk_notification",
+            partialFilterExpression={"type": "federal_bond_risk"},
+            background=True,
+        )
+        await _idx(
+            "audit_events",
+            [("source", 1), ("event_id", 1)],
+            unique=True,
+            name="idx_federal_bond_risk_audit",
+            partialFilterExpression={"source": "courtlistener_federal_bond_risk"},
+            background=True,
+        )
         # Co-signer candidates. TTL deletes a contacts doc only while
         # unreviewed_expire_at is set (every candidate still unreviewed).
         # Mixed docs are trimmed by purge_unreviewed_candidates instead.
@@ -1050,6 +1203,7 @@ async def _ensure_all_indexes():
         await _idx("automation_run_log", [("run_at", 1)], name="idx_auto_run_ttl", background=True, expireAfterSeconds=2592000)
         await _idx("paperwork_chase_log", [("packet_id", 1), ("chase_type", 1)], name="idx_chase_dedup", background=True)
         await _idx("intake_recovery_log", [("intake_id", 1), ("created_at", -1)], name="idx_recovery_dedup", background=True)
+        await _idx("review_requests_log", [("phone_key", 1), ("status", 1), ("created_at", -1)], name="idx_review_req_dedup", background=True)
         # TTL
         await _idx("error_log", [("timestamp", 1)], name="idx_ttl_30d", background=True, expireAfterSeconds=2592000)
         await _idx("rearrest_alerts", [("detected_at", 1)], name="idx_rearrest_ttl_60d", background=True, expireAfterSeconds=5184000)

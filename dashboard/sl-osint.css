@@ -803,3 +803,168 @@
 }
 
 
+
+/* ── Playbooks, CLI Drawer & Fugitive Recovery Dossier ─────────────────────── */
+.osint-micro-label {
+  display: block;
+  font-size: 0.63rem;
+  font-weight: 600;
+  color: var(--osint-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 6px;
+}
+
+.osint-playbook-section {
+  margin-bottom: 12px;
+}
+
+.osint-playbook-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.osint-playbook-btn {
+  padding: 6px 10px;
+  min-height: 32px;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease;
+}
+
+.osint-playbook-btn:hover {
+  border-color: rgba(16, 185, 129, 0.65);
+  background: rgba(16, 185, 129, 0.14);
+  transform: translateY(-1px);
+}
+
+.osint-cli-drawer {
+  margin: 10px 0 12px;
+  border: 1px solid var(--osint-border);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.55);
+  padding: 8px 10px;
+}
+
+.osint-cli-drawer summary {
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--osint-info);
+  user-select: none;
+}
+
+.osint-cli-drawer-body {
+  margin-top: 10px;
+}
+
+.osint-cli-preview {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #060b14;
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  color: #7dd3fc;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.osint-dossier-card {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08), rgba(56, 189, 248, 0.06));
+  border: 1px solid rgba(16, 185, 129, 0.28);
+}
+
+.osint-dossier-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #34d399;
+  letter-spacing: 0.3px;
+  margin-bottom: 10px;
+}
+
+.osint-dossier-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.osint-dossier-col {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.dossier-col-head {
+  font-size: 0.66rem;
+  font-weight: 700;
+  color: #cbd5e1;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.dossier-chip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.12);
+  font-size: 0.71rem;
+  color: #e2e8f0;
+}
+
+.dossier-chip-row:last-child {
+  border-bottom: none;
+}
+
+.dossier-chip-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dossier-chip-row small {
+  color: var(--osint-muted);
+}
+
+.dossier-act-btn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.12);
+  color: #7dd3fc;
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.dossier-act-btn:hover {
+  background: rgba(56, 189, 248, 0.25);
+}
+
+@media (max-width: 768px) {
+  .osint-scan-btn,
+  .osint-playbook-btn,
+  .osint-subtab-btn {
+    min-height: 44px;
+  }
+  .osint-field input,
+  .osint-field select {
+    font-size: 16px;
+  }
+}

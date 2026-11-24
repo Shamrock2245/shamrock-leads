@@ -31,6 +31,13 @@ window.SLDocketMonitor = (function () {
     motion_dismiss: "Motion to Dismiss", pretrial_hearing: "Pretrial",
     trial_scheduled: "Trial Set", case_dismissed: "Dismissed",
     acquittal: "Acquittal", attorney_event: "Attorney", discovery: "Discovery",
+    bond_conditions_set: "Bond Conditions Set",
+    bond_conditions_changed: "Bond Conditions Changed",
+    detention_hearing: "Detention Hearing",
+    failure_to_appear: "Failure to Appear",
+    warrant: "Warrant",
+    revocation_of_release: "Release Revoked",
+    modification_of_release: "Release Modified",
   };
 
   // ── State ────────────────────────────────────────────────────────────
@@ -234,6 +241,16 @@ window.SLDocketMonitor = (function () {
     }
   }
 
+  function _matchBadge(status) {
+    if (status === "confirmed") {
+      return `<span style="font-size:10px;font-weight:700;letter-spacing:.4px;color:#10b981">LINKED</span>`;
+    }
+    if (status === "possible") {
+      return `<span style="font-size:10px;font-weight:700;letter-spacing:.4px;color:#f59e0b">REVIEW</span>`;
+    }
+    return "";
+  }
+
   function _renderEventCard(e) {
     const s = SEV[e.event_severity] || SEV.info;
     const label = EVENT_LABELS[e.event_type] || e.event_type;
@@ -245,6 +262,7 @@ window.SLDocketMonitor = (function () {
         <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
           ${_severityBadge(e.event_severity)}
           <span style="font-size:13px;font-weight:700;color:var(--text-primary,#f1f5f9)">${label}</span>
+          ${_matchBadge(e.match_status)}
           ${_riskBadge(e.risk_adjustment)}
         </div>
         <span style="font-size:11px;color:#64748b;white-space:nowrap">${_timeAgo(e.detected_at)}</span>

@@ -3,6 +3,308 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-23 (Federal bond-risk contiguous names, capped slice checkpoints, and query stems)
+
+### Fixed
+- **Filing text matching requires one contiguous ordered name.** `"John Doe; Jane Smith"` no longer matches `"John Smith"` across unrelated parties, preventing cross-party auto-links and keeping unnamed actor-sensitive filings as `possible`.
+- **Checkpointed search slices stay pinned until every new match in the slice is stored.** When `MAX_ROWS` caps a run or hydration pages through a slice, neither the search checkpoint nor the seed cursor advances past unwritten rows.
+- **CourtListener search expands classifier stems and fails cron on auth/rate-limit outages.** `BOND_RISK_QUERY` includes `bond revocation`, `revocation of pretrial release`, and `modify`/`modifying`/`modified` release phrases; `unauthorized` and `rate_limited` stops report `success: false` so cron escalates them.
+- **Withdrawn rows retry missed CRM notifications and corrected entries withdraw stale links.** `retry_pending_notifications` runs only after bond-status and court-evidence reconciliation (preventing stale pre-downgrade notifications from replaying) and retries unwritten notifications across all statuses including `withdrawn`; `DocketView.seen_filing_ids` tracks every hydrated entry and RECAP document so corrected filings withdraw stale auto-links; search checkpoints stay held whenever any docket hydration fails.
+- **Partial search-source outages escalate instead of passing silently.** When one or two of `r`/`rd`/`d` fail, `run_federal_bond_risk_scan` surfaces the failed sources in `warning`, sets `incomplete_coverage: true`, holds search/hydration checkpoints so no slice is skipped, and `_run_federal_bond_risk` in `dashboard/cron.py` raises on incomplete scans.
+- **Match-change audits record numeric confidence.** `_audit_payload` and `_match_state` compute `_match_confidence` (`1.0` dual-confirmed, `0.95` single-confirmed, `0.5` possible, `0.25` ambiguous possible, `0.0` withdrawn) across initial matches, upgrades, downgrades, restorations, and withdrawals.
+- **Active bond status is revalidated before storing or notifying any match.** `run_federal_bond_risk_scan` and `_store_decision` re-check `active_bonds` after search/hydration and immediately prior to persistence and alert retries, preventing a bond closed mid-scan from producing a stale auto-link, CRM notification, or Slack alert.
+- **Actor-sensitive filings require clause-level defendant attribution, notifications check current revision before inserting, and same-status evidence changes are persisted and audited.** `_actor_event_parties` only confirms `failure_to_appear`/`warrant`/`revocation_of_release`/`modification_of_release` when the actor-sensitive phrase itself identifies the defendant (keeping multi-clause counsel/government filings as `possible`), `_ensure_notification` atomically claims/verifies `(match_status, notification_revision)` on `docket_events` before inserting into `notifications` (rolling back if the revision advanced mid-flight), and `_store_decision` updates and audits `match_evidence_updated` whenever confirmations or confidence change under the same `match_status`.
+- **Recent-filing scans use only RECAP search types and durably persist capped or partial slices.** `FEDERAL_SEARCH_TYPES` restricts filing scans to `("r", "rd")` (removing docket-only `type=d` that lacks `entry_date_filed` metadata), and `run_federal_bond_risk_scan` persists unhydrated, failed-hydration, or `MAX_ROWS`-capped seeds into `federal_bond_risk_state` (`pending_slice`) so subsequent scans drain the exact snapshot before advancing or re-running live search cursors.
+- **Judge-initial normalization stays restricted to federal `cr`/`mj` docket numbers and failed scheduled scans alert `#alerts`.** `canonical_identifier` preserves trailing alphabetic suffixes on agency identifiers such as `AG-445566-FL` vs `AG-445566-JES`, and `_run_federal_bond_risk` posts an operational Slack alert via `SlackNotifier.notify_alert` before raising on failed, incomplete, or crashed scans.
+- **Partial entry-hydration outages preserve existing links and upgrades/restores clear stale downgrade and Slack-claim state.** `run_federal_bond_risk_scan` skips `_withdraw_stale_confirmations` for any docket in `failed_seed_ids`, `_store_decision` clears prior `downgrade_*`/`prior_*` fields and resets `slack_claim`/`slack_claim_at` on upgrade and restore, `_stored_notification` ignores stale downgrade markers when `match_status == "confirmed"`, and `_claim_slack_delivery` releases its claim if the row transitioned mid-claim.
+- **Withdrawals bind to monotonic `match_revision` and recheck live bond status.** Every match/evidence transition increments `match_revision` with a compare-and-set filter across `_id`, `match_status`, `notification_revision`, and `match_revision` so stale snapshots cannot withdraw refreshed `confirmed` rows, and `_unlink_inactive_bond_ids` re-verifies live `active_bonds` state immediately before withdrawing so mid-scan reinstatements or transient lookup errors never trigger false unlinks.
+- **Candidate-identity refreshes on `possible` rows and removed in-window filings are tracked and reconciled.** `_match_state` includes `candidate_bond_case_id`, `candidate_defendant_id`, and `defendant_name` so candidate relinks on `possible` matches update, re-notify staff, and audit; `DocketView` records `entries_complete`/`entry_window_start` and stored alerts retain `filing_date` so filings deleted or sealed within the active lookback window are withdrawn (`filing_removed_from_docket`) without touching older out-of-window rows.
+- **Enabling `SAAS_MULTI_TENANT` preserves existing Shamrock keys while isolating additional tenants.** `_tenant_scope_token()` keeps Shamrock (tenant #1) unprefixed so pre-tenancy backfilled `source_id`, `claim_key`, and state cursor documents remain continuous across the feature-flag transition without triggering duplicate alerts or re-scans, and `_notification_claim_key` avoids double-prefixing scoped `source_id` keys for additional tenants.
+- **CourtListener scans pace requests and enforce durable rolling quotas.** `run_federal_bond_risk_scan` defaults to `DEFAULT_PAUSE_S = 12.0` (`<= 5 req/min`), serializes overlapping scans with a tenant-scoped `scan_lease`, and reserves/reconciles rolling requests atomically via `quota_revision` compare-and-set in `federal_bond_risk_state` (`request_quota`) against `25/run`, `50/hr`, and `125/day` limits (deferring remaining seeds cleanly to `pending_slice` or skipping with `quota_exhausted` before hitting CourtListener).
+- **Docket party identity matching restricts confirmation to defendant-role parties.** `_hydrate` and `match_client` exclude explicit non-defendant CourtListener roles (`Witness`, `Victim`, `Attorney`, `Plaintiff`, `Surety`) for the docket while keeping missing or ambiguous `party_types` roles as `possible` for staff review.
+- **CourtListener request quotas and scan leases share one API-account bucket across tenants and reserve retry attempts before sending.** `_request_quota_id`, `_scan_lease_id`, and `_shared_quota_collection` key durable rate-limit coordination by hashed API credential rather than tenant slug so multiple tenants sharing `COURTLISTENER_API_TOKEN` never bypass shared limits or overlap scans, `CourtListenerClient._request_with_retry` consults its per-attempt `request_gate` prior to each initial or retry attempt on 429, 5xx, `ConnectError`, and `ReadTimeout`, and `_RequestQuota.mark_dispatched` updates reserved slot timestamps to actual HTTP dispatch time after pacing or retry backoff sleeps.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers contiguous ordered name matching, clause-scoped actor attribution, `MAX_ROWS` and `HYDRATE_CEILING` durable `pending_slice` snapshot draining (even when newer live search hits arrive), `("r", "rd")`-only filing searches, tenant-unique `pending_slice` state keys, single-tenant to `SAAS_MULTI_TENANT` key continuity for Shamrock plus isolation for secondary tenants, CourtListener inter-request pacing (`12s` default / `5 req/min`), per-run request budget `pending_slice` draining, atomic CAS `request_quota` reservation/reconciliation, shared per-API-account quota and scan-lease serialization across tenants under `SAAS_MULTI_TENANT`, pre-attempt retry quota reservation across 429/`ReadTimeout`/`503` responses, dispatch-time quota timestamp updates after rolling-window pacing and `Retry-After` sleeps, durable rolling `50/hr` and `125/day` quota deferral, defendant-role party filtering vs non-defendant exclusion and missing/ambiguous `possible` fallback, federal-docket-only judge-suffix normalization, partial hydration and partial search-source outage escalation + checkpoint holds, preserving existing links during partial entry-hydration outages, numeric `confidence` on match audits across all state transitions (including `match_evidence_updated`), candidate-identity refresh notifications/audits on `possible` matches, withdrawal of deleted/sealed in-window filings while preserving out-of-window rows, monotonic `match_revision` CAS rejection of stale withdrawals after evidence updates, live `active_bonds` reinstatement/error rechecks inside `_unlink_inactive_bond_ids`, revision-gated notification inserts/rollbacks, confirmed retry copy after restore/upgrade, immediate Slack claim release across match upgrades, live bond-closure revalidation across mid-scan and persistence-loop race windows, stem query coverage, cron `#alerts` outage notifications and exceptions for `unauthorized`, `rate_limited`, incomplete coverage, and crashes, reconciled-first notification retries, and stale-link withdrawal after entry correction.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk search phrases and docket numbers)
+
+### Fixed
+- **The CourtListener query includes every phrase the classifier matches.** "Bond increased", "bond reduced", "bond set", and "bond revocation" are searched, because the query is built from the same rules that classify a filing.
+- **Every trailing judge-initial block is removed from a docket number.** `2:24-cr-00123-JES-NPM` is the same case as `2:24-cr-00123`.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the classified examples against the search query, and a docket number with two judge-initial suffixes.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk cron failure, unnamed actor, search cursor)
+
+### Fixed
+- **A failed federal scan is not a completed cron cycle.** `search_failed`, a missing index, and a hydration outage raise. Flag off, no token, and maintenance still log and return.
+- **An FTA or warrant that names nobody stays possible.** On a one-defendant docket, "Counsel for the government failed to appear" is not auto-linked. A filing that names the defendant, and a case event such as a detention hearing, can still confirm.
+- **Hits that share the cutoff date are not skipped.** When the 1,000-hit page stops on one date, the next scan resumes from CourtListener's search cursor.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a failed scan versus flag-off, an unnamed failure to appear, and two hits on the same cutoff date.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk audit pull and entry window)
+
+### Fixed
+- **Clearing one pending audit does not erase a newer one.** The completed `event_id` is removed with `$pull`. The match update does not replace `audit_pending` or `match_history`.
+- **Docket entries are read through the 45-day lookback.** Paging stops when a filing is older than that window. If the safety ceiling is hit while newer filings may remain, that docket is not alerted.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a stale audit clear that leaves the newer payload, and a warrant past the second entry page.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk search ceiling and audit claim)
+
+### Fixed
+- **A search that hits the 1,000-hit ceiling continues on the next scan.** The oldest filing date becomes the next upper bound, so older warrant and release hits are not left behind the newest 50 pages. If that date cannot move, the scan fails instead of looking complete.
+- **A truncated party list does not match.** A truncated entry list is named in the warning, and the entries already read are still used.
+- **An audit event is claimed once.** The unique key is `(source, event_id)`, written with one upsert, so two scans cannot insert the same immutable audit.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the older search window, a ceiling that cannot move, a truncated party list, a truncated entry list, and two audit inserts that share one `event_id`.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk restore, DOB conflict, Slack claim)
+
+### Fixed
+- **A reinstated bond restores its withdrawn alert.** When the filing matches again, the stored row returns to the current confirmed or possible state, with the bond attachment, an audit row, and a Slack post of that restored state.
+- **Conflicting held dates of birth cannot confirm through a case number.** The row stays `possible` for staff review.
+- **Slack posts the row version the claim acquired.** The claim names the match status and revision. The post uses the document read after that claim, so a downgrade that lands first is not announced as still linked.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a withdrawn row restored after reinstatement, a date-of-birth conflict with a matching case number, and a Slack post that uses the claimed document.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk party DOB, audit merge, claim revision)
+
+### Fixed
+- **A party's date of birth is read from its docket-specific party type.** The party request asks for `party_types`. `extra_info` on another docket, and the legacy flat party field, do not confirm the client.
+- **A later match transition keeps audits that are still unwritten.** The new row merges the previous `audit_pending` list instead of replacing it.
+- **Each match transition has its own notification claim.** `possible`, then `confirmed`, then `possible` again produces three staff notifications. A repeat of the same transition still writes one.
+- **A possible match is withdrawn when its candidate bond closes.** Exonerated, forfeited, and surrendered bonds are reconciled for both confirmed and possible rows, so a Slack retry does not post the stale review.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a docket-specific party DOB, an upgrade that keeps an older pending audit, a repeated possible transition, and a possible row whose candidate bond has closed.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk open bonds, audit retry, full link scan)
+
+### Fixed
+- **Reinstated bonds stay in the federal scan.** They are open liabilities. A reinstated case is monitored, and an existing link is not withdrawn just because the status is no longer `active`.
+- **A failed match audit is retried.** If `audit_events` insert fails after the docket row is written, the audit payload stays on that row. The next scan writes it.
+- **Every stored auto-link is read in `_id` order.** Reconciliation no longer stops at an unsorted 500-row page, so an older confirmed row for a closed bond is still withdrawn and is not posted as current.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a reinstated bond, an audit insert that fails once, and a closed-bond link past the old 500-row read.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk audit, entry failures, subjectless filings)
+
+### Fixed
+- **Match upgrades, downgrades, and withdrawals write an append-only audit event.** The actor is `system`. The record has the before and after state, the reason, and the filing evidence. `match_history` on the row is not the only copy.
+- **A docket-entry outage is not an empty success.** If every docket's entry list fails, the scan returns `success: false` and `skipped: entry_hydration_failed`. A partial failure names those dockets. A failed docket brief is named in the warning.
+- **A filing that names nobody is not confirmed on a multi-defendant docket.** It stays `possible`. A filing that names the client can still confirm.
+- **Two bonds for the same defendant are one person.** They do not make the match ambiguous. Two different defendants on one filing still do.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the audit on upgrade and downgrade, an entry-list failure, a subjectless filing beside a named one, and two bonds for one defendant.
+
+## [Unreleased] — 2026-11-23 (Federal bond-risk Slack retry and immutable id)
+
+### Fixed
+- **Slack retries wait until this scan has reconciled the link.** A failed earlier post is not repeated as "confirmed" after the same run finds the match is only possible, withdrawn, or no longer an active client. The post uses the updated wording.
+- **Updates built from a stored row do not include `_id`.** Mongo rejects an update that tries to change `_id`. Withdrawal and downgrade writes send only mutable fields.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a failed confirmed Slack post that is retried only after the link is downgraded, and the test collection rejects an update that includes `_id`.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk downgrade of stale confirmed links)
+
+### Fixed
+- **A confirmed link is replaced when later evidence no longer confirms it.** If a later scan finds conflicting court-party dates of birth, the stored row becomes `possible`, `auto_linked` is cleared, and the previous bond attachment is kept on `match_history`. A filing seen again that no longer matches at all is marked `withdrawn` the same way. Staff get a new notification for the downgrade.
+
+### Tests
+- `tests/test_federal_bond_risk.py` confirms a link, then downgrades it when the party gains a second date of birth, then withdraws it when that date no longer matches.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk surnames, tenant cursor, party outages)
+
+### Fixed
+- **Multi-part surnames match in either order.** `John De La Cruz` and `De La Cruz, John` share the surname. Particles such as de, la, del, van, and von stay on the surname.
+- **The hydration cursor is one document per tenant.** With multi-tenant mode on, the cursor id includes the tenant, so a second agency does not collide on `_id` `seed_cursor`. Alert and notification claim keys are tenant-qualified the same way while that mode is on.
+- **A party-list outage is not an empty success.** If every docket's party request fails, the scan returns `success: false` and `skipped: party_hydration_failed`. A partial outage stays successful and names the dockets that failed.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a particle surname, two tenant cursors, a total party-list failure, and one docket whose party list fails beside a docket that still alerts.
+
+## [Unreleased] — 2026-11-22 (Main CI: review log collection and distinct test DLs)
+
+### Fixed
+- **`review_requests_log` is a known tenant-owned collection.** The review harvester from main opened that collection without registering it.
+- **The full write-bond golden uses a different driver license for each party.** The paperwork preflight blocks an indemnitor license that matches the defendant. The synthetic packet now keeps those licenses distinct.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk co-defendant, party DOB, notification claim)
+
+### Fixed
+- **Co-defendant captions are hydrated before a name filter.** "United States v. Lead Defendant et al." is no longer dropped because the caption surname is not one of ours. Parties are loaded first, then the client is matched.
+- **A matched party with more than one date of birth is not auto-confirmed.** One overlapping date, even with a case number, stays `possible` for staff review.
+- **CRM notifications are claimed with one upsert.** A unique `(type, claim_key)` index stops overlapping scans from inserting two Notification Center rows for the same alert and status.
+- **Failed Slack posts count toward the ten-post cap.** Both the pending-retry loop and the new-alert loop count a claimed attempt, whether Slack accepts it or not.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers an et al. caption, conflicting party dates of birth, one notification under a duplicate key, and a failed Slack attempt that blocks the next post in the same run.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk name boundary, hydration, notification, index)
+
+### Fixed
+- **An "as to" capture stops at the party name.** "ORDER as to John Smith denying Motion to Modify Conditions of Release" keeps John Smith. A capture that is not an exact docket party falls back to the known party named in that text.
+- **Hydration continues past the first 500 seeds.** The scan hydrates the seeds returned by the bounded search, up to a 3,000 ceiling. When seeds remain, the result is marked truncated and the next scan starts at the next docket instead of repeating the same batch.
+- **A CRM notification is retried after a partial write.** If the notification insert fails after the docket event is claimed, a later scan writes that notification without a second event.
+- **The scan stops when the unique alert index cannot be created or seen.** It does not continue and report a normal empty run.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers the order-title capture, a second scan hydrating the docket left past the ceiling, a notification insert that fails once, and an index that cannot be created.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk identity paging and search failures)
+
+### Fixed
+- **Every related arrest and defendant row is loaded before matching.** The identity query no longer stops at four rows per defendant or lets one prolific defendant consume a shared page. An arrest that was left off that page can no longer hide a conflicting date of birth and allow an auto-link.
+- **A CourtListener search that fails on every source is a failed scan.** HTTP 403, 5xx, and malformed JSON now return `success: false` with a warning. An empty successful search is unchanged.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a conflicting arrest past the old four-row cap, a scan where every search source fails, and a scan where one source fails and another still returns a filing.
+
+## [Unreleased] — 2026-11-22 (Federal bond-risk remaining review findings)
+
+### Fixed
+- **Conflicting dates of birth are not a confirmation.** If the bond, defendant, and arrest records do not agree on a date of birth, matching one of those dates to the docket no longer auto-links the client.
+- **A top-level RECAP document (`type=rd`) is classified.** The search hit itself is a filing, not only the nested `recap_documents` on a docket hit.
+- **Docket parties are paged.** `/parties/` follows `next` until the cursor ends, with a ceiling of 50 pages.
+- **An abandoned Slack claim expires after 30 minutes.** A process that dies after claiming a post does not leave `slack_claim` true forever. Pending undelivered rows are still retried on their own, and the claim is taken before that retry. New alerts are still inserted with one upsert on the unique `(source, source_id)` index.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a conflicting client date of birth, a top-level RECAP hit, a second party page, and a stale Slack claim.
+
+## [Unreleased] — 2026-11-21 (Federal bond-risk party, window, and Slack claim)
+
+### Fixed
+- **A filing is tied to the party it names.** Text such as "warrant issued as to Jane Roe" is not auto-linked to another defendant on the same docket who matched separately.
+- **Every active bond is considered.** Active, monitoring, and alert bonds are read in `_id` order, one page after another, instead of stopping at the first 200.
+- **Search walks the whole 45-day filing window.** Pages continue until the cursor ends or a page is entirely older than the window. Fifty pages is only a safety ceiling.
+- **Slack delivery is claimed before a retry.** Overlapping scheduled and manual scans cannot both post the same undelivered alert. Pending `slack_delivered: false` rows are retried on their own, even when that filing is no longer in the search window.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers a named-party filing, bond paging past 200, search pages through the window, and a Slack retry that is claimed once outside the search results.
+
+## [Unreleased] — 2026-11-21 (Federal bond-risk filing identity)
+
+### Fixed
+- **New filings on older federal cases are kept.** The scan filters RECAP hits on `entry_date_filed`, the docket-entry date, and no longer drops a docket because `dateFiled` (the day the case was opened) is outside the window. Search asks CourtListener for `entry_date_filed_after`, not the case-initiation `filed_after`. Docket entries are still kept or dropped by their own `date_filed`.
+- **A RECAP document and its docket entry are one filing.** The document's docket-entry id, or the entry's nested document id, is the canonical filing id. The same risk phrase no longer creates two CRM rows or two Slack posts.
+- **Each alert is claimed with one upsert.** A unique partial index on `(source, source_id)` for `courtlistener_federal_bond_risk` makes a concurrent cron run and manual scan insert one row. The loser does not add a second notification. Slack delivery is still recorded separately: `alert_complete` stays false until Slack accepts the post, and a later cycle retries that post without another CRM row. A full Slack batch no longer skips those retries.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers an old case with a new entry, one alert for a document and its entry, the atomic claim, and a Slack retry after the per-cycle cap.
+
+## [Unreleased] — 2026-11-20 (Federal bond-risk review fixes)
+
+### Fixed
+- **A date of birth confirms only the party it belongs to.** On a multi-defendant Florida federal docket, another defendant's date of birth no longer auto-links a name match. That row stays `possible` unless the matching party's own date of birth, or a case or agency number already on file, confirms it. The matching party's own conflicting date of birth still drops the row.
+- **Recent filings are read inside a bounded window.** Search walks at most three pages of RECAP and docket results filed inside the last 45 days, ordered by filing date, and docket entries walk at most two pages. 429 responses still back off, detail calls still select fields, and a further `next` URL is not requested.
+- **Each filing alerts on its own.** The dedupe key includes the docket entry id or RECAP document id, so two detention hearings on one docket each produce a staff row. The same filing does not alert twice.
+- **Slack delivery is part of completion.** The CRM row is written once with `slack_delivered` false. The alert stays incomplete until `SlackNotifier.notify_alert` returns success. A later cycle retries Slack only and does not insert another notification.
+
+### Tests
+- `tests/test_federal_bond_risk.py` covers party-linked dates of birth, bounded search and entry pages, distinct filings, and a Slack retry without a second CRM row.
+
+## [Unreleased] — 2026-11-19 (Florida federal bond-risk staff alerts)
+
+### Added
+- **Staff alert when an active client has a Florida federal criminal case with a bond-risk event.** `dashboard/services/federal_bond_risk.py` reuses the CourtListener v4 client for FLMD, FLSD, and FLND dockets, docket entries, and RECAP. Events are bond conditions set or changed, a detention hearing, failure to appear, a warrant, or revocation or modification of release.
+- **Matching fails closed.** A row is confirmed and auto-linked only when the full name matches and the docket's date of birth matches a date we hold, or a case or agency number we already hold matches the docket. Full name alone is `possible` for staff review and is not auto-linked. A conflicting date of birth, a surname-only caption, or two confirmed clients on the same event is not auto-linked.
+- **`FEDERAL_BOND_RISK_ALERTS` is off by default.** While it is off, the scan does not call CourtListener and does not write alerts. With the flag on and `COURTLISTENER_API_TOKEN` unset, the scan skips and `GET /api/docket-monitor/federal-bond-risk` (and the docket-monitor status payload) reports that anonymous v4 search and docket calls are rejected. Calls use field selection, back off on HTTP 429, and do not follow a second page.
+- **Staff see the alert in the CRM notification center** (`type: federal_bond_risk`), on the docket monitor feed (LINKED or REVIEW), and on Slack `#alerts` through `SlackNotifier.notify_alert`. Nothing is texted, emailed, or iMessaged.
+
+### Tests
+- `tests/test_federal_bond_risk.py` (on the CI list).
+
+## [Unreleased] — 2026-11-21 (Surety confirm: send-state CAS, atomic audit; SSRF redirect tests)
+
+### Fixed
+- **A surety confirmation can no longer change a packet that was sent or voided mid-request.** The compare-and-set in `packet_surety_confirm.confirm_packet_surety` now matches on the packet still being editable as well as the previous `surety_id`. The filter requires `voided` not true, no `docuseal_submission_id`, no `docuseal_status`, and a `status` outside sent, delivered, pending_signature, partially_signed, signed, completed, voided, cancelled/canceled, signnow_pending and filed. The read-time check uses the same set. When a DocuSeal send or a void lands between the read and the write, the update matches nothing, the packet is re-read, and the answer is 409 `surety_locked`. A surety race still answers 409 `surety_conflict`. The packet is not changed in either case.
+- **A surety change is never written without its audit.** The same `update_one` that sets `surety_id` / `template` now `$push`es the `packet_surety_confirmed` entry (Event_ID, previous and new surety, actor, source, timestamp) onto the packet's `surety_audit` array, so the change and its audit are one atomic single-document write on any MongoDB. When the client supports transactions (replica set / Atlas, checked with `payment_plans._supports_transactions`), the packet update and the `audit_events` row run in one `with_transaction`; if either fails, nothing is saved and the caller gets 503 `surety_confirm_failed`. Without transactions, `audit_events` gets a copy with the same `Event_ID`, and a failed copy is logged. The packet's embedded entry still records the change. The old behavior of succeeding with a warning and no audit is gone. A failed packet update answers 503 `surety_confirm_failed` with nothing written. No new collections, indexes or schema migrations; walk-in auto-OSI (no-op confirm) is unchanged.
+
+### Tests
+- `tests/test_packet_surety_confirm.py`: a send, submission, DocuSeal status, sign, completion, delivery, cancel or void that lands between the read and the update answers 409 `surety_locked` and leaves the packet and `audit_events` untouched (agent and walk-in packets); the CAS filter carries the send state; the surety and its audit entry go in one update and share the `audit_events` Event_ID; without transactions, a failed `audit_events` copy still leaves the embedded audit; a failed packet update is 503 with nothing written; with a (fake) transaction client, both writes use the session and commit together, an audit failure rolls back the surety (503), and a send race aborts with 409. `tests/bb_fake_mongo.py` supports `$push` and ignores `session=`.
+- `tests/test_agent_packet.py`: a redirect to `127.0.0.1`, `169.254.169.254`, `[::ffff:127.0.0.1]`, `[::1]`, decimal or hex IPv4, a host with mixed public and private answers, or a host whose pin lookup answers private is refused without a request to it; IPv6 addresses are pinned with the original `Host` and SNI.
+
+## [Unreleased] — 2026-11-20 (Write Bond DocuSeal prefill)
+
+### Fixed
+- **The second power is no longer dropped.** `prefill_values_from_bond` builds `all_poa_numbers`, `bond_numbers`, and `poa_numbers` from `poa_numbers`, then a printed charge-row POA that is already one of those case powers, then `poa_number`. Duplicates are removed and the first spelling is kept. A singular `poa_number` no longer replaces the rest of the list. `resolve_case_context` copies the bonded case's `poa_numbers` or `POA_Numbers` onto the packet before that filter runs. An empty `poa_numbers` list does not hide `POA_Numbers`. A singular `poa_number` that is not in that list blocks the packet instead of being merged into the printed powers. Charge POAs come from the same source the form prints. A later stale list is not read, and a request charge row cannot add a power that is not already on the case, including the per-charge `poa_number_N` fields.
+- **The printed defendant name is Last, First, with no middle name.** `defendant_name` and `DefName` use structured first and last when both were stored on the defendant or arrest, not when `resolve_case_context` only split the raw name. A comma-form roster name and a space-delimited first name with only single-letter initials are printed as Last, First. An all-caps roster name is title-cased. A mixed-case name is left as written. Hyphens and apostrophes stay intact. McDonald stays McDonald. A surname that only begins with Mac, such as Macias, is capitalized normally. A leading `TEST-` marker stays uppercase. A longer space-delimited name is not split, so a compound surname is not cut down to its last word. A two-token name is still Last, First when the first token is also a common given name. A trailing Jr/Sr/II/III/IV/V is not the last name, including on `DefLastName` and `DefMiddleName`. A stored last name is kept when the first name is missing, even if the raw full name is stale. A raw compound surname does not fill `DefFirstName`, `DefMiddleName`, or `DefLastName`. When the bonded case has a power list and no singular power, that list supplies the singular power instead of an intake or packet value.
+- **Court type no longer repeats the word Court.** A trailing `Court` is removed, so `Circuit Court` prints as `Circuit` on a form that already says Court. `Circuit` is unchanged.
+- **Printed bond dates use America/New_York.** `today_date` and the long date follow the office calendar, the same way Schedule A does. A time after midnight UTC still shows the previous local day. The packet-builder preview uses the same clock.
+- **A DocuSeal packet create sets `send_sms` false.** `create_submission_for_packet` sets `send_sms` false on the submission body and on each submitter, next to `send_email` false. This path does not text a signer.
+
+### Tests
+- `tests/test_docuseal_prefill_defects.py`.
+
+## [Unreleased] — 2026-11-19 (Chat-agent packet staging hardening)
+
+### Fixed
+- **`/api/agent/stage-packet` no longer writes the `arrests` collection.** The endpoint inserted an arrests row (including `Booking_Number`, bond, and charges) from chat-agent input, deduped on booking number alone. Packet context treats an arrests row as scraper-recorded bond and charges, so agent-supplied facts could hydrate as source data. Arrest records now come only from source scrapers; the staged intake and packet still carry the defendant fields for staff to verify in Super CRM. Packet context already resolves from the packet and intake.
+- **Booking-URL fetches from the agent endpoints refuse non-public hosts and connect only to the address that was checked.** `/api/agent/stage-packet` and `/api/agent/parse-booking-url` resolve the host and require every address to be globally routable. That closes decimal, hex, and short IPv4 (`2130706433`, `0x7f000001`, `127.1`), wildcard DNS (`169.254.169.254.nip.io`), CGNAT, and URLs carrying credentials. `ingest_url(..., public_only=True)` sends the generic and PBSO fetches through `PinnedPublicTransport` (new `dashboard/services/public_url_guard.py`). For each request, redirect hops included, the transport resolves the host once, requires every address to be public, and connects to that checked IP. The `Host` header and TLS SNI keep the original name, and so does the certificate hostname check when `verify` is on. A DNS answer that changes after the check (rebinding) cannot move the connection to an internal address, because the connection never looks the name up again. The pinned clients ignore environment proxies (`trust_env=False`), because a proxy would resolve the name itself. TLS verification stays as it was in this module (`verify=False`). Other `ingest_url` callers are unchanged (`public_only` defaults to `False`).
+- **Bearer machine keys reach the agent-packet routes.** The PIN middleware answered 401 to `Authorization: Bearer <machine key>` before the router could accept it, so Custom GPT Actions could not call the endpoints. `PinAuthMiddleware` now lets Bearer through only on `/api/agent/stage-packet`, `/api/agent/issue-packet`, and `/api/agent/parse-booking-url` (exact paths). The token is compared in constant time against the same keys the router accepts (`GAS_API_KEY`, `LEADS_INTERNAL_TOKEN`, `INTERNAL_API_TOKEN`), and the shared helper is `pin_middleware.machine_key_name`. A missing, empty, or wrong token, or no configured key, still gets 401. Bearer on any other route still gets 401. `X-API-Key` / `X-Internal-Token` behavior is unchanged.
+- **Stage-packet accepts only configured sureties and never defaults to OSI.** `surety` goes through `surety_registry.optional_surety`: case-insensitive and normalized to the canonical id (`osi`, `palmetto`, or a surety with a published template). An unknown or inactive value answers 422 `surety_unsupported` before any fetch or write. A missing surety (owner-approved change, Brendan, 2026-11-20) is staged unset (`surety_id` and `template` are `null`), and the response carries `surety_confirmed: false` and a `surety_unconfirmed` warning. So the Super CRM readiness chain keeps "Surety Confirmed" red, and DocuSeal paths that call `require_surety` fail closed until staff confirm one. `POST /api/paperwork/{packet_id}/docuseal` answers 422 `surety_required` for a chat-agent packet (`staged_by_agent`) with no surety, instead of falling back to OSI. The paperwork list labels those packets "Surety?" instead of OSI. The walk-in auto-OSI path and other packets are unchanged.
+- **Staff confirm the surety from the Super CRM packet screen.** When the resolved case has no surety (a chat-agent packet), the screen's OSI/Palmetto picker gets a blank "— Confirm surety —" option, selected by default. It stays usable while the other authoritative fields are locked, and Send stays disabled because the readiness rail's "Surety Confirmed" step is red. Picking a surety calls the new `POST /api/paperwork/packets/{packet_id}/confirm-surety` (`dashboard/services/packet_surety_confirm.py`). The value goes through `surety_registry.optional_surety` and is stored as the canonical id. A missing value gets 422 `surety_required`, and an unknown or inactive one gets 422 `surety_unsupported`. On success the packet gets `surety_id` and `template`, plus `surety_confirmed_by` / `_at` / `_source`, and `audit_events` gets an append-only `packet_surety_confirmed` row with the previous value. After that, Send uses the confirmed surety. Confirming the surety a packet already has writes nothing. Packets that already have a surety, including walk-in auto-OSI, are preselected and locked exactly as before, with no extra click.
+  - Changing to a different surety is allowed only while the packet is unsent, and is audited with the previous value. It answers 409 `surety_locked` once the packet has a DocuSeal submission or is sent, signed, completed, or voided. It answers 409 `surety_poa_mismatch` when the assigned POA belongs to the other surety. The update is compare-and-set on the stored value, so two people confirming at once get 409 `surety_conflict` instead of a lost update.
+  - For chat-agent packets, `POST /api/paperwork/{packet_id}/docuseal` and `POST /api/paperwork/packet/finalize` run the same confirm (persisted and audited) when the request carries a `surety_id`. With none picked and none stored, they answer 422 `surety_required`. Other packets keep their existing push and finalize behavior.
+- **Stage-packet idempotency.** An optional `Idempotency-Key` header or `idempotency_key` body field can be sent. If both are sent, they must match. The key is scoped by caller: the machine key's env name (never its value), or the staff session's tenant and email. It is stored as a SHA-256 hash on the intake (`agent_idempotency_key`, plus a payload fingerprint) and on the packet. The claim is one `find_one_and_update($setOnInsert, upsert=True)` on `intake_queue`, created with `idempotency_state: "pending"`, a claim token (`idempotency_attempt`), and `idempotency_claimed_at`. Only the request that inserted the intake writes the packet. The packet is upserted on its `packet_id` after an existence check, so a write that landed before an error is not duplicated. The claim becomes `complete` only after that write. If the write raises, the claim is marked `failed` (`idempotency_error: "packet_write_failed"`, `idempotency_failed_at`), and the caller gets 503 `packet_write_failed` (retryable, `Retry-After`) with no packet id. Nothing is deleted.
+  - Replays with the same key and payload: `complete` with an existing packet returns the original `intake_id` / `packet_id` (`idempotent_replay: true`), with no fetch, no OCR, and no write. `complete` without its packet, `failed`, or `pending` older than 120 s is retaken atomically: `find_one_and_update` conditioned on the same intake, fingerprint, state, and claim token. The packet is then rewritten from the stored intake, reusing the same ids (`idempotency_recovered: true`). A fresh `pending` claim, or a retake another request won first, answers 409 `idempotency_in_progress` with `Retry-After`. The same key with a different payload answers 409 `idempotency_key_conflict`.
+  - There are no new collections and no index changes. Limitation: without a unique index on `agent_idempotency_key`, two exactly simultaneous first requests can both insert an intake. That leaves two intakes and two packets for one key, the same as today's behavior with no key. Requests without a key are unchanged.
+- **Agent responses do not echo exception text.** Fetch and ID-scan failures return fixed warnings and log only the exception type.
+- **Oversized ID images are skipped.** `id_image_base64` longer than 16,000,000 characters is not decoded or scanned; the packet is still staged with a warning.
+
+### Tests
+- `tests/test_agent_packet.py` is on the CI list. New cases: numeric-IP and wildcard-DNS SSRF forms answer 400 on both endpoints without calling `ingest_url`; a redirect to `127.0.0.1` is refused under `public_only=True`; a resolver that answers public on the check and `127.0.0.1` afterwards never reaches the inner transport; the pinned request goes to the checked IP with the original `Host` and SNI (also through httpcore with a fake network backend: TCP to the pinned IP, TLS `server_hostname` = original host); each redirect hop is resolved and pinned again, and a hop to a private address is refused; `public_only` off leaves the client unpinned; staging writes no arrests row and no `Booking_Number`, and does not echo exception text; an oversized ID image is not scanned; Bearer at the middleware (correct key passes on the three agent paths; wrong, missing, empty, non-ASCII, or unconfigured key gets 401; Bearer on other routes gets 401; X-API-Key unchanged); surety normalization, the `osi` default, and 422 with no writes for unknown or inactive sureties; idempotent replay (header and body), the 409 conflict, the atomic claim when the pre-check races, caller scoping, and key validation; claim lifecycle: a failed packet write gives 503 and a `failed` claim with no phantom id, then a retry recovers with the same ids; a retry that fails again errors cleanly; a write that landed before the error is not duplicated; a fresh `pending` claim gives 409; a stale `pending` claim (naive datetime) is retaken; `complete` without a packet is retaken; a lost retake race gives 409; a retake needs a matching fingerprint; a missing surety is staged unset (context has no surety, so `require_surety` fails closed); explicit OSI and Palmetto are still confirmed; DocuSeal push refuses an agent packet with no surety. DNS is stubbed in tests. `tests/test_packet_surety_confirm.py` (on the CI list) covers confirming OSI and Palmetto (persisted plus audit), 422 for unknown, inactive, or missing surety, an unchanged walk-in OSI, a change audited while unsent, refusal once sent, signed, or voided or on a POA mismatch, 404, the compare-and-set conflict, the DocuSeal push using the confirmed surety (DocuSeal mocked), push fail-closed, the finalize hook, and the picker in `sl-paperwork.js` via a node DOM sim (`tests/js/paperwork_surety_picker_sim.js`).
+
+## [Unreleased] — 2026-11-18 (Sarasota detail-page booking number)
+
+### Added
+- **Sarasota detail pages are keyed on the Court Case Number.** Owner ruling 2026-11-20, relayed by Chief of Staff: the key is that number exactly as published on `table#data-table`, with only end whitespace removed. One record per distinct case number on the detail page. Each charge row stays its own charge. Booking numbers and intake timestamps are lists on the record when a case spans more than one booking, and they are not the key. A row with no case number is skipped. The skip log is the county, the reason, and the count. The person PIN and the Booking Number are not fallback keys. `No Bond Available` stays text. A published `$0.00` stays 0. Blank release plus a Current Inmate Population listing is the only in-custody mark, and `status_source` says so.
+- **Detail fetches are capped and paced** the same way as Hernando: 200 pages a run, 0.4 seconds before each page. The window moves one cap ahead each UTC day, so a stable list of about 1,065 people is not fetched from the same first page forever. A detail page with no desktop charge table, or without the booking columns, fails the walk instead of being skipped. `scrape()` still returns nothing. `SOURCE_CONTRACT_VALIDATED` stays false and Health stays `fail_closed`. The Mac relay, then stealth plus solver, then fail closed order is unchanged.
+
+### Tests
+- `tests/test_sarasota_detail_contract.py` on the CI list. Synthetic fixtures only. `test_detail_rows_are_keyed_on_the_court_case_number`, `test_row_without_a_case_number_is_skipped_and_logged`, `test_two_charges_on_one_case_stay_distinct`, and `test_booking_number_without_a_case_number_writes_nothing`.
+
+## [Unreleased] — 2026-11-18 (Tests cannot post to live Slack or other send services)
+
+### Fixed
+- **Pytest no longer inherits live send credentials.** `tests/conftest.py` unsets Slack webhooks (`SLACK_WEBHOOK_*`, including `SLACK_WEBHOOK_LEADS` and `SLACK_WEBHOOK_URL`, plus `SLACK_BOT_TOKEN`), BlueBubbles (`BLUEBUBBLES_*` and the `BB_PASSWORD` alias), SwipeSimple live and credential variables (`SWIPESIMPLE_SESSION`, `SWIPESIMPLE_LIVE`, `SWIPESIMPLE_DISPATCH_LIVE`, `SWIPESIMPLE_AUTO_SEND_AFTER_SIGNING`, and the other SwipeSimple secrets and pay-link aliases the app reads), DocuSeal API key and URL variables, Gmail OAuth send credentials, and Twilio send credentials for every test. A test that sets one of those with `monkeypatch.setenv` still sees its own value.
+- **Pytest refuses real outbound HTTP.** `httpx.Client.send`, `httpx.AsyncClient.send`, `requests.Session.send`, `urllib.request.urlopen`, and `aiohttp.ClientSession._request` raise for a non-localhost host on a real transport. `TestClient`, ASGI, and other in-process transports still run. respx or a monkeypatch of the client still replaces the guard. Production send behavior is unchanged.
+- **Send credentials are cleared before test collection.** `config/settings.py` loads `.env` and copies Slack and Twilio values onto `Settings` at import. The test harness occupies those variables before test modules import, and a later `load_dotenv` cannot put them back, so `RearrestChecker` does not keep a live webhook from the host environment.
+
+### Tests
+- `test_poller_marks_gmail_read_only_after_commit` clears `SLACK_WEBHOOK_LEADS` and mocks `httpx`, matching `test_clean_poller_charge_posts_leads_note_once_after_commit`.
+- `test_poller_clean_charge_makes_no_real_http_when_leads_webhook_is_set` proves a clean Gmail-poll charge does not make a real HTTP call when `SLACK_WEBHOOK_LEADS` is set in the environment.
+- `test_settings_snapshot_and_dotenv_keep_send_credentials_empty` and `test_urllib_and_aiohttp_slack_posts_are_blocked` cover the import-time snapshot and the urllib/aiohttp Slack paths.
+
+## [Unreleased] — 2026-11-17 (Mac relay fetch_failed stderr)
+
+### Fixed
+- **`scripts/mac_roster_relay.py` logs why `/fetch` returned 502.** When `read_allowlisted` raises, stderr gets one line: `[mac-relay] fetch_failed county=<allowlisted county> error_type=<ExcClass> detail=omitted`. `detail` is the fixed code `omitted`. Exception text is never written. The line does not include the token, request headers, the request line, or the page body. The HTTP body is still `{"error":"fetch_failed","error_type":...}`. A successful fetch still logs only `[mac-relay] request`.
+- **The browser worker is visible at startup.** After the worker thread starts, stderr gets `[mac-relay] browser_worker started`. If that thread fails to start, the line is `[mac-relay] browser_worker failed error_type=<ExcClass> detail=omitted`. That line does not include the exception text. Manatee and Sarasota stay `fail_closed`.
+- **The redaction marker cannot hang the request.** The whole stderr line is redacted before it is written, including the static words `mac`, `relay`, `fetch`, and `error_type`, and the browser-worker lines. The logger strips the env token the same way startup does, so a padded value such as `" relay "` does not leave `relay` in the line. The usual marker is `[redacted]`. When the token is a substring of that word, the marker is eight copies of a character the token does not contain, chosen with a bounded scan. The marker is not applied to exception text, because that text is not logged. A token such as `redacted` still returns 502.
+
+### Tests
+- `tests/test_jail_access_strategy.py` (already on the CI list): the failure line has county and error_type; the token is absent from stderr when the exception text contains it; the success path logs only the bare request line.
+
+## [Unreleased] — 2026-11-12 (Tenant scope for the iMessage SMS fallback log)
+
+### Fixed
+- **`bb_sms_fallback_log` is tenant-owned.** The BlueBubbles delivery-failure fallback writes that collection. The tenant-scope contract now lists it with the other outreach logs, so each agency's fallback rows stay on that agency's book. SMS/RCS fallback behavior is unchanged.
+
+### Tests
+- `tests/test_tenant_scope.py` known-collection count is 127.
+
 ## [Unreleased] — 2026-11-12 (Atomic unbound scan role claim)
 
 ### Fixed
@@ -34,6 +336,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Tests
 - `test_manatee_clerk_smoke_row_is_not_promoted` in `tests/test_home_county_smoke_evidence.py` (already on the CI list). It fails if that smoke row is not `requested`, `passed`, or `failed`, or if it claims `verified_public` without a passed row.
+
+## [Unreleased] — 2026-11-13 (Manatee and Sarasota jail fetch strategy)
+
+### Added
+- **Per-county fetch plan (owner directive, Brendan, 2026-11-13).** Manatee jail and Sarasota jail may use a solver and a stealth browser. The order is the owner Mac residential relay, then stealth browser + the existing SolveCaptcha helper if the relay is unreachable and `SOLVECAPTCHA_KEY` is set, then fail closed with nothing emitted. Hillsborough does not use a solver. Other counties are unchanged.
+- **`scripts/mac_roster_relay.py`.** The Mac relay fetches the Manatee bookings page and the Sarasota listing with one headed Patchright Chromium window (live check 2026-11-13: urllib and headless Chromium both get HTTP 403; headed Chromium gets HTTP 200). It waits out a "Just a moment" / "Attention Required" title and returns non-200 if the challenge stays. A real 404, 429, or 5xx whose title is not a challenge keeps that status. `--headless` defaults off. No solver on the relay. The Mac needs a logged-in GUI session and a user LaunchAgent, not a LaunchDaemon.
+- **A blocked Mac relay does not fall through to the solver (Codex on 6ac6cd9, tightened on 58101fd and 4d8d15c).** If the relay answers at all with a non-success (403, 429, 503, a challenge page, 401, 404, 500, or 502), the run stops and emits nothing. The solver fallback remains only when the relay is not configured or the connection fails. The Mac install command for this relay is `python -m patchright install chromium`.
+- **The Mac relay opens a new browser after a crash.** If the headed page or context is closed during a fetch, the next request creates a new persistent context instead of reusing the dead handle.
+
+### Changed
+- Both scrapers stay `SOURCE_CONTRACT_VALIDATED=False` and Health `fail_closed`. `scrape()` still returns `[]` and does not request the source. Sarasota's listing person id is still not a booking number.
+
+### Tests
+- `tests/test_jail_access_strategy.py` (on the CI list): strategy selection, missing solver, relay success, relay unreachable then stealth, all paths failing, parsers still closed.
 
 ## [Unreleased] — 2026-11-10 (Portal handoff + self-serve prefill coexistence guard)
 

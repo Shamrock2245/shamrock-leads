@@ -1752,6 +1752,7 @@ async def run_maigret(
     username: str,
     deep: bool = False,
     tmpdir: str = "",
+    top_sites: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run Maigret for a single username."""
     result_meta: Dict[str, Any] = {
@@ -1797,7 +1798,10 @@ async def run_maigret(
         cmd += ["--no-autoupdate"]
     if os.path.isfile(db_path):
         cmd += ["--db", db_path]
-    cmd += maigret_site_args(deep)
+    if top_sites is not None:
+        cmd += ["--top-sites", str(max(20, min(1500, int(top_sites))))]
+    else:
+        cmd += maigret_site_args(deep)
 
     log.info("Maigret scan for %s deep=%s", _redact(username), deep)
 
@@ -3327,6 +3331,8 @@ async def execute_scan_v2(
     deep_scan: bool,
     engines: List[str],
     license_plate: Optional[str] = None,
+    image_url: Optional[str] = None,
+    top_sites: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     v2 multi-engine scan orchestrator.
@@ -3341,6 +3347,7 @@ async def execute_scan_v2(
     error_parts: List[str] = []
     all_accounts: List[Dict] = []
     all_entities: List[Dict] = []
+    geo_points: List[Dict] = []
     raw_outputs: Dict[str, Any] = {}
 
     mg_users = list(usernames)[:MAX_MAIGRET_USERNAMES]
@@ -3396,7 +3403,7 @@ async def execute_scan_v2(
             progress[engine]["started_at"] = datetime.now(timezone.utc).isoformat()
 
             if engine == "maigret" and mg_users:
-                tasks.append(run_maigret(mg_users[0], deep=deep_scan, tmpdir=tmpdir))
+                tasks.append(run_maigret(mg_users[0], deep=deep_scan, tmpdir=tmpdir, top_sites=top_sites))
                 task_map.append(engine)
             elif engine == "tookie" and mg_users:
                 tasks.append(run_tookie(mg_users, deep=deep_scan, tmpdir=tmpdir))
@@ -3465,13 +3472,17 @@ async def execute_scan_v2(
                     progress[engine]["status"] = "skipped"
                     progress[engine]["error"] = "No usernames for instaloader"
             elif engine == "exiftool":
-                target_img = email if (email and email.startswith(("http://", "https://"))) else None
+                target_img = (
+                    image_url.strip()
+                    if (image_url and str(image_url).strip().startswith(("http://", "https://")))
+                    else (email if (email and email.startswith(("http://", "https://"))) else None)
+                )
                 if target_img:
                     tasks.append(run_exiftool(target_img))
                     task_map.append(engine)
                 else:
                     progress[engine]["status"] = "skipped"
-                    progress[engine]["error"] = "No image URL provided for exiftool (pass image URL in context/email field)"
+                    progress[engine]["error"] = "No image URL provided for exiftool"
             else:
                 progress[engine]["status"] = "skipped"
                 progress[engine]["error"] = f"No valid input for {engine}"
@@ -3551,6 +3562,47 @@ async def execute_scan_v2(
         all_entities.extend(entities)
         raw_outputs[engine] = result.get("raw") or {}
 
+        # ExifTool returns GPS / camera metadata instead of accounts/entities.
+        # Surface it so the report and recovery dossier can show it.
+        if engine == "exiftool" and ok:
+            gps = result.get("gps") or {}
+            addr = result.get("address")
+            meta = result.get("metadata") or {}
+            try:
+                lat = float(gps.get("latitude")) if gps.get("latitude") is not None else None
+                lon = float(gps.get("longitude")) if gps.get("longitude") is not None else None
+            except (TypeError, ValueError):
+                lat = lon = None
+            if lat is not None and lon is not None:
+                geo_points.append({
+                    "latitude": lat,
+                    "longitude": lon,
+                    "source": "exiftool",
+                    "label": addr or f"{lat:.5f}, {lon:.5f}",
+                    "context": " · ".join(
+                        str(v) for v in (meta.get("create_date"), meta.get("make"), meta.get("model")) if v
+                    ) or None,
+                })
+                all_entities.append({
+                    "type": "location",
+                    "value": addr or f"{lat:.6f}, {lon:.6f}",
+                    "source": "exiftool",
+                    "module": "gps",
+                    "confidence": "high",
+                    "context": f"Photo GPS {lat:.6f}, {lon:.6f}",
+                })
+            device = " ".join(str(v) for v in (meta.get("make"), meta.get("model")) if v)
+            if device:
+                all_entities.append({
+                    "type": "other",
+                    "value": f"Camera: {device}",
+                    "source": "exiftool",
+                    "module": "camera",
+                    "confidence": "high",
+                    "context": f"Taken {meta.get('create_date')}" if meta.get("create_date") else None,
+                })
+            progress[engine]["entities_found"] = progress[engine].get("entities_found", 0) + (1 if lat is not None else 0) + (1 if device else 0)
+
     # Deduplicate accounts
     all_accounts = dedupe_accounts(all_accounts)
 
@@ -3582,6 +3634,7 @@ async def execute_scan_v2(
         "status": status,
         "accounts": all_accounts,
         "entities": all_entities,
+        "geo_points": geo_points,
         "total_accounts": len(all_accounts),
         "total_entities": len(all_entities),
         "platforms_found": sorted({a.get("platform") for a in all_accounts if a.get("platform")}),

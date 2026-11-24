@@ -907,7 +907,7 @@ async def deliver_packet(request: Request, packet_id: str):
         bb = get_bb_client(phone)
         if not bb:
             return JSONResponse({"error": "BlueBubbles server not configured"}, status_code=503)
-        chat_guid = f"iMessage;-;{phone}"
+        chat_guid = f"any;-;{phone}"
         # Staff-triggered DocuSeal signing link (B3 BlueBubbles exception):
         # allowed unless THIS recipient opted out (STOP/TCPA gate in the BB client).
         result = await bb.send_text(chat_guid, message, purpose="docuseal_signing_link")
@@ -1383,6 +1383,9 @@ async def packet_builder_finalize(request: Request):
                 packet_id=body.get("packet_id"),
             )
             _copy_session_agent(ctx, user)
+            agent_surety_err = await _confirm_agent_packet_surety_for_finalize(request, body, ctx)
+            if agent_surety_err is not None:
+                return agent_surety_err
 
         # Office finalize binds the packet. Shannon's create/email route is the
         # only skip_bond_binding + pending_staff_match path; this handler does
@@ -1819,6 +1822,52 @@ async def packet_builder_finalize(request: Request):
                 return JSONResponse(capacity_error_body(exc), status_code=422)
             bond_data["_charge_layout_notes"] = list(charge_placement.layout_notes)
 
+            from dashboard.services.paperwork_preflight import (
+                HARD_FINALIZE_BLOCK_CODES,
+                evaluate_paperwork_preflight,
+            )
+
+            arrest_doc_for_preflight = None
+            if staff_test is None and booking_for_chain:
+                try:
+                    arrest_doc_for_preflight = await get_collection("arrests").find_one(
+                        {"booking_number": booking_for_chain},
+                        {"_id": 0, "charges": 1, "charge_details": 1, "charge_list": 1, "extra": 1},
+                    )
+                except Exception:
+                    arrest_doc_for_preflight = None
+
+            preflight_report = evaluate_paperwork_preflight(
+                bond_data=bond_data,
+                arrest_doc=arrest_doc_for_preflight,
+                poa_doc=poa_doc,
+                surety_id=surety_id,
+                include_defendant=bool(body.get("include_defendant", True)),
+                self_indemnitor=bool(ctx.get("self_indemnitor")),
+                template="docuseal",
+            )
+            enforced_codes = set(HARD_FINALIZE_BLOCK_CODES)
+            if staff_test is not None and not identity_flags.get("enforce_identity"):
+                # Synthetic TEST-/PKT-TEST- staff smoke fixtures reuse placeholder DL
+                # stubs unless enforce_identity=True is explicitly requested.
+                enforced_codes -= {"identity_dl_collision", "identity_person_collision"}
+            hard_blocks = [
+                issue for issue in preflight_report.get("blocking_issues", [])
+                if issue.get("code") in enforced_codes
+            ]
+            if hard_blocks:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "paperwork_preflight_failed",
+                        "message": hard_blocks[0]["message"],
+                        "preflight": preflight_report,
+                    },
+                    status_code=422,
+                )
+        else:
+            preflight_report = None
+
         # Fill + flatten via Adobe PDF Services (combine/compress) with local fallback.
         # DocuSeal uses its two live templates — skip heavy stitch/flatten unless staff
         # forces it (force_flatten) or uploaded extras require a preview archive.
@@ -2243,6 +2292,7 @@ async def packet_builder_finalize(request: Request):
             "esign_provider": provider,
             "flattened_preview_b64": flat_b64[:200] + "…" if flat_b64 and len(flat_b64) > 200 else flat_b64,
             "warnings": collateral_warnings,
+            "preflight": preflight_report,
             "context_summary": {
                 "defendant_name": def_.get("name"),
                 "indemnitor_name": ind.get("name"),
@@ -2646,6 +2696,111 @@ async def mark_clerk_bond_posted(request: Request):
     }
 
 
+@paperwork_bp.post("/paperwork/preflight")
+async def paperwork_preflight_check(request: Request):
+    """Run the 5-point Paperwork Perfection Pre-Flight Gate without creating a submission."""
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+
+    from dashboard.services.packet_builder_service import (
+        resolve_case_context,
+        apply_self_indemnitor,
+    )
+    from dashboard.services.docuseal_service import build_bond_data_from_dashboard
+    from dashboard.services.paperwork_preflight import evaluate_paperwork_preflight
+    from dashboard.services.surety_registry import normalize_surety, is_supported_surety
+    from dashboard.services.surety_entitlements import entitlement_denial
+
+    surety_id = normalize_surety(body.get("surety_id"))
+    if surety_id and not is_supported_surety(surety_id):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": f"Surety '{surety_id}' is not supported for paperwork",
+                "code": "unsupported_surety",
+            },
+            status_code=400,
+        )
+    if surety_id:
+        denied = await entitlement_denial(surety_id)
+        if denied:
+            return JSONResponse(denied, status_code=403)
+
+    ctx = await resolve_case_context(
+        intake_id=body.get("intake_id"),
+        match_id=body.get("match_id"),
+        defendant_id=body.get("defendant_id"),
+        booking_number=body.get("booking_number"),
+        county=body.get("county"),
+        bond_case_id=body.get("bond_case_id"),
+        packet_id=body.get("packet_id"),
+    )
+    if "arrest_ambiguous" in (ctx.get("sources") or []):
+        return JSONResponse(
+            {
+                "success": False,
+                "error": "Multiple arrest records match this booking — will not prefill",
+                "code": "ambiguous_identity",
+            },
+            status_code=409,
+        )
+    if body.get("self_indemnitor"):
+        pin = body.get("authorization_pin") or body.get("pin") or ""
+        try:
+            ctx = apply_self_indemnitor(ctx, pin)
+        except PermissionError as pe:
+            return JSONResponse({"success": False, "error": str(pe)}, status_code=403)
+
+    user = _session_agent(request)
+    _copy_session_agent(ctx, user)
+    bond_data = build_bond_data_from_dashboard(
+        ctx=ctx,
+        field_overrides=body.get("field_overrides") if isinstance(body.get("field_overrides"), dict) else {},
+        body=body,
+        surety_id=surety_id or ctx.get("surety_id"),
+        session=user,
+    )
+    if not bond_data.get("facility") and ctx.get("facility"):
+        bond_data["facility"] = ctx.get("facility")
+
+    booking = str(bond_data.get("booking_number") or ctx.get("booking_number") or "").strip()
+    arrest_doc = None
+    if booking:
+        try:
+            arrest_doc = await get_collection("arrests").find_one({"booking_number": booking}, {"_id": 0})
+        except Exception:
+            arrest_doc = None
+
+    poa_doc = None
+    poa_number = str(bond_data.get("poa_number") or "").strip()
+    resolved_surety = str(bond_data.get("surety_id") or surety_id or "").strip().lower()
+    if poa_number and resolved_surety:
+        try:
+            poa_doc = await get_collection("poa_inventory").find_one(
+                {
+                    "poa_number": poa_number,
+                    "surety_id": resolved_surety,
+                    "status": {"$in": ["assigned", "used"]},
+                },
+                {"_id": 0, "max_bond_value": 1},
+            )
+        except Exception:
+            poa_doc = None
+
+    report = evaluate_paperwork_preflight(
+        bond_data=bond_data,
+        arrest_doc=arrest_doc,
+        poa_doc=poa_doc,
+        surety_id=resolved_surety,
+        include_defendant=bool(body.get("include_defendant", True)),
+        self_indemnitor=bool(ctx.get("self_indemnitor") or body.get("self_indemnitor")),
+        template="docuseal",
+    )
+    return {"success": True, "preflight": report}
+
+
 @paperwork_bp.post("/paperwork/docuseal/prefill-preview")
 async def docuseal_prefill_preview(request: Request):
     """
@@ -2958,6 +3113,71 @@ class BindDefendantRequest(BaseModel):
     case_number: Optional[str] = None
     defendant_id: Optional[str] = None
     charges: Optional[str] = None
+
+
+async def _confirm_agent_packet_surety_for_finalize(request: Request, body: dict, ctx: dict):
+    """Chat-agent packets only: persist + audit the picked surety before finalize uses it.
+
+    Returns an error response, or None to continue. Other packets are untouched.
+    """
+    packet_id = str(body.get("packet_id") or ctx.get("packet_id") or "").strip()
+    if not packet_id:
+        return None
+    packet = await _load_packet(packet_id)
+    if not packet or not packet.get("staged_by_agent"):
+        return None
+    from dashboard.services.packet_surety_confirm import (
+        SuretyConfirmError,
+        confirm_packet_surety,
+        validate_surety_choice,
+    )
+
+    try:
+        if body.get("surety_id"):
+            confirmed = await confirm_packet_surety(
+                packet_id, body.get("surety_id"),
+                actor=_actor_label(request), source="packet_finalize",
+            )
+            ctx["surety_id"] = confirmed["surety_id"]
+            body["surety_id"] = confirmed["surety_id"]
+        else:
+            ctx["surety_id"] = validate_surety_choice(
+                packet.get("surety_id") or packet.get("template")
+            )
+    except SuretyConfirmError as exc:
+        return JSONResponse(exc.body(), status_code=exc.status_code)
+    return None
+
+
+@paperwork_bp.post("/paperwork/packets/{packet_id}/confirm-surety")
+async def paperwork_confirm_surety(packet_id: str, request: Request):
+    """Staff confirm (or change, while unsent) a packet's surety from the Super CRM picker.
+
+    Body: ``{"surety_id": "osi" | "palmetto"}``. 422 ``surety_required`` /
+    ``surety_unsupported``; 409 ``surety_locked`` (also when a send or void
+    lands mid-request) / ``surety_poa_mismatch`` / ``surety_conflict``; 404
+    ``packet_not_found``; 503 ``surety_confirm_failed`` (nothing saved).
+    Persists ``surety_id`` and ``template`` with ``surety_confirmed_by`` /
+    ``_at`` and a ``surety_audit`` entry in the same update, plus an
+    ``audit_events`` row (same transaction where Mongo supports it).
+    Confirming the current surety writes nothing.
+    """
+    from dashboard.services.packet_surety_confirm import SuretyConfirmError, confirm_packet_surety
+
+    try:
+        body = (await request.json()) or {}
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        result = await confirm_packet_surety(
+            packet_id, body.get("surety_id"),
+            actor=_actor_label(request), source="crm_packet_picker",
+        )
+    except SuretyConfirmError as exc:
+        return JSONResponse(exc.body(), status_code=exc.status_code)
+    return {"success": True, "packet_id": packet_id, **result}
 
 
 @paperwork_bp.post("/paperwork/packets/{packet_id}/bind-defendant")
@@ -3376,8 +3596,14 @@ async def shannon_email_indemnitor_paperwork(request: Request):
                 if ocr_fields.get(key):
                     bond_data[key] = ocr_fields[key]
             if ocr_fields.get("defendant_name"):
-                bond_data["defendant"]["name"] = ocr_fields["defendant_name"]
-                def_party["name"] = ocr_fields["defendant_name"]
+                from dashboard.services.docuseal_service import replace_defendant_name_from_id_scan
+
+                corrected = str(ocr_fields["defendant_name"])
+                bond_data["defendant_name"] = corrected
+                bond_data.pop("defendant_first_name", None)
+                bond_data.pop("defendant_last_name", None)
+                replace_defendant_name_from_id_scan(bond_data["defendant"], corrected)
+                replace_defendant_name_from_id_scan(def_party, corrected)
         else:
             ind = indemnitors[0] if indemnitors else {}
             if ocr_fields.get("indemnitor_name"):
@@ -3508,6 +3734,27 @@ async def paperwork_push_docuseal(packet_id: str, request: Request):
     except Exception:
         body = {}
 
+    if packet.get("staged_by_agent"):
+        # Chat-agent packets never default to OSI. A surety picked by staff is
+        # validated, persisted and audited before it is used; with none picked
+        # and none stored this is 422 surety_required.
+        from dashboard.services.packet_surety_confirm import (
+            SuretyConfirmError,
+            confirm_packet_surety,
+            validate_surety_choice,
+        )
+
+        try:
+            if body.get("surety_id"):
+                confirmed = await confirm_packet_surety(
+                    packet_id, body.get("surety_id"),
+                    actor=_actor_label(request), source="docuseal_push",
+                )
+                packet["surety_id"] = packet["template"] = confirmed["surety_id"]
+            else:
+                validate_surety_choice(packet.get("surety_id") or packet.get("template"))
+        except SuretyConfirmError as exc:
+            return JSONResponse(exc.body(), status_code=exc.status_code)
     surety_for_template = (packet.get("surety_id") or packet.get("template") or body.get("surety_id") or "osi").lower()
     from dashboard.services.surety_entitlements import entitlement_denial
 

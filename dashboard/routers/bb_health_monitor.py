@@ -208,6 +208,21 @@ async def run_health_check_all() -> dict:
 
     for suffix, server in BB_SERVERS.items():
         health = await check_server_health(suffix, server)
+        if health["status"] == "offline" and str(server.get("suffix") or "") == "0178":
+            # Auto-reconnect: re-resolve Tailscale vs frp URL and re-check once
+            try:
+                from dashboard.extensions import init_bluebubbles
+                init_bluebubbles()
+                refreshed = BB_SERVERS.get(suffix)
+                if refreshed and refreshed.get("url") != server.get("url"):
+                    logger.info(
+                        "[bb-health] Auto-switched 0178 URL %s -> %s",
+                        server.get("url"), refreshed.get("url"),
+                    )
+                    server = refreshed
+                    health = await check_server_health(suffix, server)
+            except Exception as exc:
+                logger.debug("[bb-health] Auto-reconnect probe failed: %s", exc)
         results.append(health)
 
         if health["status"] == "offline":

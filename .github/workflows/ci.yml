@@ -63,6 +63,8 @@ jobs:
         run: |
           pytest -q \
             tests/test_tenant_scope.py \
+            tests/test_agent_packet.py \
+            tests/test_packet_surety_confirm.py \
             tests/test_agency_onboarding.py \
             tests/test_agency_billing.py \
             tests/test_surety_entitlements.py \
@@ -164,10 +166,12 @@ jobs:
             tests/test_collier_glades_published_bond.py \
             tests/test_glades_no_impersonation_path.py \
             tests/test_sarasota_safety.py \
+            tests/test_sarasota_detail_contract.py \
             tests/test_packet_builder_service.py \
             tests/test_cf_browser.py \
             tests/test_residential_proxy.py \
             tests/test_manatee_no_proxy_path.py \
+            tests/test_jail_access_strategy.py \
             tests/test_charlotte_no_proxy_path.py \
             tests/test_relay_only_scheduling.py \
             tests/test_fl_charlotte_manatee_fail_closed.py \
@@ -256,6 +260,7 @@ jobs:
             tests/test_swipesimple_invoice_claims.py \
             tests/test_swipesimple_session_keepalive.py \
             tests/test_slack_alerts.py \
+            tests/test_federal_bond_risk.py \
             tests/test_payment_links.py \
             tests/test_surety_registry.py \
             tests/test_surety_onboarding.py \

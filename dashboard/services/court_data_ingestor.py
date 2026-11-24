@@ -397,42 +397,311 @@ Respond ONLY with the JSON object."""
 
 
 def _score_bail_impact(opinion: dict) -> dict:
-    """Score how impactful this opinion is for bail bond intelligence.
+    """Score how impactful this opinion is for bail bond intelligence."""
+    from dashboard.services.courtlistener_client import score_bail_impact
+    return score_bail_impact(opinion)
 
-    Returns a dict with score (0-100) and reasoning.
-    """
-    score = 0
-    factors = []
-    disp = opinion.get("disposition", "unknown")
 
-    # High-impact dispositions for bail
-    bail_critical = {
-        "bond_forfeiture": 95, "fta": 90, "bond_revoked": 85,
-        "bond_reduced": 70, "bond_increased": 70,
-        "probation_violation": 65, "pretrial_order": 60,
+async def save_court_case(db, payload: dict) -> dict:
+    """Save/upsert a CourtListener search result or dossier into `court_outcomes`."""
+    from dashboard.services.courtlistener_client import (
+        CourtListenerClient,
+        classify_disposition_category,
+        score_bail_impact,
+    )
+
+    source_id = str(
+        payload.get("source_id")
+        or payload.get("cluster_id")
+        or payload.get("id")
+        or ""
+    ).strip()
+    if not source_id:
+        return {"success": False, "error": "source_id or cluster_id is required"}
+
+    case_name = (payload.get("case_name") or payload.get("caseName") or "").strip()
+    if not case_name:
+        return {"success": False, "error": "case_name is required"}
+
+    snippet = (payload.get("snippet") or "")[:500]
+    disposition = (payload.get("disposition") or "").strip().lower()
+    if not disposition:
+        disposition = CourtListenerClient._classify_disposition(snippet, case_name)
+
+    doc = {
+        "source": "courtlistener",
+        "source_id": source_id,
+        "cluster_id": payload.get("cluster_id") or source_id,
+        "docket_id": payload.get("docket_id") or "",
+        "court_id": payload.get("court_id") or "",
+        "court_name": payload.get("court_name") or payload.get("court_id") or "",
+        "state": (payload.get("state") or "").upper(),
+        "case_name": case_name,
+        "docket_number": payload.get("docket_number") or payload.get("docketNumber") or "",
+        "date_filed": payload.get("date_filed") or payload.get("dateFiled") or "",
+        "disposition": disposition,
+        "disposition_category": classify_disposition_category(disposition),
+        "snippet": snippet,
+        "judges": payload.get("judges") or payload.get("judge") or "",
+        "assigned_to_str": payload.get("assigned_to_str") or "",
+        "referred_to_str": payload.get("referred_to_str") or "",
+        "citation": payload.get("citation") or [],
+        "citation_count": int(payload.get("citation_count") or 0),
+        "absolute_url": payload.get("absolute_url") or "",
+        "suit_nature": payload.get("suit_nature") or "",
+        "court_type": payload.get("court_type") or "state",
+        "court_tier": payload.get("court_tier") or "unknown",
+        "jurisdiction": (payload.get("state") or "").upper(),
+        "ingested_at": datetime.now(timezone.utc).isoformat() + "Z",
     }
-    if disp in bail_critical:
-        score = bail_critical[disp]
-        factors.append(f"bail-critical disposition: {disp}")
-    elif disp in ("conviction", "sentencing", "plea"):
-        score = 50
-        factors.append(f"sentencing outcome: {disp}")
-    elif disp in ("dismissed", "acquittal", "nolle_prosequi"):
-        score = 40
-        factors.append(f"favorable outcome: {disp}")
-    elif disp != "unknown":
-        score = 25
-        factors.append(f"general legal outcome: {disp}")
 
-    # Bonus for matched defendants
-    if opinion.get("matched_defendant_id"):
-        score = min(100, score + 20)
-        factors.append("matched to existing defendant")
+    match_result = await _fuzzy_match_defendant(db, case_name)
+    if match_result:
+        doc["matched_defendant_id"] = match_result.get("defendant_id")
+        doc["matched_defendant_name"] = match_result.get("name")
+        doc["match_confidence"] = match_result.get("confidence", 0)
+        doc["match_method"] = match_result.get("method", "name")
 
-    # Bonus for AI analysis
-    ai = opinion.get("ai_analysis", {})
-    if ai.get("risk_signal") == "high":
-        score = min(100, score + 15)
-        factors.append("AI: high risk signal")
+    doc["bail_impact"] = score_bail_impact(doc)
 
-    return {"score": score, "factors": factors}
+    collection = db["court_outcomes"]
+    await collection.update_one(
+        {"source": "courtlistener", "source_id": source_id},
+        {"$set": doc},
+        upsert=True,
+    )
+    saved = await collection.find_one({"source": "courtlistener", "source_id": source_id})
+    if saved and "_id" in saved:
+        saved["_id"] = str(saved["_id"])
+    return {"success": True, "case": saved or doc}
+
+
+async def get_court_intel_analytics(db, state: Optional[str] = None) -> dict:
+    """Compute comprehensive bail-intelligence analytics from `court_outcomes`."""
+    from dashboard.services.courtlistener_client import (
+        BAIL_SEARCH_PRESETS,
+        classify_disposition_category,
+    )
+
+    collection = db["court_outcomes"]
+    query_filter: dict = {}
+    if state and state.strip():
+        query_filter["state"] = state.strip().upper()
+
+    presets_list = [{"key": k, **v} for k, v in BAIL_SEARCH_PRESETS.items()]
+    total = await collection.count_documents(query_filter)
+
+    if total == 0:
+        return {
+            "success": True,
+            "state": state.upper() if state else None,
+            "kpi": {
+                "total_outcomes": 0,
+                "bail_critical_count": 0,
+                "bail_critical_pct": 0.0,
+                "avg_bail_impact": 0.0,
+                "matched_defendants": 0,
+                "active_states": 0,
+                "unique_courts": 0,
+                "unique_judges": 0,
+                "last_ingestion": None,
+            },
+            "by_disposition": [],
+            "by_state": [],
+            "by_court": [],
+            "by_judge": [],
+            "monthly_trend": [],
+            "top_precedents": [],
+            "presets": presets_list,
+        }
+
+    projection = {
+        "source_id": 1,
+        "cluster_id": 1,
+        "court_id": 1,
+        "court_name": 1,
+        "state": 1,
+        "case_name": 1,
+        "docket_number": 1,
+        "date_filed": 1,
+        "disposition": 1,
+        "judges": 1,
+        "assigned_to_str": 1,
+        "citation_count": 1,
+        "bail_impact": 1,
+        "matched_defendant_id": 1,
+        "ingested_at": 1,
+        "absolute_url": 1,
+    }
+    docs = await (
+        collection.find(query_filter, projection)
+        .sort([("ingested_at", -1), ("date_filed", -1)])
+        .limit(2500)
+        .to_list(length=2500)
+    )
+
+    disp_counts: dict[str, int] = {}
+    state_agg: dict[str, dict] = {}
+    court_agg: dict[str, dict] = {}
+    judge_agg: dict[str, dict] = {}
+    month_agg: dict[str, dict] = {}
+
+    bail_critical_count = 0
+    impact_scores: list[float] = []
+    matched_count = 0
+    last_ingestion: Optional[str] = None
+
+    for d in docs:
+        disp = (d.get("disposition") or "unknown").lower()
+        cat = classify_disposition_category(disp)
+        disp_counts[disp] = disp_counts.get(disp, 0) + 1
+        if cat == "bail_critical":
+            bail_critical_count += 1
+
+        score = float((d.get("bail_impact") or {}).get("score") or 0)
+        impact_scores.append(score)
+
+        if d.get("matched_defendant_id"):
+            matched_count += 1
+
+        ing_at = d.get("ingested_at")
+        if ing_at and (last_ingestion is None or ing_at > last_ingestion):
+            last_ingestion = ing_at
+
+        st = (d.get("state") or "UNKNOWN").upper()
+        s_bucket = state_agg.setdefault(
+            st, {"state": st, "count": 0, "bail_critical": 0, "_score_sum": 0.0}
+        )
+        s_bucket["count"] += 1
+        s_bucket["_score_sum"] += score
+        if cat == "bail_critical":
+            s_bucket["bail_critical"] += 1
+
+        cid = d.get("court_id") or d.get("court_name") or "unknown"
+        cname = d.get("court_name") or cid
+        c_bucket = court_agg.setdefault(
+            cid,
+            {
+                "court_id": cid,
+                "court_name": cname,
+                "state": st,
+                "count": 0,
+                "bail_critical": 0,
+                "forfeiture_fta_count": 0,
+            },
+        )
+        c_bucket["count"] += 1
+        if cat == "bail_critical":
+            c_bucket["bail_critical"] += 1
+        if disp in ("bond_forfeiture", "fta", "bond_revoked"):
+            c_bucket["forfeiture_fta_count"] += 1
+
+        raw_judges = d.get("judges") or d.get("assigned_to_str") or ""
+        if raw_judges:
+            for part in re.split(r"[,;]", str(raw_judges)):
+                jname = part.strip()
+                if not jname or len(jname) < 2:
+                    continue
+                j_bucket = judge_agg.setdefault(
+                    jname,
+                    {
+                        "judge": jname,
+                        "count": 0,
+                        "bail_critical": 0,
+                        "favorable": 0,
+                        "adverse": 0,
+                        "_score_sum": 0.0,
+                    },
+                )
+                j_bucket["count"] += 1
+                j_bucket["_score_sum"] += score
+                if cat == "bail_critical":
+                    j_bucket["bail_critical"] += 1
+                elif cat == "favorable":
+                    j_bucket["favorable"] += 1
+                elif cat == "adverse":
+                    j_bucket["adverse"] += 1
+
+        dfiled = str(d.get("date_filed") or "")
+        if len(dfiled) >= 7 and dfiled[4:5] == "-":
+            ym = dfiled[:7]
+            m_bucket = month_agg.setdefault(ym, {"month": ym, "total": 0, "bail_critical": 0})
+            m_bucket["total"] += 1
+            if cat == "bail_critical":
+                m_bucket["bail_critical"] += 1
+
+    sample_n = len(docs)
+    by_disposition = [
+        {
+            "disposition": k,
+            "count": v,
+            "pct": round((v / sample_n) * 100, 1) if sample_n else 0.0,
+            "category": classify_disposition_category(k),
+        }
+        for k, v in sorted(disp_counts.items(), key=lambda x: -x[1])
+    ]
+
+    by_state = [
+        {
+            "state": v["state"],
+            "count": v["count"],
+            "bail_critical": v["bail_critical"],
+            "avg_impact": round(v["_score_sum"] / v["count"], 1) if v["count"] else 0.0,
+        }
+        for v in sorted(state_agg.values(), key=lambda x: -x["count"])
+    ]
+
+    by_court = sorted(court_agg.values(), key=lambda x: -x["count"])[:15]
+
+    by_judge = [
+        {
+            "judge": v["judge"],
+            "count": v["count"],
+            "bail_critical": v["bail_critical"],
+            "favorable": v["favorable"],
+            "adverse": v["adverse"],
+            "avg_impact": round(v["_score_sum"] / v["count"], 1) if v["count"] else 0.0,
+        }
+        for v in sorted(judge_agg.values(), key=lambda x: (-x["count"], -x["_score_sum"]))[:15]
+    ]
+
+    monthly_trend = sorted(month_agg.values(), key=lambda x: x["month"])[-12:]
+
+    top_cursor = (
+        collection.find(query_filter)
+        .sort([("bail_impact.score", -1), ("citation_count", -1)])
+        .limit(12)
+    )
+    top_docs = await top_cursor.to_list(length=12)
+    top_precedents = []
+    for p in top_docs:
+        item = dict(p)
+        if "_id" in item:
+            item["_id"] = str(item["_id"])
+        if item.get("snippet"):
+            item["snippet"] = item["snippet"][:260]
+        item.setdefault("disposition_category", classify_disposition_category(item.get("disposition", "")))
+        top_precedents.append(item)
+
+    return {
+        "success": True,
+        "state": state.strip().upper() if state and state.strip() else None,
+        "kpi": {
+            "total_outcomes": total,
+            "bail_critical_count": bail_critical_count,
+            "bail_critical_pct": round((bail_critical_count / sample_n) * 100, 1) if sample_n else 0.0,
+            "avg_bail_impact": round(sum(impact_scores) / sample_n, 1) if sample_n else 0.0,
+            "matched_defendants": matched_count,
+            "active_states": len([s for s in state_agg if s != "UNKNOWN"]),
+            "unique_courts": len(court_agg),
+            "unique_judges": len(judge_agg),
+            "last_ingestion": last_ingestion,
+        },
+        "by_disposition": by_disposition,
+        "by_state": by_state,
+        "by_court": by_court,
+        "by_judge": by_judge,
+        "monthly_trend": monthly_trend,
+        "top_precedents": top_precedents,
+        "presets": presets_list,
+    }
