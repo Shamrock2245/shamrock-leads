@@ -2463,7 +2463,7 @@ def _stored_notification(row: dict) -> dict:
     """Build a CRM notification from a stored alert, including withdrawn rows."""
     source_id = str(row.get("source_id") or "")
     status = str(row.get("match_status") or "possible")
-    if status == "withdrawn" or row.get("downgrade_reason"):
+    if status == "withdrawn" or (status != "confirmed" and bool(row.get("downgrade_reason"))):
         return _downgrade_note(row, source_id)
     confirmed = status == "confirmed" and bool(row.get("auto_linked"))
     return redact_internal_keys({
@@ -2611,6 +2611,7 @@ def _with_downgrade_audit(existing: dict, document: dict, reason: str) -> dict:
     updated["slack_delivered"] = False
     updated["alert_complete"] = False
     updated["slack_claim"] = False
+    updated["slack_claim_at"] = ""
     updated["slack_attempts"] = int(existing.get("slack_attempts") or 0)
     updated["notification_written"] = False
     updated["notification_status"] = ""
@@ -2653,6 +2654,15 @@ def _downgrade_note(document: dict, source_id: str) -> dict:
         "dismissed": False,
         "created_at": _now(),
     })
+
+
+def _clear_downgrade_fields(document: dict) -> None:
+    """Remove prior downgrade/withdrawal markers when a row is upgraded or restored."""
+    document["downgraded_at"] = ""
+    document["downgraded_from"] = ""
+    document["downgrade_reason"] = ""
+    document["prior_bond_case_id"] = ""
+    document["prior_matched_defendant_id"] = None
 
 
 async def _store_decision(
@@ -2707,6 +2717,9 @@ async def _store_decision(
         document["detected_at"] = existing.get("detected_at") or document["detected_at"]
         document["upgraded_at"] = _now()
         document["slack_attempts"] = int(existing.get("slack_attempts") or 0)
+        document["slack_claim"] = False
+        document["slack_claim_at"] = ""
+        _clear_downgrade_fields(document)
         audit = _queue_match_audit(
             document, source_id, _match_state(existing), _match_state(document),
             "possible_upgraded_to_confirmed", _match_evidence(document, "possible_upgraded_to_confirmed"),
@@ -2727,6 +2740,7 @@ async def _store_decision(
         document["detected_at"] = existing.get("detected_at") or document["detected_at"]
         document["slack_attempts"] = 0
         document["slack_claim"] = False
+        document["slack_claim_at"] = ""
         document["slack_delivered"] = False
         document["alert_complete"] = False
         document["_history_event"] = {
@@ -2738,6 +2752,7 @@ async def _store_decision(
             "bond_case_id": existing.get("prior_bond_case_id") or existing.get("bond_case_id") or "",
             "matched_defendant_id": existing.get("prior_matched_defendant_id") or existing.get("matched_defendant_id"),
         }
+        _clear_downgrade_fields(document)
         audit = _queue_match_audit(
             document, source_id, _match_state(existing), _match_state(document),
             "withdrawn_restored", _match_evidence(document, "withdrawn_restored"),
@@ -3002,6 +3017,7 @@ async def _claim_slack_delivery(db, source_id: str, *, match_status: str, revisi
     is not posted from the earlier snapshot.
     """
     cutoff = (datetime.now(timezone.utc) - SLACK_CLAIM_TTL).isoformat()
+    claim_at = _now()
     result = await db.docket_events.update_one(
         {
             **_slack_version_filter(source_id, match_status, revision),
@@ -3010,21 +3026,28 @@ async def _claim_slack_delivery(db, source_id: str, *, match_status: str, revisi
                 *_slack_version_filter(source_id, match_status, revision)["$and"],
                 {"$or": [
                     {"slack_claim": {"$ne": True}},
+                    {"slack_claim_at": ""},
                     {"slack_claim_at": {"$lt": cutoff}},
                     {"slack_claim_at": {"$exists": False}},
                 ]},
             ],
         },
-        {"$set": {"slack_claim": True, "slack_claim_at": _now()}},
+        {"$set": {"slack_claim": True, "slack_claim_at": claim_at}},
     )
     if getattr(result, "matched_count", 0) != 1:
         return None
     fresh = await db.docket_events.find_one({"source": SOURCE, "source_id": source_id})
     if not fresh:
         return None
-    if str(fresh.get("match_status") or "") != match_status:
-        return None
-    if int(fresh.get("notification_revision") or 0) != int(revision or 0):
+    if (
+        str(fresh.get("match_status") or "") != match_status
+        or int(fresh.get("notification_revision") or 0) != int(revision or 0)
+    ):
+        if fresh.get("slack_claim") and fresh.get("slack_claim_at") == claim_at:
+            await db.docket_events.update_one(
+                {"source": SOURCE, "source_id": source_id, "slack_claim_at": claim_at},
+                {"$set": {"slack_claim": False, "slack_claim_at": ""}},
+            )
         return None
     return fresh
 
@@ -3270,6 +3293,8 @@ async def run_federal_bond_risk_scan(
                 confirmed += 1
         withdrawn_ids: list[str] = []
         for docket, group in by_docket.values():
+            if str(docket.docket_id) in collected.failed_seed_ids:
+                continue
             withdrawn_ids.extend(await _withdraw_stale_confirmations(db, docket, group))
         attempted_notifications.update(withdrawn_ids)
         written += len(withdrawn_ids)

@@ -4057,3 +4057,209 @@ async def test_failed_and_incomplete_cron_scans_send_operational_slack_alert(mon
     assert sent[-1]["level"] == "error"
     assert sent[-1]["details"] == {"error_type": "ConnectionError"}
     assert "network down" not in json.dumps(sent[-1])
+
+
+@pytest.mark.asyncio
+async def test_partial_entry_hydration_failure_does_not_withdraw_existing_link(monkeypatch):
+    _enable(monkeypatch)
+    today = datetime.now(timezone.utc).date().isoformat()
+    client = _client(name="John Smith", dobs=["1985-01-15"])
+
+    class _PartialEntryOutage(_CourtListener):
+        def __init__(self):
+            super().__init__(
+                hits=[_hit(id=1001, docket_id=1001, recap_documents=[])],
+                parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+            )
+            self.stage = 1
+            self.entries_error_ids = set()
+            self.entries_error = {"success": False, "error": "HTTP 503", "status_code": 503, "results": []}
+
+        async def search_recent(self, **kwargs):
+            if kwargs["search_type"] != "r":
+                return {"success": True, "results": [], "truncated": False}
+            if self.stage == 1:
+                return {"success": True, "results": [_hit(id=1001, docket_id=1001, recap_documents=[])], "truncated": False}
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [
+                    _hit(
+                        id=1001,
+                        docket_id=1001,
+                        recap_documents=[{"id": 9, "docket_entry_id": 42, "description": "Order"}],
+                    ),
+                    _hit(
+                        id=1002,
+                        docket_id=1002,
+                        docketNumber="2:24-cr-00456",
+                        recap_documents=[{"id": 10, "description": "Detention hearing"}],
+                    ),
+                ],
+            }
+
+        async def list_docket_entries(self, docket_id, **kwargs):
+            if docket_id in self.entries_error_ids:
+                return self.entries_error
+            if docket_id == 1002:
+                return {"success": True, "truncated": False, "results": []}
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [{"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": today}],
+            }
+
+    court = _PartialEntryOutage()
+    db = _DB()
+
+    scan1 = await _scan(db, court, [client])
+    assert scan1["confirmed"] == 1
+    row_1001 = [r for r in db.docket_events.docs if r["docket_id"] == "1001"][0]
+    assert row_1001["match_status"] == "confirmed"
+    assert row_1001["auto_linked"] is True
+    assert row_1001["filing_id"] == "entry:42"
+
+    # During Scan 2, docket 1001 returns a truncated benign RECAP snippet while entry hydration fails (1002 succeeds).
+    court.stage = 2
+    court.entries_error_ids = {1001}
+    scan2 = await _scan(db, court, [client])
+    assert scan2["success"] is True
+    assert scan2["incomplete_coverage"] is True
+    assert scan2["truncated"] is True
+    row_1001 = [r for r in db.docket_events.docs if r["docket_id"] == "1001"][0]
+    assert row_1001["match_status"] == "confirmed"
+    assert row_1001["auto_linked"] is True
+
+    # Recover entry hydration on Scan 3: pending slice drains cleanly and entry:42 stays confirmed.
+    court.entries_error_ids = set()
+    scan3 = await _scan(db, court, [client])
+    assert scan3["incomplete_coverage"] is False
+    row_1001 = [r for r in db.docket_events.docs if r["docket_id"] == "1001"][0]
+    assert row_1001["match_status"] == "confirmed"
+    assert row_1001["auto_linked"] is True
+
+
+@pytest.mark.asyncio
+async def test_restored_or_upgraded_row_retry_uses_confirmed_notification_not_downgrade(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
+    from dashboard.services.federal_bond_risk import _stored_notification
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[{"id": 9, "description": "Arrest warrant issued for John Smith"}])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+    )
+    await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+
+    db.active_bonds.docs[0]["status"] = "exonerated"
+    await run_federal_bond_risk_scan(db, client=_CourtListener(hits=[]), notifier=_Notifier(), pause_s=0)
+    assert db.docket_events.docs[0]["match_status"] == "withdrawn"
+    assert db.docket_events.docs[0]["downgrade_reason"] == "client_no_longer_active"
+
+    # Reinstate bond while notifications.update_one fails on the immediate write.
+    db.active_bonds.docs[0]["status"] = "reinstated"
+    real_update = db.notifications.update_one
+
+    async def fail_notify(filt, update, upsert=False):
+        raise RuntimeError("notifications temporarily unavailable")
+
+    db.notifications.update_one = fail_notify
+    await run_federal_bond_risk_scan(db, client=court, notifier=_Notifier(), pause_s=0)
+    assert db.docket_events.docs[0]["match_status"] == "confirmed"
+    assert db.docket_events.docs[0]["downgrade_reason"] == ""
+    assert db.docket_events.docs[0]["notification_written"] is False
+
+    # Restore notifications on Scan 4: retry_pending_notifications writes a confirmed alert, not a withdrawal.
+    db.notifications.update_one = real_update
+    await run_federal_bond_risk_scan(db, client=_CourtListener(hits=[]), notifier=_Notifier(), pause_s=0)
+    assert db.docket_events.docs[0]["notification_written"] is True
+    assert db.docket_events.docs[0]["notification_status"] == "confirmed"
+    retried = db.notifications.docs[-1]
+    assert retried["metadata"]["match_status"] == "confirmed"
+    assert retried["metadata"]["auto_linked"] is True
+    assert "withdrawn" not in retried["title"].lower()
+
+    # Even if a legacy confirmed row still carries stale downgrade_reason, _stored_notification ignores it.
+    legacy_note = _stored_notification({
+        "source_id": "legacy-1",
+        "match_status": "confirmed",
+        "auto_linked": True,
+        "downgrade_reason": "client_no_longer_active",
+        "title": "Federal bond risk linked — Warrant",
+        "description": "Confirmed for John Smith.",
+    })
+    assert legacy_note["metadata"]["match_status"] == "confirmed"
+    assert legacy_note["metadata"]["auto_linked"] is True
+
+
+@pytest.mark.asyncio
+async def test_upgrade_clears_stale_slack_claim_and_mismatch_releases_claim(monkeypatch):
+    _enable(monkeypatch)
+    from dashboard.services.federal_bond_risk import SOURCE, _claim_slack_delivery, _now
+
+    # Case 1: active slack_claim from possible revision must not block the upgraded confirmed Slack post.
+    court = _CourtListener(hits=[_hit()], parties=[{"name": "Smith, John"}])
+    db = _DB()
+    notifier1 = _Notifier()
+    await _scan(db, court, [_client(dobs=["1985-01-15"])], notifier1)
+    assert db.docket_events.docs[0]["match_status"] == "possible"
+    prior_claim_at = _now()
+    db.docket_events.docs[0]["slack_delivered"] = False
+    db.docket_events.docs[0]["slack_claim"] = True
+    db.docket_events.docs[0]["slack_claim_at"] = prior_claim_at
+
+    court.parties = [{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}]
+    notifier2 = _Notifier()
+    scan2 = await _scan(db, court, [_client(dobs=["1985-01-15"])], notifier2)
+    assert scan2["slack_sent"] == 1
+    assert db.docket_events.docs[0]["match_status"] == "confirmed"
+    assert db.docket_events.docs[0]["slack_delivered"] is True
+    assert db.docket_events.docs[0]["slack_claim"] is False
+    assert db.docket_events.docs[0]["slack_claim_at"] != prior_claim_at
+    assert notifier2.calls[-1]["details"]["match_status"] == "confirmed"
+
+    # Case 2: concurrent upgrade lands after update_one claims possible rev 0; mismatch must release the claim.
+    db_race = _DB()
+    db_race.docket_events.docs.append({
+        "_id": "race-claim",
+        "source": SOURCE,
+        "source_id": "src-claim",
+        "match_status": "possible",
+        "notification_revision": 0,
+        "slack_delivered": False,
+        "slack_claim": False,
+        "auto_linked": False,
+    })
+    real_find = db_race.docket_events.find_one
+    flipped = {"done": False}
+
+    async def upgrade_before_fresh_read(filt=None, projection=None, sort=None):
+        if not flipped["done"] and filt == {"source": SOURCE, "source_id": "src-claim"}:
+            flipped["done"] = True
+            db_race.docket_events.docs[0]["match_status"] = "confirmed"
+            db_race.docket_events.docs[0]["notification_revision"] = 1
+            db_race.docket_events.docs[0]["auto_linked"] = True
+        return await real_find(filt, projection, sort)
+
+    db_race.docket_events.find_one = upgrade_before_fresh_read
+    assert await _claim_slack_delivery(db_race, "src-claim", match_status="possible", revision=0) is None
+    assert db_race.docket_events.docs[0]["slack_claim"] is False
+    assert db_race.docket_events.docs[0]["slack_claim_at"] == ""
+    claimed_confirmed = await _claim_slack_delivery(
+        db_race, "src-claim", match_status="confirmed", revision=1,
+    )
+    assert claimed_confirmed is not None
+    assert claimed_confirmed["match_status"] == "confirmed"
