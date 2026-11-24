@@ -5204,3 +5204,98 @@ async def test_client_retries_reserve_quota_before_sending_and_stop_when_exhaust
     assert len(calls_503) == 2
     assert len(retry_sleeps) == 1
     assert len(db_503.federal_bond_risk_state.docs[0]["timestamps"]) == MAX_REQUESTS_PER_HOUR
+
+
+@pytest.mark.asyncio
+async def test_quota_slot_timestamps_record_actual_dispatch_time_after_pacing_and_backoff(monkeypatch):
+    import asyncio
+    from dashboard.services.federal_bond_risk import (
+        DEFAULT_PAUSE_S,
+        MAX_REQUESTS_PER_MINUTE,
+        _courtlistener_account_key,
+        _request_quota_id,
+    )
+
+    _enable(monkeypatch)
+    clock = [1000.0]
+    sleeps = []
+    dispatched = []
+
+    class _FakeTime:
+        @staticmethod
+        def time():
+            return clock[0]
+
+    async def fake_sleep(seconds):
+        sleeps.append((clock[0], seconds))
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.time", _FakeTime)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class _Response:
+        def __init__(self, status_code, payload, headers=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+    class _HTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            dispatched.append((clock[0], (params or {}).get("type")))
+            # First rd call returns 429 with 30s Retry-After; retry returns 200.
+            if (params or {}).get("type") == "rd" and len([d for d in dispatched if d[1] == "rd"]) == 1:
+                return _Response(429, {"detail": "throttled"}, {"Retry-After": "30"})
+            return _Response(200, {"results": []})
+
+    account_key = _courtlistener_account_key(api_token="test-token")
+    quota_id = _request_quota_id(account_key)
+    db = _DB()
+    # Five prior requests 10s ago already fill the rolling 60s window at t=1000.0.
+    seed_timestamps = [990.0] * MAX_REQUESTS_PER_MINUTE
+    db.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": list(seed_timestamps),
+        "quota_revision": 0,
+    })
+
+    client = CourtListenerClient(api_token="test-token")
+    client._in_maintenance_window = lambda: False
+    client._client = _HTTP()
+
+    # Scan 1: r waits 50s for rolling 60s window (1050.0), rd waits 12s (1062.0),
+    # then 429 retry waits 30s Retry-After (1092.0).
+    scan1 = await run_federal_bond_risk_scan(
+        db, client=client, notifier=_Notifier(), pause_s=DEFAULT_PAUSE_S, clients=[_client()],
+    )
+    assert scan1["success"] is True
+    stored_after_scan1 = list(db.federal_bond_risk_state.docs[0]["timestamps"])
+    assert stored_after_scan1[-3:] == [pytest.approx(1050.0), pytest.approx(1062.0), pytest.approx(1092.0)]
+
+    # Scan 2 begins 0.1s later (1092.1): must measure from actual retry dispatch (1092.0),
+    # sleep ~11.9s until 1104.0, and never fire consecutively.
+    clock[0] = 1092.1
+    scan2 = await run_federal_bond_risk_scan(
+        db, client=client, notifier=_Notifier(), pause_s=DEFAULT_PAUSE_S, clients=[_client()],
+    )
+    assert scan2["success"] is True
+
+    dispatch_times = [ts for ts, _stype in dispatched]
+    assert dispatch_times == [
+        pytest.approx(1050.0),
+        pytest.approx(1062.0),
+        pytest.approx(1092.0),
+        pytest.approx(1104.0),
+        pytest.approx(1116.0),
+    ]
+    all_events = sorted(seed_timestamps + dispatch_times)
+    for t1, t2 in zip(dispatch_times, dispatch_times[1:]):
+        assert t2 - t1 >= DEFAULT_PAUSE_S - 1e-6
+    for ts in dispatch_times:
+        in_window = [val for val in all_events if ts - 60.0 < val <= ts]
+        assert len(in_window) <= MAX_REQUESTS_PER_MINUTE
+

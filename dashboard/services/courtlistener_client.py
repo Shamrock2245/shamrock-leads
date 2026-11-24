@@ -359,13 +359,13 @@ class CourtListenerClient:
         self._rate_limited = 0
 
     def set_request_gate(self, gate) -> None:
-        """Install or clear an async callable ``gate(attempt, planned_delay) -> bool``."""
+        """Install or clear an async callable ``gate(attempt, min_delay) -> bool`` that reserves capacity and awaits pacing/backoff before dispatch."""
         self._request_gate = gate
 
-    async def _check_request_gate(self, attempt: int, planned_delay: float = 0.0) -> bool:
+    async def _check_request_gate(self, attempt: int, min_delay: float = 0.0) -> bool:
         if self._request_gate is None:
             return True
-        return bool(await self._request_gate(attempt, planned_delay))
+        return bool(await self._request_gate(attempt, min_delay))
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -392,19 +392,25 @@ class CourtListenerClient:
                         retry_after = resp.headers.get("Retry-After")
                         if retry_after and retry_after.isdigit():
                             wait = max(wait, int(retry_after))
-                        if not await self._check_request_gate(attempt + 1, wait):
-                            return resp
-                        log.warning("Rate limited (429), retry in %.1fs (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
-                        await asyncio.sleep(wait)
+                        if self._request_gate is not None:
+                            if not await self._check_request_gate(attempt + 1, wait):
+                                return resp
+                            log.warning("Rate limited (429), retry after %.1fs gate wait (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
+                        else:
+                            log.warning("Rate limited (429), retry in %.1fs (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
+                            await asyncio.sleep(wait)
                         continue
                     return resp
                 if resp.status_code >= 500 and attempt < MAX_RETRIES:
                     self._errors += 1
                     wait = BACKOFF_BASE * (2 ** attempt)
-                    if not await self._check_request_gate(attempt + 1, wait):
-                        return resp
-                    log.warning("Server error %d, retry in %.1fs", resp.status_code, wait)
-                    await asyncio.sleep(wait)
+                    if self._request_gate is not None:
+                        if not await self._check_request_gate(attempt + 1, wait):
+                            return resp
+                        log.warning("Server error %d, retry after %.1fs gate wait", resp.status_code, wait)
+                    else:
+                        log.warning("Server error %d, retry in %.1fs", resp.status_code, wait)
+                        await asyncio.sleep(wait)
                     continue
                 return resp
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
@@ -412,10 +418,13 @@ class CourtListenerClient:
                 last_exc = e
                 if attempt < MAX_RETRIES:
                     wait = BACKOFF_BASE * (2 ** attempt)
-                    if not await self._check_request_gate(attempt + 1, wait):
-                        raise
-                    log.warning("Connection error, retry in %.1fs: %s", wait, str(e)[:80])
-                    await asyncio.sleep(wait)
+                    if self._request_gate is not None:
+                        if not await self._check_request_gate(attempt + 1, wait):
+                            raise
+                        log.warning("Connection error, retry after %.1fs gate wait: %s", wait, str(e)[:80])
+                    else:
+                        log.warning("Connection error, retry in %.1fs: %s", wait, str(e)[:80])
+                        await asyncio.sleep(wait)
         raise last_exc or httpx.ReadTimeout("Max retries exceeded")
 
     def _in_maintenance_window(self) -> bool:

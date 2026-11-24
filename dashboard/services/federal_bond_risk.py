@@ -2171,15 +2171,78 @@ class _RequestQuota:
             idx -= 1
         return out
 
+    @staticmethod
+    def _replace_slots(
+        values: list[float],
+        old_ts: float,
+        new_ts: float,
+        count: int,
+    ) -> list[float]:
+        out = list(values)
+        needed = max(int(count or 0), 0)
+        replaced = 0
+        idx = len(out) - 1
+        while idx >= 0 and replaced < needed:
+            if abs(float(out[idx]) - float(old_ts)) < 1e-6:
+                out.pop(idx)
+                replaced += 1
+            idx -= 1
+        if replaced:
+            out.extend([float(new_ts)] * replaced)
+        return sorted(out)[-500:]
+
+    async def mark_dispatched(
+        self,
+        db,
+        reserved: int,
+        reserve_ts: float,
+    ) -> float:
+        """Update reserved slot timestamps to actual HTTP dispatch time."""
+        count = max(int(reserved or 0), 0)
+        if count == 0:
+            return reserve_ts
+        collection = _shared_quota_collection(db)
+        if collection is None:
+            dispatch_ts = time.time()
+            pruned = self._prune_values(self.timestamps, dispatch_ts)
+            self.timestamps = self._replace_slots(pruned, reserve_ts, dispatch_ts, count)
+            return dispatch_ts
+        quota_id = _request_quota_id(self.account_key)
+        for _ in range(8):
+            dispatch_ts = time.time()
+            try:
+                row = await collection.find_one({"_id": quota_id}) or {}
+                rev = int(row.get("quota_revision") or 0)
+                stored = self._prune_values(row.get("timestamps") or [], dispatch_ts)
+                updated = self._replace_slots(stored, reserve_ts, dispatch_ts, count)
+                if updated == stored:
+                    self.timestamps = stored
+                    return reserve_ts
+                res = await collection.update_one(
+                    _quota_rev_filter(quota_id, rev),
+                    {"$set": {
+                        "timestamps": updated,
+                        "quota_revision": rev + 1,
+                        "updated_at": _now(),
+                    }},
+                )
+                if getattr(res, "matched_count", 0) == 1:
+                    self.timestamps = updated
+                    return dispatch_ts
+            except Exception as exc:
+                log.warning("Federal bond-risk quota dispatch stamp failed: %s", type(exc).__name__)
+                return reserve_ts
+        log.warning("Federal bond-risk quota dispatch stamp failed after CAS retries")
+        return reserve_ts
+
     async def pace(
         self,
         pause_s: float,
         *,
         already_reserved: int = 0,
-        planned_delay: float = 0.0,
-    ) -> None:
-        if pause_s <= 0:
-            return
+        min_delay: float = 0.0,
+    ) -> float:
+        wait = max(0.0, float(min_delay or 0.0))
         ts_now = self.prune()
         reserved = max(int(already_reserved or 0), 0)
         prior_used = max(0, self.run_used - reserved)
@@ -2188,18 +2251,20 @@ class _RequestQuota:
             if reserved > 0 and len(self.timestamps) >= reserved
             else list(self.timestamps)
         )
-        wait = 0.0
-        recent = sorted(ts for ts in prior_timestamps if ts >= ts_now - 60.0)
-        if prior_used > 0:
-            wait = float(pause_s)
-        elif recent:
-            wait = max(0.0, float(pause_s) - (ts_now - recent[-1]))
-        if len(recent) >= self.minute_limit:
-            window_wait = max(0.0, (recent[-self.minute_limit] + 60.0) - ts_now)
-            wait = max(wait, window_wait)
-        extra = max(0.0, wait - max(0.0, float(planned_delay or 0.0)))
-        if extra > 0:
-            await asyncio.sleep(extra)
+        if pause_s > 0:
+            pace_wait = 0.0
+            recent = sorted(ts for ts in prior_timestamps if ts >= ts_now - 60.0)
+            if prior_used > 0:
+                pace_wait = float(pause_s)
+            elif recent:
+                pace_wait = max(0.0, float(pause_s) - (ts_now - recent[-1]))
+            if len(recent) >= self.minute_limit:
+                window_wait = max(0.0, (recent[-self.minute_limit] + 60.0) - ts_now)
+                pace_wait = max(pace_wait, window_wait)
+            wait = max(wait, pace_wait)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        return wait
 
 
 async def _load_request_quota(
@@ -2353,7 +2418,8 @@ async def _collect_dockets(
                     quota_throttled = True
                     commit_checkpoints = False
                     break
-                await quota.pace(pause_s, already_reserved=granted)
+                if await quota.pace(pause_s, already_reserved=granted) > 0:
+                    reserve_ts = await quota.mark_dispatched(db, granted, reserve_ts)
                 before_calls = _client_request_count(client)
                 try:
                     result = await client.search_recent(
@@ -2582,7 +2648,8 @@ async def _hydrate(
             granted_brief, reserve_ts = await quota.reserve(db, 1, min_required=1)
             if granted_brief == 0:
                 return None, "", "", "", True
-            await quota.pace(pause_s, already_reserved=granted_brief)
+            if await quota.pace(pause_s, already_reserved=granted_brief) > 0:
+                reserve_ts = await quota.mark_dispatched(db, granted_brief, reserve_ts)
         else:
             granted_brief, reserve_ts = 0, 0.0
         before_calls = _client_request_count(client)
@@ -2627,7 +2694,8 @@ async def _hydrate(
                 if _can_defer_seed():
                     return None, "", "", "", True
                 return None, f"{docket_id} party_list_truncated", "", "", False
-            await quota.pace(pause_s, already_reserved=granted_parties)
+            if await quota.pace(pause_s, already_reserved=granted_parties) > 0:
+                reserve_ts = await quota.mark_dispatched(db, granted_parties, reserve_ts)
         else:
             granted_parties, reserve_ts = 50, 0.0
             party_cap = 50
@@ -2698,7 +2766,8 @@ async def _hydrate(
                     return None, "", "", "", True
                 log.warning("Docket %s exhausted request budget before entries", docket_id)
                 return None, "", f"{docket_id} entry_list_truncated", "", False
-            await quota.pace(pause_s, already_reserved=granted_entries)
+            if await quota.pace(pause_s, already_reserved=granted_entries) > 0:
+                reserve_ts = await quota.mark_dispatched(db, granted_entries, reserve_ts)
         else:
             granted_entries, reserve_ts = MAX_ENTRY_PAGES, 0.0
             if pause_s:
@@ -4190,11 +4259,12 @@ async def run_federal_bond_risk_scan(
             }
         quota = await _load_request_quota(db, run_limit=max_requests, account_key=account_key)
         if callable(getattr(client, "set_request_gate", None)):
-            async def _request_gate(attempt: int, planned_delay: float = 0.0) -> bool:
-                granted, _ts = await quota.reserve(db, 1, min_required=1)
+            async def _request_gate(attempt: int, min_delay: float = 0.0) -> bool:
+                granted, reserve_ts = await quota.reserve(db, 1, min_required=1)
                 if granted == 0:
                     return False
-                await quota.pace(pause_s, already_reserved=1, planned_delay=planned_delay)
+                if await quota.pace(pause_s, already_reserved=1, min_delay=min_delay) > 0:
+                    await quota.mark_dispatched(db, 1, reserve_ts)
                 return True
 
             client.set_request_gate(_request_gate)
