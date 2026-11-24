@@ -4283,3 +4283,86 @@ async def test_codex_1110_p1_absent_booking_still_uses_caller_identity():
     assert db["contacts"].docs[0]["defendant_name"] == "Casey Sample"
     assert db["contacts"].docs[0]["county"] == "Lee"
     assert db["contacts"].docs[0]["state"] == "FL"
+
+
+@pytest.mark.asyncio
+async def test_motor_future_cursors_awaited_in_discovery_and_purge():
+    """Regression: Motor AsyncIOMotorCursor.to_list() returns asyncio.Future, not a coroutine.
+
+    asyncio.iscoroutine(future) is False; inspect.isawaitable(future) is True.
+    Both run_lee_discovery_batch and purge_unreviewed_candidates (plus _find_list)
+    must await Future-returning cursors cleanly instead of raising RuntimeError/TypeError.
+    """
+    import asyncio
+    from dashboard.services.contact_discovery import _find_list
+
+    class _FutureCursor:
+        def __init__(self, rows):
+            self._rows = list(rows)
+            self._limit = None
+
+        def sort(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, n):
+            self._limit = n
+            return self
+
+        def to_list(self, length=None):
+            loop = asyncio.get_running_loop()
+            fut = loop.create_future()
+            cap = self._limit if self._limit is not None else length
+            fut.set_result(self._rows[:cap] if cap is not None else list(self._rows))
+            return fut
+
+        def __aiter__(self):
+            cap = self._limit
+            self._it = iter(self._rows[:cap] if cap is not None else self._rows)
+            return self
+
+        async def __anext__(self):
+            try:
+                return next(self._it)
+            except StopIteration:
+                raise StopAsyncIteration
+
+    class _FutureCollection(AsyncCollection):
+        def find(self, query=None, projection=None):
+            matched = [copy.deepcopy(d) for d in self.docs if _match(d, query or {})]
+            return _FutureCursor(matched)
+
+    db = AsyncDB()
+    for name in ("arrests", "contacts", "indemnitors", "intakes", "intake_queue",
+                 "prospective_bonds", "active_bonds", "family_graph", "family_relationships"):
+        db._cols[name] = _FutureCollection()
+
+    booking = _booking()
+    booking["indemnitor_discovery"] = {"status": "queued"}
+    db["arrests"].docs.append(booking)
+
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+    db["contacts"].docs.append({
+        "_id": "expired-doc",
+        "booking_number": "B-OLD",
+        "county": "Lee",
+        "state": "FL",
+        "discovery_rev": 1,
+        "discovered_contacts": [{
+            "candidate_id": "old-c1",
+            "name": "Expired Candidate",
+            "review_status": "unreviewed",
+            "discovered_at": old_ts,
+        }],
+    })
+
+    found = await _find_list(db["arrests"], {"booking_number": "B-100"}, limit=5)
+    assert len(found) == 1
+
+    purged = await purge_unreviewed_candidates(db)
+    assert purged["purged_candidates"] == 1
+    assert purged["docs"] == 1
+
+    batch = await run_lee_discovery_batch(db, limit=5)
+    assert batch["failed"] == 0
+    assert batch["claimed"] == 1
+    assert batch["completed"] == 1
