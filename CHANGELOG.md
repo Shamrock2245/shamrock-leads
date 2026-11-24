@@ -13,6 +13,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Tests
 - `tests/test_federal_bond_risk.py` verifies cross-caller CourtListener quota sharing and 429 handling across `DocketMonitor` (including rotating batch resumption after quota truncation), `court_data_ingestor`, interactive `court_dockets` endpoints (including retry quota denials and downstream dossier requests), concurrent virtual-clock callers (including delayed wakeup spacing revalidation), and stable `entry:<id>` persistence across transient entry-hydration outages.
 
+## [Unreleased] — 2026-11-24 (Await Motor Future cursors in Lee co-signer discovery)
+
+### Fixed
+- **Lee co-signer discovery and unreviewed-candidate retention purge await Motor `Future` cursors.** `dashboard/services/contact_discovery.py` previously guarded `cursor.to_list()` with `asyncio.iscoroutine(rows)`, which is `False` for Motor's `AsyncIOMotorCursor.to_list()` (`_asyncio.Future`), causing live cron runs (`lee_indemnitor_discovery` and `contact_candidate_retention`) to fail with `RuntimeError`. All three call sites (`_find_list`, `run_lee_discovery_batch`, and `purge_unreviewed_candidates`) now use `inspect.isawaitable(rows)`.
+
+### Tests
+- `tests/test_lee_indemnitor_discovery.py::test_motor_future_cursors_awaited_in_discovery_and_purge` exercises `asyncio.Future`-returning cursors across `_find_list`, `purge_unreviewed_candidates`, and `run_lee_discovery_batch`.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk contiguous names, capped slice checkpoints, and query stems)
 
 ### Fixed

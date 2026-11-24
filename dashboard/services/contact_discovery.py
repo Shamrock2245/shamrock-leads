@@ -9,6 +9,7 @@ normalized address + ZIP. Nothing in this module calls, texts, or emails.
 
 import asyncio
 import hashlib
+import inspect
 import logging
 import os
 import re
@@ -842,7 +843,7 @@ async def _find_list(collection: Any, query: Dict[str, Any], limit: int = 25) ->
         cursor = cursor.limit(limit)
     if hasattr(cursor, "to_list"):
         rows = cursor.to_list(length=limit)
-        if asyncio.iscoroutine(rows):
+        if inspect.isawaitable(rows):
             rows = await rows
         return list(rows or [])
     return []
@@ -2432,7 +2433,7 @@ async def run_lee_discovery_batch(db: Any, *, limit: int = DISCOVERY_BATCH_LIMIT
             cursor = cursor.limit(limit)
         if hasattr(cursor, "to_list"):
             rows = cursor.to_list(length=limit)
-            if asyncio.iscoroutine(rows):
+            if inspect.isawaitable(rows):
                 rows = await rows
             pending = list(rows or [])
         else:
@@ -2588,7 +2589,7 @@ async def purge_unreviewed_candidates(
                 cursor = cursor.limit(limit)
             if hasattr(cursor, "to_list"):
                 rows = cursor.to_list(length=limit)
-                if asyncio.iscoroutine(rows):
+                if inspect.isawaitable(rows):
                     rows = await rows
                 stored = list(rows or [])
             else:
