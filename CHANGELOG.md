@@ -3,6 +3,14 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-24 (Live MongoDB inmate & release-guidance lookup for ElevenLabs voice agents)
+
+### Added
+- **Live voice inmate, bond, court-date, and release-guidance endpoint (`/api/paperwork/shannon/inmate-status`).** `dashboard/routers/shannon_voice_lookup.py` serves authenticated `GET`/`POST` lookups directly from live MongoDB `arrests`, `active_bonds`, and `court_reminders` so ElevenLabs voice agents (Shannon, Sofia, Eric) answer live custody, bond estimate, First Appearance, special hold (DUI 8-hour, domestic violence, VOP/no-bond), and release-process questions in <150ms without legacy GAS cold-start timeouts. Fails closed on unauthenticated requests and ambiguous multi-defendant matches, redacts Miami-Dade internal keys, and never exposes third-party indemnitor PII.
+
+### Tests
+- `tests/test_shannon_voice_lookup.py` verifies fail-closed auth, live custody/bond estimates, DUI/DV hold guidance, released-status honesty, ambiguous-name disambiguation, third-party PII exclusion, and Miami-Dade key redaction.
+
 ## [Unreleased] — 2026-11-24 (Shared CourtListener account quota and stable entry IDs)
 
 ### Fixed

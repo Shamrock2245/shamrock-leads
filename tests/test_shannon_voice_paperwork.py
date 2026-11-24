@@ -64,6 +64,7 @@ def test_shannon_machine_routes_bypass_pin_middleware():
         "/api/paperwork/shannon/email",
         "/api/paperwork/shannon/id-link",
         "/api/paperwork/shannon/id-status",
+        "/api/paperwork/shannon/inmate-status",
         "/paperwork/shannon/id/abc",
     ):
         assert any(path.startswith(p) for p in OPEN_PREFIXES), path

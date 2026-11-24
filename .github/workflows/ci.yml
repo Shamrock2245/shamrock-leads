@@ -256,6 +256,7 @@ jobs:
             tests/test_paperwork_handoff_token.py \
             tests/test_paperwork_done.py \
             tests/test_shannon_voice_paperwork.py \
+            tests/test_shannon_voice_lookup.py \
             tests/test_wix_imessage_send.py \
             tests/test_swipesimple_invoice_claims.py \
             tests/test_swipesimple_session_keepalive.py \
