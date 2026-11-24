@@ -332,6 +332,10 @@ def courts_for_states(states: list) -> list:
     return [cid for cid, meta in SE_US_COURTS.items() if meta["state"] in states_upper]
 
 
+class CourtListenerQuotaBlocked(Exception):
+    """Raised when a caller-supplied request gate denies an HTTP attempt."""
+
+
 class CourtListenerClient:
     """Async client for CourtListener REST API v4.
 
@@ -340,8 +344,9 @@ class CourtListenerClient:
     and bail-relevant opinion filtering.
     """
 
-    def __init__(self, api_token: Optional[str] = None):
+    def __init__(self, api_token: Optional[str] = None, *, request_gate=None):
         self.api_token = api_token
+        self._request_gate = request_gate
         self._headers = {
             "User-Agent": "ShamrockLeads/1.0 (https://shamrockbailbonds.biz; admin@shamrockbailbonds.biz)",
         }
@@ -352,6 +357,15 @@ class CourtListenerClient:
         self._requests_made = 0
         self._errors = 0
         self._rate_limited = 0
+
+    def set_request_gate(self, gate) -> None:
+        """Install or clear an async callable ``gate(attempt, planned_delay) -> bool``."""
+        self._request_gate = gate
+
+    async def _check_request_gate(self, attempt: int, planned_delay: float = 0.0) -> bool:
+        if self._request_gate is None:
+            return True
+        return bool(await self._request_gate(attempt, planned_delay))
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -366,21 +380,29 @@ class CourtListenerClient:
         client = await self._get_client()
         last_exc = None
         for attempt in range(MAX_RETRIES + 1):
+            if attempt == 0 and not await self._check_request_gate(0, 0.0):
+                raise CourtListenerQuotaBlocked("quota_exhausted")
             try:
                 self._requests_made += 1
                 resp = await getattr(client, method)(url, **kwargs)
                 if resp.status_code == 429:
                     self._rate_limited += 1
-                    wait = BACKOFF_BASE * (2 ** attempt)
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        wait = max(wait, int(retry_after))
-                    log.warning("Rate limited (429), retry in %.1fs (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
-                    await asyncio.sleep(wait)
-                    continue
+                    if attempt < MAX_RETRIES:
+                        wait = BACKOFF_BASE * (2 ** attempt)
+                        retry_after = resp.headers.get("Retry-After")
+                        if retry_after and retry_after.isdigit():
+                            wait = max(wait, int(retry_after))
+                        if not await self._check_request_gate(attempt + 1, wait):
+                            return resp
+                        log.warning("Rate limited (429), retry in %.1fs (attempt %d/%d)", wait, attempt + 1, MAX_RETRIES)
+                        await asyncio.sleep(wait)
+                        continue
+                    return resp
                 if resp.status_code >= 500 and attempt < MAX_RETRIES:
                     self._errors += 1
                     wait = BACKOFF_BASE * (2 ** attempt)
+                    if not await self._check_request_gate(attempt + 1, wait):
+                        return resp
                     log.warning("Server error %d, retry in %.1fs", resp.status_code, wait)
                     await asyncio.sleep(wait)
                     continue
@@ -390,6 +412,8 @@ class CourtListenerClient:
                 last_exc = e
                 if attempt < MAX_RETRIES:
                     wait = BACKOFF_BASE * (2 ** attempt)
+                    if not await self._check_request_gate(attempt + 1, wait):
+                        raise
                     log.warning("Connection error, retry in %.1fs: %s", wait, str(e)[:80])
                     await asyncio.sleep(wait)
         raise last_exc or httpx.ReadTimeout("Max retries exceeded")
@@ -554,6 +578,15 @@ class CourtListenerClient:
         try:
             request_kwargs = {"params": params} if params else {}
             resp = await self._request_with_retry("get", url, **request_kwargs)
+        except CourtListenerQuotaBlocked:
+            return {
+                "success": False,
+                "skipped": "quota_exhausted",
+                "error": "quota_exhausted",
+                "status_code": None,
+                "results": [],
+                "data": None,
+            }
         except Exception as exc:
             log.warning("CourtListener request failed: %s", type(exc).__name__)
             return {
@@ -684,17 +717,34 @@ class CourtListenerClient:
             params = None
         combined: list = []
         pages = 0
+        last_data: dict = {}
         last: dict = {"success": False, "results": [], "status_code": None, "data": None}
         for _ in range(page_cap):
             last = await self._read_v4(url, params)
             pages += 1
             if not last.get("success"):
+                if last.get("skipped") == "quota_exhausted":
+                    if pages > 1:
+                        return {
+                            "success": True,
+                            "status_code": 200,
+                            "results": combined,
+                            "data": last_data,
+                            "pages_fetched": pages - 1,
+                            "truncated": True,
+                            "resume_url": url,
+                            "quota_exhausted": True,
+                        }
+                    last["results"] = []
+                    last["pages_fetched"] = 0
+                    return last
                 last["results"] = combined
                 last["pages_fetched"] = pages if not combined else pages - 1
                 return last
             page_rows = list(last.get("results") or [])
             combined.extend(page_rows)
             data = last.get("data") if isinstance(last.get("data"), dict) else {}
+            last_data = data
             next_url = str((data or {}).get("next") or "").strip()
             if _search_page_left_window(page_rows, until_entry_before):
                 return {
@@ -720,7 +770,7 @@ class CourtListenerClient:
                 return payload
             url = next_url
             params = None
-            if pause_s:
+            if pause_s and self._request_gate is None:
                 await asyncio.sleep(pause_s)
         return {
             "success": True,
@@ -766,6 +816,10 @@ class CourtListenerClient:
             res = await self._read_v4(url, params)
             pages += 1
             if not res.get("success"):
+                if res.get("skipped") == "quota_exhausted":
+                    res["results"] = combined or []
+                    res["pages_fetched"] = pages - 1
+                    return res
                 res["results"] = combined or res.get("results") or []
                 res["pages_fetched"] = pages if not combined else pages - 1
                 return res
@@ -793,7 +847,7 @@ class CourtListenerClient:
                 }
             url = next_url
             params = None
-            if pause_s:
+            if pause_s and self._request_gate is None:
                 await asyncio.sleep(pause_s)
         return {
             "success": True,
@@ -825,6 +879,10 @@ class CourtListenerClient:
             res = await self._read_v4(url, params)
             pages += 1
             if not res.get("success"):
+                if res.get("skipped") == "quota_exhausted":
+                    res["results"] = combined or []
+                    res["pages_fetched"] = pages - 1
+                    return res
                 res["results"] = combined or res.get("results") or []
                 res["pages_fetched"] = pages if not combined else pages - 1
                 return res
@@ -842,7 +900,7 @@ class CourtListenerClient:
                 }
             url = next_url
             params = None
-            if pause_s:
+            if pause_s and self._request_gate is None:
                 await asyncio.sleep(pause_s)
         return {
             "success": True,

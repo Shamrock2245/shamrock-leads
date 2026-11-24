@@ -1527,7 +1527,13 @@ def _stop_if_blocked(result: dict) -> None:
             "CourtListener maintenance window. Scan skipped.",
             "maintenance",
         )
-    if result.get("error") in {"ReadTimeout", "ConnectError"}:
+    if (
+        (
+            result.get("status_code") == 429
+            and result.get("skipped") != "quota_exhausted"
+        )
+        or result.get("error") in {"ReadTimeout", "ConnectError"}
+    ):
         raise _ScanStop(
             "CourtListener rate limit or connection failure. Scan stopped with no alerts written.",
             "rate_limited",
@@ -1848,17 +1854,49 @@ async def _clear_pending_slice(db) -> None:
     )
 
 
-def _scan_lease_id() -> str:
-    """One durable scan lease per tenant so manual and scheduled scans serialize."""
-    token = _tenant_scope_token()
-    return "scan_lease" if not token else f"scan_lease:{token}"
+def _courtlistener_account_key(client=None, api_token: Optional[str] = None) -> str:
+    """Stable hashed identifier for the CourtListener API credential."""
+    token = api_token
+    if token is None and client is not None:
+        token = getattr(client, "api_token", None)
+    if token is None:
+        token = os.getenv("COURTLISTENER_API_TOKEN", "")
+    cleaned = str(token or "").strip()
+    if not cleaned:
+        return "default"
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:12]
 
 
-async def _acquire_scan_lease(db) -> Optional[str]:
-    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+def _shared_quota_collection(db):
+    """Unwrap tenant scoping for API-account-level quota and scan-lease docs.
+
+    These coordination documents store only non-PII timestamps, CAS
+    revisions, and opaque lease UUIDs for a shared CourtListener token.
+    Tenant business state (checkpoints, pending slices, alerts) stays
+    tenant-scoped on ``db``.
+    """
+    if db is None:
+        return None
+    from dashboard.tenancy.scope import TenantScopedCollection, TenantScopedDatabase
+
+    raw_db = db._raw if isinstance(db, TenantScopedDatabase) else db
+    collection = getattr(raw_db, "federal_bond_risk_state", None)
+    if isinstance(collection, TenantScopedCollection):
+        return collection._raw
+    return collection
+
+
+def _scan_lease_id(account_key: Optional[str] = None) -> str:
+    """One durable scan lease per CourtListener API account across tenants."""
+    key = (account_key or "").strip() or _courtlistener_account_key()
+    return f"scan_lease:{key}"
+
+
+async def _acquire_scan_lease(db, *, account_key: Optional[str] = None) -> Optional[str]:
+    collection = _shared_quota_collection(db)
     if collection is None:
         return "in_memory"
-    lease_id = _scan_lease_id()
+    lease_id = _scan_lease_id(account_key)
     owner = uuid.uuid4().hex
     now_iso = _now()
     expires_iso = (datetime.now(timezone.utc) + SCAN_LEASE_TTL).isoformat()
@@ -1896,25 +1934,25 @@ async def _acquire_scan_lease(db) -> Optional[str]:
         return None
 
 
-async def _release_scan_lease(db, owner: Optional[str]) -> None:
+async def _release_scan_lease(db, owner: Optional[str], *, account_key: Optional[str] = None) -> None:
     if not owner or owner == "in_memory":
         return
-    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    collection = _shared_quota_collection(db)
     if collection is None:
         return
     try:
         await collection.update_one(
-            {"_id": _scan_lease_id(), "lease_owner": owner},
+            {"_id": _scan_lease_id(account_key), "lease_owner": owner},
             {"$set": {"lease_owner": "", "lease_expires_at": "", "updated_at": _now()}},
         )
     except Exception as exc:
         log.warning("Federal bond-risk scan lease release failed: %s", type(exc).__name__)
 
 
-def _request_quota_id() -> str:
-    """One durable rolling CourtListener request-quota document per tenant."""
-    token = _tenant_scope_token()
-    return "request_quota" if not token else f"request_quota:{token}"
+def _request_quota_id(account_key: Optional[str] = None) -> str:
+    """One durable rolling request-quota doc per CourtListener API account."""
+    key = (account_key or "").strip() or _courtlistener_account_key()
+    return f"request_quota:{key}"
 
 
 def _quota_rev_filter(quota_id: str, rev: int) -> dict:
@@ -1942,7 +1980,7 @@ def _call_request_cost(client, before_count: Optional[int], result: Optional[dic
         after = _client_request_count(client)
         if after is not None and after >= before_count:
             return after - before_count
-    if isinstance(result, dict) and result.get("skipped") in {"no_token", "maintenance"}:
+    if isinstance(result, dict) and result.get("skipped") in {"no_token", "maintenance", "quota_exhausted"}:
         return 0
     if isinstance(result, dict) and result.get("pages_fetched") is not None:
         return max(int(result.get("pages_fetched") or 0), 0)
@@ -1957,6 +1995,7 @@ class _RequestQuota:
     hour_limit: int = MAX_REQUESTS_PER_HOUR
     day_limit: int = MAX_REQUESTS_PER_DAY
     run_used: int = 0
+    account_key: str = ""
 
     @staticmethod
     def _prune_values(values: list, ts_now: float) -> list[float]:
@@ -2018,7 +2057,7 @@ class _RequestQuota:
         """Atomically reserve up to ``requested`` request slots via CAS."""
         wanted = max(int(requested or 0), 1)
         needed = max(int(min_required or 1), 1)
-        collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+        collection = _shared_quota_collection(db)
         if collection is None:
             ts_now = self.prune()
             available = self._available_for(self.timestamps, ts_now)
@@ -2028,7 +2067,7 @@ class _RequestQuota:
             self.timestamps = [*self.timestamps, *([ts_now] * grant)][-500:]
             self.run_used += grant
             return grant, ts_now
-        quota_id = _request_quota_id()
+        quota_id = _request_quota_id(self.account_key)
         for _ in range(8):
             ts_now = time.time()
             try:
@@ -2081,7 +2120,7 @@ class _RequestQuota:
         delta = max(int(actual or 0), 0) - max(int(reserved or 0), 0)
         if delta == 0:
             return
-        collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+        collection = _shared_quota_collection(db)
         if collection is None:
             ts_now = self.prune()
             updated = list(self.timestamps)
@@ -2092,7 +2131,7 @@ class _RequestQuota:
             self.timestamps = updated[-500:]
             self.run_used = max(0, self.run_used + delta)
             return
-        quota_id = _request_quota_id()
+        quota_id = _request_quota_id(self.account_key)
         for _ in range(8):
             ts_now = time.time()
             try:
@@ -2132,7 +2171,13 @@ class _RequestQuota:
             idx -= 1
         return out
 
-    async def pace(self, pause_s: float, *, already_reserved: int = 0) -> None:
+    async def pace(
+        self,
+        pause_s: float,
+        *,
+        already_reserved: int = 0,
+        planned_delay: float = 0.0,
+    ) -> None:
         if pause_s <= 0:
             return
         ts_now = self.prune()
@@ -2152,17 +2197,24 @@ class _RequestQuota:
         if len(recent) >= self.minute_limit:
             window_wait = max(0.0, (recent[-self.minute_limit] + 60.0) - ts_now)
             wait = max(wait, window_wait)
-        if wait > 0:
-            await asyncio.sleep(wait)
+        extra = max(0.0, wait - max(0.0, float(planned_delay or 0.0)))
+        if extra > 0:
+            await asyncio.sleep(extra)
 
 
-async def _load_request_quota(db, *, run_limit: Optional[int] = None) -> _RequestQuota:
+async def _load_request_quota(
+    db,
+    *,
+    run_limit: Optional[int] = None,
+    account_key: Optional[str] = None,
+) -> _RequestQuota:
     effective_run = max(int(run_limit or MAX_REQUESTS_PER_RUN), 1)
-    collection = getattr(db, "federal_bond_risk_state", None) if db is not None else None
+    account = (account_key or "").strip() or _courtlistener_account_key()
+    collection = _shared_quota_collection(db)
     raw_timestamps: list[float] = []
     if collection is not None:
         try:
-            row = await collection.find_one({"_id": _request_quota_id()}) or {}
+            row = await collection.find_one({"_id": _request_quota_id(account)}) or {}
             for item in row.get("timestamps") or []:
                 try:
                     raw_timestamps.append(float(item))
@@ -2170,7 +2222,7 @@ async def _load_request_quota(db, *, run_limit: Optional[int] = None) -> _Reques
                     continue
         except Exception as exc:
             log.warning("Federal bond-risk request quota read failed: %s", type(exc).__name__)
-    quota = _RequestQuota(timestamps=raw_timestamps, run_limit=effective_run)
+    quota = _RequestQuota(timestamps=raw_timestamps, run_limit=effective_run, account_key=account)
     quota.prune()
     return quota
 
@@ -2211,7 +2263,8 @@ async def _collect_dockets(
     Caption surnames are not a filter. A lead-defendant caption with "et al."
     still has to be hydrated so co-defendant parties can be matched.
     """
-    quota = quota or await _load_request_quota(db)
+    quota = quota or await _load_request_quota(db, account_key=_courtlistener_account_key(client))
+    client_gated = callable(getattr(client, "set_request_gate", None)) and getattr(client, "_request_gate", None) is not None
     failures: list[str] = []
     search_notes: list[str] = []
     pending_checkpoints: list[tuple[str, str, str]] = []
@@ -2278,16 +2331,10 @@ async def _collect_dockets(
                 MAX_SEARCH_PAGES,
                 max(1, available // 2) if available >= 4 else max(1, available),
             )
-            granted, reserve_ts = await quota.reserve(db, search_max_pages, min_required=1)
-            if granted == 0:
-                quota_throttled = True
-                commit_checkpoints = False
-                break
-            await quota.pace(pause_s, already_reserved=granted)
             cursor, resume = await _search_checkpoint(db, search_type)
-            before_calls = _client_request_count(client)
             result: Optional[dict] = None
-            try:
+            if client_gated:
+                granted = search_max_pages
                 result = await client.search_recent(
                     search_type=search_type,
                     query=BOND_RISK_QUERY,
@@ -2300,14 +2347,42 @@ async def _collect_dockets(
                     pause_s=pause_s,
                     until_entry_before=window,
                 )
-            finally:
-                actual_cost = (
-                    _call_request_cost(client, before_calls, result)
-                    if result is not None or before_calls is not None
-                    else 1
-                )
-                await quota.reconcile(db, granted, reserve_ts, actual_cost)
+            else:
+                granted, reserve_ts = await quota.reserve(db, search_max_pages, min_required=1)
+                if granted == 0:
+                    quota_throttled = True
+                    commit_checkpoints = False
+                    break
+                await quota.pace(pause_s, already_reserved=granted)
+                before_calls = _client_request_count(client)
+                try:
+                    result = await client.search_recent(
+                        search_type=search_type,
+                        query=BOND_RISK_QUERY,
+                        courts=list(FL_FEDERAL_COURT_IDS),
+                        entry_date_filed_after=window,
+                        entry_date_filed_before=None if resume else (cursor or None),
+                        start_url=resume or None,
+                        page_size=20,
+                        max_pages=granted,
+                        pause_s=pause_s,
+                        until_entry_before=window,
+                    )
+                finally:
+                    actual_cost = (
+                        _call_request_cost(client, before_calls, result)
+                        if result is not None or before_calls is not None
+                        else 1
+                    )
+                    await quota.reconcile(db, granted, reserve_ts, actual_cost)
             _stop_if_blocked(result)
+            if result.get("skipped") == "quota_exhausted":
+                quota_throttled = True
+                commit_checkpoints = False
+                break
+            if result.get("quota_exhausted"):
+                quota_throttled = True
+                commit_checkpoints = False
             if not result.get("success"):
                 detail = result.get("error") or f"HTTP {result.get('status_code') or 'error'}"
                 failures.append(f"{search_type} {detail}")
@@ -2365,6 +2440,24 @@ async def _collect_dockets(
                 + "; ".join(failures)
                 + "). No alerts were written.",
                 "search_failed",
+            )
+        if successes == 0 and quota_throttled:
+            return _CollectedSlice(
+                views=[],
+                batch_seeds=[],
+                unhydrated_seeds=[],
+                failed_seed_ids=set(),
+                pending_checkpoints=[],
+                commit_checkpoints=False,
+                from_pending_slice=False,
+                search_failures=[],
+                party_failures=[],
+                entry_failures=[],
+                brief_failures=[],
+                search_notes=[],
+                quota_throttled=True,
+                quota_deferred=True,
+                requests_made=quota.run_used,
             )
         if stuck:
             raise _ScanStop(
@@ -2467,27 +2560,45 @@ async def _hydrate(
     if not str(docket_id).isdigit():
         return None, "", "", "", False
     seed_start_remaining = quota.remaining() if quota is not None else None
+    client_gated = (
+        quota is not None
+        and callable(getattr(client, "set_request_gate", None))
+        and getattr(client, "_request_gate", None) is not None
+    )
 
-    if quota is not None:
-        granted_brief, reserve_ts = await quota.reserve(db, 1, min_required=1)
-        if granted_brief == 0:
-            return None, "", "", "", True
-        await quota.pace(pause_s, already_reserved=granted_brief)
-    else:
-        granted_brief, reserve_ts = 0, 0.0
-    before_calls = _client_request_count(client)
+    def _can_defer_seed() -> bool:
+        return quota is not None and (
+            (seed_start_remaining is not None and seed_start_remaining < quota.run_limit)
+            or quota.run_used < quota.run_limit
+        )
+
     brief_res: Optional[dict] = None
-    try:
+    if client_gated:
+        if quota.remaining() < 1:
+            return None, "", "", "", True
         brief_res = await client.get_docket_brief(int(docket_id))
-    finally:
+    else:
         if quota is not None:
-            actual_cost = (
-                _call_request_cost(client, before_calls, brief_res)
-                if brief_res is not None or before_calls is not None
-                else 1
-            )
-            await quota.reconcile(db, granted_brief, reserve_ts, actual_cost)
+            granted_brief, reserve_ts = await quota.reserve(db, 1, min_required=1)
+            if granted_brief == 0:
+                return None, "", "", "", True
+            await quota.pace(pause_s, already_reserved=granted_brief)
+        else:
+            granted_brief, reserve_ts = 0, 0.0
+        before_calls = _client_request_count(client)
+        try:
+            brief_res = await client.get_docket_brief(int(docket_id))
+        finally:
+            if quota is not None:
+                actual_cost = (
+                    _call_request_cost(client, before_calls, brief_res)
+                    if brief_res is not None or before_calls is not None
+                    else 1
+                )
+                await quota.reconcile(db, granted_brief, reserve_ts, actual_cost)
     _stop_if_blocked(brief_res)
+    if brief_res.get("skipped") == "quota_exhausted":
+        return None, "", "", "", True
     brief_error = ""
     if not brief_res.get("success"):
         detail = brief_res.get("error") or f"HTTP {brief_res.get('status_code') or 'error'}"
@@ -2497,34 +2608,49 @@ async def _hydrate(
         data = brief_res.get("data") or {}
         brief = data if isinstance(data, dict) else {}
 
-    if quota is not None:
-        party_cap = min(50, max(1, quota.remaining() - 1))
-        granted_parties, reserve_ts = await quota.reserve(db, party_cap, min_required=1)
-        if granted_parties == 0:
-            if seed_start_remaining is not None and seed_start_remaining < quota.run_limit:
+    party_res: Optional[dict] = None
+    if client_gated:
+        party_cap = min(50, max(0, quota.remaining() - 1))
+        if party_cap <= 0:
+            if _can_defer_seed():
                 return None, "", "", "", True
             return None, f"{docket_id} party_list_truncated", "", "", False
-        await quota.pace(pause_s, already_reserved=granted_parties)
-    else:
-        granted_parties, reserve_ts = 50, 0.0
-        party_cap = 50
-        if pause_s:
-            await asyncio.sleep(pause_s)
-    before_calls = _client_request_count(client)
-    party_res: Optional[dict] = None
-    try:
+        granted_parties = party_cap
         party_res = await client.list_docket_parties(
             int(docket_id), page_size=20, max_pages=granted_parties, pause_s=pause_s,
         )
-    finally:
+    else:
         if quota is not None:
-            actual_cost = (
-                _call_request_cost(client, before_calls, party_res)
-                if party_res is not None or before_calls is not None
-                else 1
+            party_cap = min(50, max(1, quota.remaining() - 1))
+            granted_parties, reserve_ts = await quota.reserve(db, party_cap, min_required=1)
+            if granted_parties == 0:
+                if _can_defer_seed():
+                    return None, "", "", "", True
+                return None, f"{docket_id} party_list_truncated", "", "", False
+            await quota.pace(pause_s, already_reserved=granted_parties)
+        else:
+            granted_parties, reserve_ts = 50, 0.0
+            party_cap = 50
+            if pause_s:
+                await asyncio.sleep(pause_s)
+        before_calls = _client_request_count(client)
+        try:
+            party_res = await client.list_docket_parties(
+                int(docket_id), page_size=20, max_pages=granted_parties, pause_s=pause_s,
             )
-            await quota.reconcile(db, granted_parties, reserve_ts, actual_cost)
+        finally:
+            if quota is not None:
+                actual_cost = (
+                    _call_request_cost(client, before_calls, party_res)
+                    if party_res is not None or before_calls is not None
+                    else 1
+                )
+                await quota.reconcile(db, granted_parties, reserve_ts, actual_cost)
     _stop_if_blocked(party_res)
+    if party_res.get("skipped") == "quota_exhausted":
+        if _can_defer_seed():
+            return None, "", "", "", True
+        return None, f"{docket_id} party_list_truncated", "", "", False
     if not party_res.get("success"):
         # Without parties we cannot see a docket DOB, so we do not guess.
         detail = party_res.get("error") or f"HTTP {party_res.get('status_code') or 'error'}"
@@ -2539,31 +2665,23 @@ async def _hydrate(
             quota is not None
             and budget_stopped
             and granted_parties < 50
-            and seed_start_remaining is not None
-            and seed_start_remaining < quota.run_limit
+            and _can_defer_seed()
         ):
             return None, "", "", "", True
         log.warning("Docket %s party list was truncated", docket_id)
         return None, f"{docket_id} party_list_truncated", "", "", False
     parties = [row for row in (party_res.get("results") or []) if isinstance(row, dict)]
 
-    if quota is not None:
-        entry_cap = min(MAX_ENTRY_PAGES, max(1, quota.remaining()))
-        granted_entries, reserve_ts = await quota.reserve(db, entry_cap, min_required=1)
-        if granted_entries == 0:
-            if seed_start_remaining is not None and seed_start_remaining < quota.run_limit:
+    window = filing_window_start()
+    entry_res: Optional[dict] = None
+    if client_gated:
+        entry_cap = min(MAX_ENTRY_PAGES, max(0, quota.remaining()))
+        if entry_cap <= 0:
+            if _can_defer_seed():
                 return None, "", "", "", True
             log.warning("Docket %s exhausted request budget before entries", docket_id)
             return None, "", f"{docket_id} entry_list_truncated", "", False
-        await quota.pace(pause_s, already_reserved=granted_entries)
-    else:
-        granted_entries, reserve_ts = MAX_ENTRY_PAGES, 0.0
-        if pause_s:
-            await asyncio.sleep(pause_s)
-    window = filing_window_start()
-    before_calls = _client_request_count(client)
-    entry_res: Optional[dict] = None
-    try:
+        granted_entries = entry_cap
         entry_res = await client.list_docket_entries(
             int(docket_id),
             page_size=20,
@@ -2571,15 +2689,43 @@ async def _hydrate(
             pause_s=pause_s,
             until_date=window,
         )
-    finally:
+    else:
         if quota is not None:
-            actual_cost = (
-                _call_request_cost(client, before_calls, entry_res)
-                if entry_res is not None or before_calls is not None
-                else 1
+            entry_cap = min(MAX_ENTRY_PAGES, max(1, quota.remaining()))
+            granted_entries, reserve_ts = await quota.reserve(db, entry_cap, min_required=1)
+            if granted_entries == 0:
+                if _can_defer_seed():
+                    return None, "", "", "", True
+                log.warning("Docket %s exhausted request budget before entries", docket_id)
+                return None, "", f"{docket_id} entry_list_truncated", "", False
+            await quota.pace(pause_s, already_reserved=granted_entries)
+        else:
+            granted_entries, reserve_ts = MAX_ENTRY_PAGES, 0.0
+            if pause_s:
+                await asyncio.sleep(pause_s)
+        before_calls = _client_request_count(client)
+        try:
+            entry_res = await client.list_docket_entries(
+                int(docket_id),
+                page_size=20,
+                max_pages=granted_entries,
+                pause_s=pause_s,
+                until_date=window,
             )
-            await quota.reconcile(db, granted_entries, reserve_ts, actual_cost)
+        finally:
+            if quota is not None:
+                actual_cost = (
+                    _call_request_cost(client, before_calls, entry_res)
+                    if entry_res is not None or before_calls is not None
+                    else 1
+                )
+                await quota.reconcile(db, granted_entries, reserve_ts, actual_cost)
     _stop_if_blocked(entry_res)
+    if entry_res.get("skipped") == "quota_exhausted":
+        if _can_defer_seed():
+            return None, "", "", "", True
+        log.warning("Docket %s exhausted request budget during entries", docket_id)
+        return None, "", f"{docket_id} entry_list_truncated", "", False
     entry_error = ""
     if entry_res.get("success") and entry_res.get("truncated"):
         pages_fetched = int(entry_res.get("pages_fetched") or 0)
@@ -2590,8 +2736,7 @@ async def _hydrate(
             quota is not None
             and budget_stopped
             and granted_entries < MAX_ENTRY_PAGES
-            and seed_start_remaining is not None
-            and seed_start_remaining < quota.run_limit
+            and _can_defer_seed()
         ):
             return None, "", "", "", True
         # Still inside the lookback window when the safety ceiling was hit.
@@ -4002,6 +4147,9 @@ async def run_federal_bond_risk_scan(
         from dashboard.services.courtlistener_client import CourtListenerClient
 
         client = CourtListenerClient(api_token=os.getenv("COURTLISTENER_API_TOKEN", "").strip())
+    account_key = _courtlistener_account_key(client)
+    prior_gate = getattr(client, "_request_gate", None)
+    gate_bound = False
     lease_owner: Optional[str] = None
     try:
         try:
@@ -4012,7 +4160,7 @@ async def run_federal_bond_risk_scan(
             from writers.slack_notifier import SlackNotifier
 
             notifier = SlackNotifier()
-        lease_owner = await _acquire_scan_lease(db)
+        lease_owner = await _acquire_scan_lease(db, account_key=account_key)
         if lease_owner is None:
             return {
                 **base,
@@ -4040,7 +4188,17 @@ async def run_federal_bond_risk_scan(
                 "slack_sent": slack_sent,
                 "slack_pending": slack_pending,
             }
-        quota = await _load_request_quota(db, run_limit=max_requests)
+        quota = await _load_request_quota(db, run_limit=max_requests, account_key=account_key)
+        if callable(getattr(client, "set_request_gate", None)):
+            async def _request_gate(attempt: int, planned_delay: float = 0.0) -> bool:
+                granted, _ts = await quota.reserve(db, 1, min_required=1)
+                if granted == 0:
+                    return False
+                await quota.pace(pause_s, already_reserved=1, planned_delay=planned_delay)
+                return True
+
+            client.set_request_gate(_request_gate)
+            gate_bound = True
         try:
             collected = await _collect_dockets(client, pause_s, db, quota=quota)
         except _ScanStop as stop:
@@ -4240,7 +4398,9 @@ async def run_federal_bond_risk_scan(
             "client_messages": 0,
         }
     finally:
-        await _release_scan_lease(db, lease_owner)
+        if gate_bound:
+            client.set_request_gate(prior_gate)
+        await _release_scan_lease(db, lease_owner, account_key=account_key)
         if owns_client:
             close = getattr(client, "close", None)
             if close:

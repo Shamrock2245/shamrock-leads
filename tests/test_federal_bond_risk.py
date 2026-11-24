@@ -4765,14 +4765,16 @@ async def test_per_run_request_budget_saves_pending_slice_and_drains_on_next_sca
 
 
 @pytest.mark.asyncio
-async def test_durable_hourly_and_daily_quota_defers_scans_without_http_calls_and_scopes_by_tenant(monkeypatch):
+async def test_durable_hourly_and_daily_quota_defers_scans_and_shares_by_api_account(monkeypatch):
     import time
     from dashboard.services.federal_bond_risk import (
         MAX_REQUESTS_PER_DAY,
         MAX_REQUESTS_PER_HOUR,
+        _courtlistener_account_key,
         _request_quota_id,
     )
     from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.tenancy.scope import TenantScopedDatabase
 
     _enable(monkeypatch)
     now = time.time()
@@ -4816,12 +4818,43 @@ async def test_durable_hourly_and_daily_quota_defers_scans_without_http_calls_an
     assert recovered["requests_made"] == 5
     assert len(db.federal_bond_risk_state.docs[0]["timestamps"]) == 5
 
-    # Tenant isolation keeps Shamrock unprefixed and scopes secondary tenants.
+    # Tenants sharing the same CourtListener API token share one hashed quota key and budget;
+    # distinct tokens keep separate account keys without exposing raw tokens.
     monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
     with bind_job_tenant("shamrock", "federal_bond_risk"):
-        assert _request_quota_id() == "request_quota"
+        shamrock_qid = _request_quota_id()
     with bind_job_tenant("alpha", "federal_bond_risk"):
-        assert _request_quota_id() == "request_quota:alpha"
+        alpha_qid = _request_quota_id()
+    assert shamrock_qid == alpha_qid
+    assert "test-token" not in shamrock_qid
+    assert shamrock_qid != _request_quota_id(_courtlistener_account_key(api_token="other-token"))
+
+    shared_raw = _DB()
+    shared_raw.federal_bond_risk_state.docs.append({
+        "_id": shamrock_qid,
+        "timestamps": [now - 10.0] * (MAX_REQUESTS_PER_HOUR - 5),
+        "quota_revision": 0,
+    })
+    scoped_db = TenantScopedDatabase(shared_raw)
+    shared_court = _CourtListener(
+        hits=[_hit(recap_documents=[])],
+        parties=[_defendant(dob="01/15/1985")],
+        entries=[{"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": datetime.now(timezone.utc).date().isoformat()}],
+    )
+    with bind_job_tenant("shamrock", "federal_bond_risk"):
+        shamrock_res = await _scan(scoped_db, shared_court, [_client(dobs=["1985-01-15"])])
+    assert shamrock_res["confirmed"] == 1
+    assert shamrock_res["requests_made"] == 5
+
+    alpha_calls_before = len(shared_court.calls)
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        alpha_res = await _scan(scoped_db, shared_court, [_client(dobs=["1985-01-15"])])
+    assert alpha_res["success"] is True
+    assert alpha_res["skipped"] == "quota_exhausted"
+    assert alpha_res["requests_made"] == 0
+    assert len(shared_court.calls) == alpha_calls_before
+    # Business rows written by Shamrock remain strictly tenant-isolated.
+    assert [doc["tenant_id"] for doc in shared_raw.docket_events.docs] == ["shamrock"]
 
 
 @pytest.mark.asyncio
@@ -4992,9 +5025,182 @@ async def test_overlapping_scans_serialize_with_lease_and_reserve_quota_atomical
     stored_after = await real_find({"_id": _request_quota_id()})
     assert len(stored_after["timestamps"]) == MAX_REQUESTS_PER_HOUR - 3
 
-    # 3. Scan lease keys stay unprefixed for Shamrock and isolate secondary tenants.
+    # 3. Scan lease keys share one CourtListener API account key across tenants
+    #    and actually serialize overlapping multi-tenant scans using the same token.
+    from dashboard.services.federal_bond_risk import _courtlistener_account_key
+    from dashboard.tenancy.scope import TenantScopedDatabase
+
     monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
     with bind_job_tenant("shamrock", "federal_bond_risk"):
-        assert _scan_lease_id() == "scan_lease"
+        shamrock_lease_id = _scan_lease_id()
     with bind_job_tenant("alpha", "federal_bond_risk"):
-        assert _scan_lease_id() == "scan_lease:alpha"
+        alpha_lease_id = _scan_lease_id()
+    assert shamrock_lease_id == alpha_lease_id
+    assert "test-token" not in shamrock_lease_id
+    assert shamrock_lease_id != _scan_lease_id(_courtlistener_account_key(api_token="other-token"))
+
+    mt_raw = _DB()
+    mt_db = TenantScopedDatabase(mt_raw)
+    mt_entered = asyncio.Event()
+    mt_release = asyncio.Event()
+
+    class _MtBlockingCourt(_CourtListener):
+        async def search_recent(self, **kwargs):
+            if kwargs["search_type"] == "r":
+                mt_entered.set()
+                await mt_release.wait()
+            return await super().search_recent(**kwargs)
+
+    async def _run_shamrock():
+        with bind_job_tenant("shamrock", "federal_bond_risk"):
+            return await _scan(
+                mt_db,
+                _MtBlockingCourt(
+                    hits=[_hit(recap_documents=[])],
+                    parties=[_defendant(dob="01/15/1985")],
+                    entries=[{"id": 42, "description": "Detention hearing", "date_filed": today}],
+                ),
+                [client],
+            )
+
+    shamrock_task = asyncio.create_task(_run_shamrock())
+    await mt_entered.wait()
+    alpha_court = _CourtListener(hits=[])
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        alpha_overlapped = await _scan(mt_db, alpha_court, [client])
+    assert alpha_overlapped["success"] is True
+    assert alpha_overlapped["skipped"] == "scan_in_progress"
+    assert alpha_overlapped["requests_made"] == 0
+    assert alpha_court.calls == []
+    mt_release.set()
+    shamrock_done = await shamrock_task
+    assert shamrock_done["confirmed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_client_retries_reserve_quota_before_sending_and_stop_when_exhausted(monkeypatch):
+    import time
+    import httpx
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_HOUR,
+        _courtlistener_account_key,
+        _request_quota_id,
+    )
+
+    _enable(monkeypatch)
+    retry_sleeps = []
+
+    async def fake_sleep(seconds):
+        retry_sleeps.append(seconds)
+
+    monkeypatch.setattr("dashboard.services.courtlistener_client.asyncio.sleep", fake_sleep)
+
+    class _Response:
+        def __init__(self, status_code, payload, headers=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+    now = time.time()
+    account_key = _courtlistener_account_key(api_token="test-token")
+    quota_id = _request_quota_id(account_key)
+
+    # 1. HTTP 429 on the last hourly slot: retry attempt is denied BEFORE sleeping or sending HTTP.
+    calls_429 = []
+    retry_sleeps.clear()
+
+    class _HTTP429:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_429.append((url, dict(params or {})))
+            if (params or {}).get("type") == "r":
+                return _Response(200, {"results": []})
+            return _Response(429, {"detail": "throttled"}, {"Retry-After": "5"})
+
+    db_429 = _DB()
+    db_429.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 10.0] * (MAX_REQUESTS_PER_HOUR - 2),
+        "quota_revision": 0,
+    })
+    client_429 = CourtListenerClient(api_token="test-token")
+    client_429._in_maintenance_window = lambda: False
+    client_429._client = _HTTP429()
+    res_429 = await run_federal_bond_risk_scan(
+        db_429, client=client_429, notifier=_Notifier(), pause_s=0, clients=[_client()],
+    )
+    assert res_429["success"] is False
+    assert res_429["skipped"] == "rate_limited"
+    assert res_429["rows_written"] == 0
+    assert len(calls_429) == 2  # r=1 attempt + rd=1 attempt; rd retry never hit the wire
+    assert retry_sleeps == []
+    assert len(db_429.federal_bond_risk_state.docs[0]["timestamps"]) == MAX_REQUESTS_PER_HOUR
+
+    # 2. ReadTimeout on the last hourly slot: retry attempt is also denied BEFORE sleeping or sending HTTP.
+    calls_timeout = []
+    retry_sleeps.clear()
+
+    class _HTTPTimeout:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_timeout.append((url, dict(params or {})))
+            if (params or {}).get("type") == "r":
+                return _Response(200, {"results": []})
+            raise httpx.ReadTimeout("timed out")
+
+    db_timeout = _DB()
+    db_timeout.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 10.0] * (MAX_REQUESTS_PER_HOUR - 2),
+        "quota_revision": 0,
+    })
+    client_timeout = CourtListenerClient(api_token="test-token")
+    client_timeout._in_maintenance_window = lambda: False
+    client_timeout._client = _HTTPTimeout()
+    res_timeout = await run_federal_bond_risk_scan(
+        db_timeout, client=client_timeout, notifier=_Notifier(), pause_s=0, clients=[_client()],
+    )
+    assert res_timeout["success"] is False
+    assert res_timeout["skipped"] == "rate_limited"
+    assert res_timeout["rows_written"] == 0
+    assert len(calls_timeout) == 2
+    assert retry_sleeps == []
+    assert len(db_timeout.federal_bond_risk_state.docs[0]["timestamps"]) == MAX_REQUESTS_PER_HOUR
+
+    # 3. Transient 503 with 2 slots remaining reserves attempt 0 + retry attempt 1 before sending,
+    #    then leaves rd uncalled rather than exceeding the 50/hr limit.
+    calls_503 = []
+    retry_sleeps.clear()
+
+    class _HTTP503ThenOK:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            calls_503.append((url, dict(params or {})))
+            if len(calls_503) == 1:
+                return _Response(503, {"detail": "unavailable"})
+            return _Response(200, {"results": []})
+
+    db_503 = _DB()
+    db_503.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [now - 10.0] * (MAX_REQUESTS_PER_HOUR - 2),
+        "quota_revision": 0,
+    })
+    client_503 = CourtListenerClient(api_token="test-token")
+    client_503._in_maintenance_window = lambda: False
+    client_503._client = _HTTP503ThenOK()
+    res_503 = await run_federal_bond_risk_scan(
+        db_503, client=client_503, notifier=_Notifier(), pause_s=0, clients=[_client()],
+    )
+    assert res_503["success"] is True
+    assert res_503["truncated"] is True
+    assert res_503["incomplete_coverage"] is False
+    assert len(calls_503) == 2
+    assert len(retry_sleeps) == 1
+    assert len(db_503.federal_bond_risk_state.docs[0]["timestamps"]) == MAX_REQUESTS_PER_HOUR
