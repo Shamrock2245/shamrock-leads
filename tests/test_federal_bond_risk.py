@@ -5299,3 +5299,299 @@ async def test_quota_slot_timestamps_record_actual_dispatch_time_after_pacing_an
         in_window = [val for val in all_events if ts - 60.0 < val <= ts]
         assert len(in_window) <= MAX_REQUESTS_PER_MINUTE
 
+
+@pytest.mark.asyncio
+async def test_all_courtlistener_callers_share_account_quota_and_space_concurrent_jobs(monkeypatch):
+    import asyncio
+    from dashboard.routers.court_dockets import _make_cl_client, court_intel_bp
+    from dashboard.services.court_data_ingestor import run_ingestion
+    from dashboard.services.docket_monitor import DocketMonitor
+    from dashboard.services.federal_bond_risk import (
+        DEFAULT_PAUSE_S,
+        MAX_REQUESTS_PER_HOUR,
+        MAX_REQUESTS_PER_MINUTE,
+        _courtlistener_account_key,
+        _request_quota_id,
+        build_courtlistener_request_gate,
+    )
+
+    _enable(monkeypatch)
+    clock = [1000.0]
+
+    class _FakeTime:
+        @staticmethod
+        def time():
+            return clock[0]
+
+    async def fake_sleep(seconds):
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr("dashboard.services.federal_bond_risk.time", _FakeTime)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    class _Response:
+        def __init__(self, status_code, payload, headers=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = headers or {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    account_key = _courtlistener_account_key(api_token="test-token")
+    quota_id = _request_quota_id(account_key)
+
+    # 1. DocketMonitor shares the account quota: near the hourly ceiling it uses only the remaining slot,
+    #    stops with quota_exhausted=True, and leaves run_federal_bond_risk_scan with 0 HTTP calls.
+    dm_calls = []
+
+    class _DMHTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            dm_calls.append((clock[0], url, dict(params or {})))
+            return _Response(200, {"results": []})
+
+    db = _DB()
+    db.active_bonds.docs.append({
+        "_id": "bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    db.defendants.docs.append({
+        "_id": "def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    db.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [clock[0] - 20.0] * (MAX_REQUESTS_PER_HOUR - 1),
+        "quota_revision": 0,
+    })
+    dm = DocketMonitor(db, courtlistener_token="test-token")
+    dm._client = _DMHTTP()
+    dm_res = await dm.scan_active_bonds(limit=10)
+    assert dm_res["quota_exhausted"] is True
+    assert len(dm_calls) == 1
+    assert len(db.federal_bond_risk_state.docs[0]["timestamps"]) == MAX_REQUESTS_PER_HOUR
+
+    blocked_court = _CourtListener(hits=[])
+    fbr_after_dm = await run_federal_bond_risk_scan(
+        db, client=blocked_court, notifier=_Notifier(), pause_s=0, clients=[_client()],
+    )
+    assert fbr_after_dm["skipped"] == "quota_exhausted"
+    assert fbr_after_dm["requests_made"] == 0
+    assert blocked_court.calls == []
+
+    # 2. court_data_ingestor wires the shared gate into CourtListenerClient so exhausted quota skips HTTP.
+    ingest_calls = []
+
+    class _IngestClient(CourtListenerClient):
+        def __init__(self, api_token=None):
+            super().__init__(api_token=api_token)
+            self._in_maintenance_window = lambda: False
+
+        async def _get_client(self):
+            class _H:
+                is_closed = False
+
+                async def get(self, url, params=None):
+                    ingest_calls.append((url, dict(params or {})))
+                    return _Response(200, {"results": []})
+
+            return _H()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("dashboard.services.courtlistener_client.CourtListenerClient", _IngestClient)
+    ingest_res = await run_ingestion(db, days_back=7, states=["FL"])
+    assert ingest_res["success"] is True
+    assert ingest_res["ingested"] == 0
+    assert ingest_calls == []
+
+    # When hourly headroom exists (e.g., fresh quota), run_ingestion records into the same shared bucket.
+    db.federal_bond_risk_state.docs[0]["timestamps"] = []
+    ingest_ok = await run_ingestion(db, days_back=7, states=["FL"])
+    assert ingest_ok["success"] is True
+    assert len(ingest_calls) == 1
+    assert len(db.federal_bond_risk_state.docs[0]["timestamps"]) == 1
+
+    # Restore default CourtListenerClient before testing interactive route gate.
+    monkeypatch.setattr("dashboard.services.courtlistener_client.CourtListenerClient", CourtListenerClient)
+
+    # 3. Interactive routes (_make_cl_client + court_intel_bp) enforce 5/min ceiling via 429 without blocking.
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db)
+    db.federal_bond_risk_state.docs[0]["timestamps"] = [clock[0] - 5.0] * MAX_REQUESTS_PER_MINUTE
+    live_client = _make_cl_client()
+    live_client._in_maintenance_window = lambda: False
+    live_http_calls = []
+
+    class _LiveHTTP:
+        is_closed = False
+
+        async def get(self, url, params=None):
+            live_http_calls.append(url)
+            return _Response(200, {"results": []})
+
+        async def aclose(self):
+            return None
+
+    live_client._client = _LiveHTTP()
+    app = FastAPI()
+    app.include_router(court_intel_bp)
+    with monkeypatch.context() as mp:
+        mp.setattr("dashboard.routers.court_dockets._make_cl_client", lambda: live_client)
+        api_client = TestClient(app)
+        resp_ls = api_client.get("/api/court-intel/live-search?q=forfeiture&state=FL")
+        assert resp_ls.status_code == 429
+        assert resp_ls.json()["skipped"] == "quota_exhausted"
+        resp_dl = api_client.get("/api/court-intel/docket-lookup?docket_number=2:24-cr-00123")
+        assert resp_dl.status_code == 429
+        assert resp_dl.json()["skipped"] == "quota_exhausted"
+        resp_dos = api_client.get("/api/court-intel/case-dossier?cluster_id=2812209")
+        assert resp_dos.status_code == 429
+        assert resp_dos.json()["skipped"] == "quota_exhausted"
+    assert live_http_calls == []
+
+    # 4. Two concurrent virtual-clock gated jobs serialize onto distinct non-overlapping dispatch slots.
+    clock[0] = 1000.0
+    db.federal_bond_risk_state.docs[0]["timestamps"] = [990.0] * MAX_REQUESTS_PER_MINUTE
+    concurrent_dispatches = []
+
+    class _ConcurrentHTTP:
+        is_closed = False
+
+        def __init__(self, label):
+            self.label = label
+
+        async def get(self, url, params=None):
+            concurrent_dispatches.append((clock[0], self.label))
+            return _Response(200, {"results": []})
+
+    c1 = CourtListenerClient(
+        api_token="test-token",
+        request_gate=build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S),
+    )
+    c1._in_maintenance_window = lambda: False
+    c1._client = _ConcurrentHTTP("job1")
+
+    c2 = CourtListenerClient(
+        api_token="test-token",
+        request_gate=build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S),
+    )
+    c2._in_maintenance_window = lambda: False
+    c2._client = _ConcurrentHTTP("job2")
+
+    await asyncio.gather(
+        c1.search_limited(search_type="r", query="warrant", courts=["flmd"]),
+        c2.search_limited(search_type="rd", query="warrant", courts=["flmd"]),
+    )
+    times = sorted(ts for ts, _label in concurrent_dispatches)
+    assert times == [pytest.approx(1050.0), pytest.approx(1062.0)]
+
+
+@pytest.mark.asyncio
+async def test_unlinked_rd_hit_defers_doc_id_until_entry_hydration_recovers(monkeypatch):
+    _enable(monkeypatch)
+    today = datetime.now(timezone.utc).date().isoformat()
+    client = _client(name="John Smith", dobs=["1985-01-15"], numbers=["2:24-cr-00123", "2:24-cr-00456"])
+
+    class _RecoveredEntryCourt(_CourtListener):
+        def __init__(self):
+            super().__init__(parties=[_defendant(dob="01/15/1985")])
+            self.entries_error_ids = {1002}
+            self.search_calls = 0
+
+        async def search_recent(self, **kwargs):
+            self.calls.append(("search_recent", kwargs))
+            if kwargs["search_type"] == "r":
+                self.search_calls += 1
+                return {
+                    "success": True,
+                    "truncated": False,
+                    "results": [
+                        _hit(id=1001, docket_id=1001, docketNumber="2:24-cr-00123", recap_documents=[]),
+                    ],
+                }
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [{
+                    "id": 55,
+                    "docket_id": 1002,
+                    "court_id": "flmd",
+                    "caseName": "United States v. John Smith",
+                    "docketNumber": "2:24-cr-00456",
+                    "description": "Arrest warrant issued for John Smith",
+                    "entry_date_filed": today,
+                }],
+            }
+
+        async def list_docket_parties(self, docket_id, **kwargs):
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [_defendant(dob="01/15/1985", docket_id=int(docket_id))],
+            }
+
+        async def get_docket_brief(self, docket_id):
+            num = "2:24-cr-00123" if int(docket_id) == 1001 else "2:24-cr-00456"
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {"id": docket_id, "court_id": "flmd", "docket_number": num, "case_name": "United States v. John Smith"},
+            }
+
+        async def list_docket_entries(self, docket_id, **kwargs):
+            if int(docket_id) in self.entries_error_ids:
+                return {"success": False, "error": "HTTP 503", "status_code": 503, "results": []}
+            if int(docket_id) == 1001:
+                return {
+                    "success": True,
+                    "truncated": False,
+                    "results": [{"id": 11, "description": "Detention hearing", "date_filed": today}],
+                }
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [{
+                    "id": 42,
+                    "description": "Arrest warrant issued for John Smith",
+                    "date_filed": today,
+                    "recap_documents": [{"id": 55}],
+                }],
+            }
+
+    court = _RecoveredEntryCourt()
+    db = _DB()
+    notifier = _Notifier()
+
+    # Scan 1: docket 1002 entry hydration fails while its rd hit id=55 has no docket_entry_id ->
+    # do NOT mint a provisional doc:55 row; retain docket 1002 in pending_slice.
+    scan1 = await _scan(db, court, [client], notifier=notifier)
+    assert scan1["success"] is True
+    assert scan1["incomplete_coverage"] is True
+    assert [row["docket_id"] for row in db.docket_events.docs] == ["1001"]
+    assert all(not str(row.get("filing_id") or "").startswith("doc:") for row in db.docket_events.docs)
+
+    # Scan 2: docket 1002 recovers from pending_slice with full entries mapping doc 55 -> entry:42;
+    # creates exactly one confirmed row and zero spurious withdrawals.
+    court.entries_error_ids = set()
+    scan2 = await _scan(db, court, [client], notifier=notifier)
+    assert scan2["success"] is True
+    assert scan2["incomplete_coverage"] is False
+    assert court.search_calls == 1
+    rows_1002 = [row for row in db.docket_events.docs if row["docket_id"] == "1002"]
+    assert len(rows_1002) == 1
+    assert rows_1002[0]["filing_id"] == "entry:42"
+    assert rows_1002[0]["match_status"] == "confirmed"
+    assert all(row["match_status"] != "withdrawn" for row in db.docket_events.docs)
+
+

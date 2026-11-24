@@ -489,13 +489,22 @@ class CourtListenerClient:
                 page += 1
                 if not next_url:
                     break
-                await asyncio.sleep(0.3)  # polite rate-limit between pages
+                if self._request_gate is None:
+                    await asyncio.sleep(0.3)  # polite rate-limit between pages
 
             log.info(
                 "CourtListener search: %d results (%d pages) for q='%s'",
                 len(all_results), page, (query or "")[:50],
             )
             return {"success": True, "count": total_count, "results": all_results}
+        except CourtListenerQuotaBlocked:
+            return {
+                "success": False,
+                "skipped": "quota_exhausted",
+                "error": "quota_exhausted",
+                "count": total_count,
+                "results": all_results,
+            }
         except httpx.HTTPStatusError as e:
             log.error("CourtListener HTTP %d: %s", e.response.status_code, str(e)[:200])
             return {"success": False, "error": f"HTTP {e.response.status_code}"}
@@ -539,6 +548,8 @@ class CourtListenerClient:
             resp = await self._request_with_retry("get", f"/clusters/{int(cluster_id)}/")
             resp.raise_for_status()
             return {"success": True, "data": resp.json()}
+        except CourtListenerQuotaBlocked:
+            return {"success": False, "skipped": "quota_exhausted", "error": "CourtListener request quota reached"}
         except httpx.HTTPStatusError as e:
             return {"success": False, "error": f"HTTP {e.response.status_code}"}
         except Exception as e:
@@ -550,6 +561,8 @@ class CourtListenerClient:
             resp = await self._request_with_retry("get", f"/dockets/{int(docket_id)}/")
             resp.raise_for_status()
             return {"success": True, "data": resp.json()}
+        except CourtListenerQuotaBlocked:
+            return {"success": False, "skipped": "quota_exhausted", "error": "CourtListener request quota reached"}
         except httpx.HTTPStatusError as e:
             return {"success": False, "error": f"HTTP {e.response.status_code}"}
         except Exception as e:
@@ -943,6 +956,8 @@ class CourtListenerClient:
             data["clean_text"] = clean_text
             data["opinions_cited_count"] = len(data.get("opinions_cited") or [])
             return {"success": True, "data": data}
+        except CourtListenerQuotaBlocked:
+            return {"success": False, "skipped": "quota_exhausted", "error": "CourtListener request quota reached"}
         except httpx.HTTPStatusError as e:
             return {"success": False, "error": f"HTTP {e.response.status_code}"}
         except Exception as e:
@@ -958,6 +973,8 @@ class CourtListenerClient:
             return {"success": False, "error": "CourtListener FLP maintenance window active (Thu 21:00-23:59 PT)"}
 
         cluster_res = await self.get_opinion_cluster(cluster_id)
+        if cluster_res.get("skipped") == "quota_exhausted":
+            return cluster_res
         if not cluster_res.get("success"):
             return {"success": False, "error": f"Cluster lookup failed: {cluster_res.get('error')}"}
 
@@ -1113,6 +1130,18 @@ class CourtListenerClient:
                     })
             else:
                 errors.append(f"dockets HTTP {d_resp.status_code}")
+        except CourtListenerQuotaBlocked:
+            return {
+                "success": False,
+                "skipped": "quota_exhausted",
+                "error": "CourtListener request quota reached",
+                "docket_number": dnum,
+                "dockets": dockets,
+                "clusters": clusters,
+                "search_hits": [],
+                "warnings": errors,
+                "api_health": self.get_api_health(),
+            }
         except Exception as e:
             errors.append(f"dockets: {e}")
 
@@ -1134,6 +1163,18 @@ class CourtListenerClient:
                     })
             else:
                 errors.append(f"clusters HTTP {c_resp.status_code}")
+        except CourtListenerQuotaBlocked:
+            return {
+                "success": False,
+                "skipped": "quota_exhausted",
+                "error": "CourtListener request quota reached",
+                "docket_number": dnum,
+                "dockets": dockets,
+                "clusters": clusters,
+                "search_hits": [],
+                "warnings": errors,
+                "api_health": self.get_api_health(),
+            }
         except Exception as e:
             errors.append(f"clusters: {e}")
 
@@ -1145,6 +1186,8 @@ class CourtListenerClient:
             docket_number=dnum,
             page_size=10,
         )
+        if s_res.get("skipped") == "quota_exhausted" and not dockets and not clusters:
+            return s_res
         if s_res.get("success"):
             search_hits = s_res.get("results") or []
 
@@ -1228,6 +1271,8 @@ class CourtListenerClient:
                 "analytics": self._summarize_search_results(normalized),
                 "api_health": self.get_api_health(),
             }
+        except CourtListenerQuotaBlocked:
+            return {"success": False, "skipped": "quota_exhausted", "error": "CourtListener request quota reached"}
         except httpx.HTTPStatusError as e:
             log.error("CourtListener live_search HTTP %d: %s", e.response.status_code, str(e)[:200])
             return {"success": False, "error": f"HTTP {e.response.status_code}"}
@@ -1373,7 +1418,7 @@ class CourtListenerClient:
                     max_pages=3,
                 )
 
-                if result.get("success") and result.get("results"):
+                if result.get("results"):
                     for r in result["results"]:
                         court_id = r.get("court_id", "")
                         if court_id not in SE_US_COURTS:
@@ -1387,9 +1432,14 @@ class CourtListenerClient:
                             continue
                         all_results.append(normalized)
 
+                if result.get("skipped") == "quota_exhausted":
+                    log.info("Stopping CourtListener ingestion on state %s — request quota reached", state)
+                    break
+
                 log.info("State %s: fetched %d results",
                          state, len(result.get("results", [])) if result.get("success") else 0)
-                await asyncio.sleep(0.5)  # Rate-limit between states
+                if self._request_gate is None:
+                    await asyncio.sleep(0.5)  # Rate-limit between states
             except Exception as e:
                 log.warning("Ingestion skip for state %s: %s", state, str(e)[:100])
 

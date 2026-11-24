@@ -60,9 +60,22 @@ async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
     5. Score bail impact
     """
     from dashboard.services.courtlistener_client import CourtListenerClient
+    from dashboard.services.federal_bond_risk import (
+        DEFAULT_PAUSE_S,
+        MAX_REQUESTS_PER_RUN,
+        build_courtlistener_request_gate,
+    )
 
     token = os.getenv("COURTLISTENER_API_TOKEN", "")
     client = CourtListenerClient(api_token=token if token else None)
+    client.set_request_gate(
+        build_courtlistener_request_gate(
+            db,
+            client=client,
+            pause_s=DEFAULT_PAUSE_S,
+            run_limit=MAX_REQUESTS_PER_RUN,
+        )
+    )
 
     try:
         opinions = await client.ingest_recent_opinions(

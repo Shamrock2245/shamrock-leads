@@ -91,8 +91,17 @@ class DocketMonitor:
     MAX_RETRIES = 3
     BACKOFF_BASE = 2.0
 
-    def __init__(self, db, courtlistener_token: str = ""):
+    def __init__(
+        self,
+        db,
+        courtlistener_token: str = "",
+        *,
+        request_gate=None,
+        pause_s: Optional[float] = None,
+    ):
         self.db = db
+        self._token = courtlistener_token
+        self._quota_exhausted = False
         self._headers = {
             "User-Agent": "ShamrockLeads/1.0 (https://shamrockbailbonds.biz; admin@shamrockbailbonds.biz)",
         }
@@ -101,6 +110,22 @@ class DocketMonitor:
         self._client: Optional[httpx.AsyncClient] = None
         self._requests = 0
         self._rate_limited = 0
+        if request_gate is not None:
+            self._request_gate = request_gate
+        else:
+            from dashboard.services.federal_bond_risk import (
+                DEFAULT_PAUSE_S,
+                MAX_REQUESTS_PER_RUN,
+                build_courtlistener_request_gate,
+            )
+
+            effective_pause = DEFAULT_PAUSE_S if pause_s is None else float(pause_s)
+            self._request_gate = build_courtlistener_request_gate(
+                db,
+                api_token=courtlistener_token,
+                pause_s=effective_pause,
+                run_limit=MAX_REQUESTS_PER_RUN,
+            )
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -114,27 +139,51 @@ class DocketMonitor:
         """GET with retry + backoff on 429/5xx."""
         client = await self._get_client()
         for attempt in range(self.MAX_RETRIES + 1):
+            if attempt == 0 and self._request_gate is not None:
+                if not await self._request_gate(0, 0.0):
+                    self._quota_exhausted = True
+                    return None
             try:
                 self._requests += 1
                 resp = await client.get(url, params=params)
                 if resp.status_code == 429:
                     self._rate_limited += 1
-                    wait = self.BACKOFF_BASE * (2 ** attempt)
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after and retry_after.isdigit():
-                        wait = max(wait, int(retry_after))
-                    log.warning("[DocketMonitor] Rate limited, retry in %.1fs", wait)
-                    await asyncio.sleep(wait)
-                    continue
+                    if attempt < self.MAX_RETRIES:
+                        wait = self.BACKOFF_BASE * (2 ** attempt)
+                        retry_after = resp.headers.get("Retry-After")
+                        if retry_after and retry_after.isdigit():
+                            wait = max(wait, int(retry_after))
+                        if self._request_gate is not None:
+                            if not await self._request_gate(attempt + 1, wait):
+                                self._quota_exhausted = True
+                                return None
+                            log.warning("[DocketMonitor] Rate limited, retry after %.1fs gate wait", wait)
+                        else:
+                            log.warning("[DocketMonitor] Rate limited, retry in %.1fs", wait)
+                            await asyncio.sleep(wait)
+                        continue
+                    return None
                 if resp.status_code >= 500 and attempt < self.MAX_RETRIES:
-                    await asyncio.sleep(self.BACKOFF_BASE * (2 ** attempt))
+                    wait = self.BACKOFF_BASE * (2 ** attempt)
+                    if self._request_gate is not None:
+                        if not await self._request_gate(attempt + 1, wait):
+                            self._quota_exhausted = True
+                            return None
+                    else:
+                        await asyncio.sleep(wait)
                     continue
                 if resp.status_code == 200:
                     return resp.json()
                 return None
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
                 if attempt < self.MAX_RETRIES:
-                    await asyncio.sleep(self.BACKOFF_BASE * (2 ** attempt))
+                    wait = self.BACKOFF_BASE * (2 ** attempt)
+                    if self._request_gate is not None:
+                        if not await self._request_gate(attempt + 1, wait):
+                            self._quota_exhausted = True
+                            return None
+                    else:
+                        await asyncio.sleep(wait)
                 else:
                     log.warning("[DocketMonitor] Request failed after retries: %s", str(e)[:80])
         return None
@@ -146,6 +195,7 @@ class DocketMonitor:
     async def scan_active_bonds(self, limit: int = 100) -> dict:
         """Main scan: iterate active bonds, search dockets, classify, store."""
         start = datetime.now(timezone.utc)
+        self._quota_exhausted = False
         log.info("[DocketMonitor] Starting active bond docket scan...")
         try:
             cursor = self.db.active_bonds.find(
@@ -159,10 +209,18 @@ class DocketMonitor:
             return {"success": False, "error": str(e)}
 
         if not bonds:
-            return {"success": True, "bonds_scanned": 0, "events_found": 0, "alerts_created": 0}
+            return {
+                "success": True,
+                "bonds_scanned": 0,
+                "events_found": 0,
+                "alerts_created": 0,
+                "quota_exhausted": False,
+            }
 
         total_events, total_alerts, bonds_with, errors = 0, 0, 0, 0
         for bond in bonds:
+            if self._quota_exhausted:
+                break
             try:
                 name = bond.get("defendant_name") or bond.get("Defendant_Name") or ""
                 if len(name) < 3:
@@ -185,7 +243,10 @@ class DocketMonitor:
                         if ev.get("event_severity") in ("critical", "high"):
                             total_alerts += 1
                             await self._fire_alert(ev)
-                await asyncio.sleep(1.0)
+                if self._quota_exhausted:
+                    break
+                if self._request_gate is None:
+                    await asyncio.sleep(1.0)
             except Exception as e:
                 errors += 1
                 log.warning("[DocketMonitor] Bond scan error: %s", str(e)[:100])
@@ -196,6 +257,7 @@ class DocketMonitor:
             "success": True, "bonds_scanned": len(bonds), "bonds_with_events": bonds_with,
             "events_found": total_events, "alerts_created": total_alerts,
             "errors": errors, "duration_seconds": round(dur, 1),
+            "quota_exhausted": self._quota_exhausted,
             "scanned_at": datetime.now(timezone.utc).isoformat() + "Z",
         }
 
@@ -205,6 +267,8 @@ class DocketMonitor:
         Uses retry-safe requests against RECAP (dockets) and Opinions APIs.
         """
         events = []
+        if self._quota_exhausted:
+            return events
         # RECAP docket search
         try:
             params = {"type": "r", "q": f'"{name}"'}
@@ -217,7 +281,10 @@ class DocketMonitor:
         except Exception as e:
             log.debug("Docket search error: %s", str(e)[:80])
 
-        await asyncio.sleep(1.0)
+        if self._quota_exhausted:
+            return events
+        if self._request_gate is None:
+            await asyncio.sleep(1.0)
         # Opinion search (90-day window)
         try:
             params = {"type": "o", "q": f'"{name}"',

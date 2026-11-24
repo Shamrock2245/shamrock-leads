@@ -3,6 +3,15 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased] — 2026-11-24 (Shared CourtListener account quota and stable entry IDs)
+
+### Fixed
+- **All CourtListener callers coordinate on one virtual-clock account quota.** `build_courtlistener_request_gate` and `_RequestQuota.reserve_paced` compute future virtual-clock dispatch timestamps atomically in MongoDB so background crons (`federal_bond_risk`, `DocketMonitor`, `court_data_ingestor`) and interactive `/api/court-intel/*` routes (`court_dockets`) share the same per-API-account minute/hour/day limits without colliding or triggering upstream 429s, returning HTTP `429` (`quota_exhausted`) on interactive over-limit requests.
+- **Unlinked `rd` search hits wait for complete entry hydration before assigning filing IDs.** `_attach_document` passes `allow_doc_fallback=entries_complete` so temporary `list_docket_entries` outages hold the docket in `pending_slice` instead of minting provisional `doc:<id>` rows that would later withdraw when entry hydration maps the document to `entry:<id>`.
+
+### Tests
+- `tests/test_federal_bond_risk.py` verifies cross-caller CourtListener quota sharing and 429 handling across `DocketMonitor`, `court_data_ingestor`, interactive `court_dockets` endpoints, and concurrent virtual-clock callers, as well as stable `entry:<id>` persistence across transient entry-hydration outages.
+
 ## [Unreleased] — 2026-11-23 (Federal bond-risk contiguous names, capped slice checkpoints, and query stems)
 
 ### Fixed

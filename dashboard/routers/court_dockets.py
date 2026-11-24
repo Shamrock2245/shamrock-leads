@@ -20,9 +20,27 @@ court_intel_bp = APIRouter(prefix="/api", tags=["court_intel"])
 
 def _make_cl_client():
     from dashboard.services.courtlistener_client import CourtListenerClient
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_MINUTE,
+        build_courtlistener_request_gate,
+    )
 
     token = os.getenv("COURTLISTENER_API_TOKEN", "")
-    return CourtListenerClient(api_token=token if token else None)
+    client = CourtListenerClient(api_token=token if token else None)
+    try:
+        db = get_db()
+    except Exception:
+        db = None
+    client.set_request_gate(
+        build_courtlistener_request_gate(
+            db,
+            client=client,
+            pause_s=0.0,
+            run_limit=MAX_REQUESTS_PER_MINUTE,
+            block_on_minute_limit=True,
+        )
+    )
+    return client
 
 
 # ── Coverage & Status ────────────────────────────────────────────────────────
@@ -284,7 +302,11 @@ async def api_court_intel_live_search(
             judge=judge or None,
             page_size=min(max(int(limit), 1), 50),
         )
-        status = 200 if result.get("success") else 502
+        status = (
+            200
+            if result.get("success")
+            else (429 if result.get("skipped") == "quota_exhausted" else 502)
+        )
         return JSONResponse(status_code=status, content=result)
     except Exception as e:
         log.exception("Live search error: %s", e)
@@ -315,7 +337,11 @@ async def api_court_intel_docket_lookup(
             court=court.strip() or None,
             state=state.strip() or None,
         )
-        status = 200 if result.get("success") else 502
+        status = (
+            200
+            if result.get("success")
+            else (429 if result.get("skipped") == "quota_exhausted" else 502)
+        )
         return JSONResponse(status_code=status, content=result)
     except Exception as e:
         log.exception("Docket lookup error: %s", e)
@@ -427,7 +453,14 @@ async def api_court_intel_case_dossier(
                 },
             )
 
-        return JSONResponse(status_code=400 if "Invalid" in str(live_res.get("error", "")) else 502, content=live_res)
+        return JSONResponse(
+            status_code=(
+                429
+                if live_res.get("skipped") == "quota_exhausted"
+                else (400 if "Invalid" in str(live_res.get("error", "")) else 502)
+            ),
+            content=live_res,
+        )
     except Exception as e:
         log.exception("Case dossier error: %s", e)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
