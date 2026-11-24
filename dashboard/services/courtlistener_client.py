@@ -368,6 +368,7 @@ class CourtListenerClient:
         self._requests_made = 0
         self._errors = 0
         self._rate_limited = 0
+        self._last_ingest_status: dict = {}
 
     def set_request_gate(self, gate) -> None:
         """Install or clear an async callable ``gate(attempt, min_delay) -> bool`` that reserves capacity and awaits pacing/backoff before dispatch."""
@@ -1431,6 +1432,14 @@ class CourtListenerClient:
         """
         if self._in_maintenance_window():
             log.info("Skipping ingestion — FLP maintenance window active")
+            self._last_ingest_status = {
+                "maintenance": True,
+                "quota_exhausted": False,
+                "incomplete_coverage": False,
+                "failed_states": [],
+                "states_completed": [],
+                "states_skipped_quota": [],
+            }
             return []
 
         date_after = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y-%m-%d")
@@ -1438,8 +1447,12 @@ class CourtListenerClient:
 
         all_results = []
         skipped_irrelevant = 0
+        quota_exhausted = False
+        failed_states: list[str] = []
+        states_completed: list[str] = []
+        states_skipped_quota: list[str] = []
 
-        for state in target_states:
+        for idx, state in enumerate(target_states):
             state_courts = courts_for_state(state)
             if not state_courts:
                 continue
@@ -1467,16 +1480,31 @@ class CourtListenerClient:
                         all_results.append(normalized)
 
                 if result.get("skipped") == "quota_exhausted":
-                    log.info("Stopping CourtListener ingestion on state %s — request quota reached", state)
+                    quota_exhausted = True
+                    states_skipped_quota = target_states[idx:]
+                    log.warning("Stopping CourtListener ingestion on state %s — request quota reached", state)
                     break
+                if not result.get("success"):
+                    failed_states.append(state)
+                else:
+                    states_completed.append(state)
 
                 log.info("State %s: fetched %d results",
                          state, len(result.get("results", [])) if result.get("success") else 0)
                 if self._request_gate is None:
                     await asyncio.sleep(0.5)  # Rate-limit between states
             except Exception as e:
+                failed_states.append(state)
                 log.warning("Ingestion skip for state %s: %s", state, str(e)[:100])
 
+        self._last_ingest_status = {
+            "maintenance": False,
+            "quota_exhausted": quota_exhausted,
+            "incomplete_coverage": quota_exhausted or bool(failed_states),
+            "failed_states": failed_states,
+            "states_completed": states_completed,
+            "states_skipped_quota": states_skipped_quota,
+        }
         log.info("Ingested %d bail-relevant opinions from %d states (skipped %d irrelevant)",
                  len(all_results), len(target_states), skipped_irrelevant)
         return all_results

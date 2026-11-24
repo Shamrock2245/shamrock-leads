@@ -82,10 +82,58 @@ async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
             days_back=days_back, states=states, page_size=20,
             bail_relevant_only=True,
         )
+        ingest_status = getattr(client, "_last_ingest_status", None) or {}
+        quota_exhausted = bool(ingest_status.get("quota_exhausted"))
+        failed_states = list(ingest_status.get("failed_states") or [])
+        states_completed = list(ingest_status.get("states_completed") or [])
+        states_skipped_quota = list(ingest_status.get("states_skipped_quota") or [])
+        maintenance = bool(ingest_status.get("maintenance"))
 
         if not opinions:
+            if quota_exhausted:
+                return {
+                    "success": False,
+                    "skipped": "quota_exhausted",
+                    "incomplete_coverage": True,
+                    "error": "CourtListener request quota reached before opinion ingestion completed",
+                    "ingested": 0,
+                    "duplicates": 0,
+                    "total_fetched": 0,
+                    "states_queried": states or "all_se_us",
+                    "states_completed": states_completed,
+                    "states_skipped_quota": states_skipped_quota,
+                    "failed_states": failed_states,
+                    "api_health": client.get_api_health(),
+                }
+            if failed_states:
+                return {
+                    "success": False,
+                    "incomplete_coverage": True,
+                    "error": f"CourtListener opinion ingestion failed for states: {', '.join(failed_states)}",
+                    "ingested": 0,
+                    "duplicates": 0,
+                    "total_fetched": 0,
+                    "states_queried": states or "all_se_us",
+                    "states_completed": states_completed,
+                    "states_skipped_quota": states_skipped_quota,
+                    "failed_states": failed_states,
+                    "api_health": client.get_api_health(),
+                }
+            if maintenance:
+                return {
+                    "success": True,
+                    "skipped": "maintenance",
+                    "incomplete_coverage": False,
+                    "ingested": 0,
+                    "duplicates": 0,
+                    "message": "FLP maintenance window active",
+                    "api_health": client.get_api_health(),
+                }
             return {
-                "success": True, "ingested": 0, "duplicates": 0,
+                "success": True,
+                "incomplete_coverage": False,
+                "ingested": 0,
+                "duplicates": 0,
                 "message": "No bail-relevant opinions found",
                 "api_health": client.get_api_health(),
             }
@@ -129,6 +177,49 @@ async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
             await collection.insert_one(opinion)
             inserted += 1
 
+        if quota_exhausted:
+            log.warning(
+                "Ingestion stopped early on quota exhaustion: %d inserted, %d dupes, completed=%s, skipped=%s",
+                inserted, duplicates, states_completed, states_skipped_quota,
+            )
+            return {
+                "success": False,
+                "skipped": "quota_exhausted",
+                "incomplete_coverage": True,
+                "error": "CourtListener request quota reached during opinion ingestion",
+                "ingested": inserted,
+                "duplicates": duplicates,
+                "ai_analyzed": ai_analyzed,
+                "total_fetched": len(opinions),
+                "states_queried": states or "all_se_us",
+                "states_completed": states_completed,
+                "states_skipped_quota": states_skipped_quota,
+                "failed_states": failed_states,
+                "completed_at": datetime.now(timezone.utc).isoformat() + "Z",
+                "api_health": client.get_api_health(),
+            }
+
+        if failed_states:
+            log.warning(
+                "Ingestion incomplete across states %s: %d inserted, %d dupes",
+                failed_states, inserted, duplicates,
+            )
+            return {
+                "success": False,
+                "incomplete_coverage": True,
+                "error": f"CourtListener opinion ingestion incomplete; failed states: {', '.join(failed_states)}",
+                "ingested": inserted,
+                "duplicates": duplicates,
+                "ai_analyzed": ai_analyzed,
+                "total_fetched": len(opinions),
+                "states_queried": states or "all_se_us",
+                "states_completed": states_completed,
+                "states_skipped_quota": states_skipped_quota,
+                "failed_states": failed_states,
+                "completed_at": datetime.now(timezone.utc).isoformat() + "Z",
+                "api_health": client.get_api_health(),
+            }
+
         log.info(
             "Ingestion complete: %d inserted, %d dupes, %d AI-analyzed",
             inserted, duplicates, ai_analyzed,
@@ -136,11 +227,13 @@ async def run_ingestion(db, days_back: int = 180, states: list = None) -> dict:
 
         return {
             "success": True,
+            "incomplete_coverage": False,
             "ingested": inserted,
             "duplicates": duplicates,
             "ai_analyzed": ai_analyzed,
             "total_fetched": len(opinions),
             "states_queried": states or "all_se_us",
+            "states_completed": states_completed,
             "days_back": days_back,
             "completed_at": datetime.now(timezone.utc).isoformat() + "Z",
             "api_health": client.get_api_health(),

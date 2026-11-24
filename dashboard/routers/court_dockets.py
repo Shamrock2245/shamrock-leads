@@ -93,7 +93,11 @@ async def api_court_intel_ingest(request: Request):
         states = body.get("states", None)
 
         result = await run_ingestion(db, days_back=days_back, states=states)
-        status = 200 if result.get("success") else 500
+        status = (
+            200
+            if result.get("success")
+            else (429 if result.get("skipped") == "quota_exhausted" else 500)
+        )
         return JSONResponse(content=result, status_code=status)
     except Exception as e:
         log.exception("Ingestion error: %s", e)

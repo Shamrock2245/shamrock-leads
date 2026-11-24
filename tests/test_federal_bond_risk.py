@@ -5412,7 +5412,10 @@ async def test_all_courtlistener_callers_share_account_quota_and_space_concurren
 
     monkeypatch.setattr("dashboard.services.courtlistener_client.CourtListenerClient", _IngestClient)
     ingest_res = await run_ingestion(db, days_back=7, states=["FL"])
-    assert ingest_res["success"] is True
+    assert ingest_res["success"] is False
+    assert ingest_res["skipped"] == "quota_exhausted"
+    assert ingest_res["incomplete_coverage"] is True
+    assert ingest_res["states_skipped_quota"] == ["FL"]
     assert ingest_res["ingested"] == 0
     assert ingest_calls == []
 
@@ -6044,4 +6047,201 @@ async def test_shared_quota_fails_closed_on_missing_db_or_revalidation_failure(m
     db_cas.federal_bond_risk_state.update_one = cas_mismatch_on_revalidation
     gate_cas = build_courtlistener_request_gate(db_cas, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
     assert await gate_cas(0, 0.0) is False
+
+
+@pytest.mark.asyncio
+async def test_opinion_ingestion_propagates_quota_exhaustion_to_api_and_cron(monkeypatch):
+    import asyncio
+    from dashboard.cron import _run_court_intel
+    from dashboard.routers.court_dockets import court_intel_bp
+    from dashboard.services import federal_bond_risk as fbr
+    from dashboard.services.court_data_ingestor import run_ingestion
+    from dashboard.services.courtlistener_client import CourtListenerClient
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_HOUR,
+        _courtlistener_account_key,
+        _request_quota_id,
+    )
+
+    _enable(monkeypatch)
+    clock = [2000.0]
+    monkeypatch.setattr(fbr.time, "time", lambda: clock[0])
+
+    async def fast_sleep(seconds):
+        clock[0] += float(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    async def _no_ai(_opinion):
+        return None
+
+    async def _no_match(_db, _case_name):
+        return None
+
+    monkeypatch.setattr("dashboard.services.court_data_ingestor._ai_analyze_opinion", _no_ai)
+    monkeypatch.setattr("dashboard.services.court_data_ingestor._fuzzy_match_defendant", _no_match)
+
+    class _Response:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+            self.headers = {}
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    quota_id = _request_quota_id(_courtlistener_account_key(api_token="test-token"))
+
+    class _OutcomeDB(_DB):
+        def __init__(self):
+            super().__init__()
+            self.court_outcomes = _Collection()
+
+    app = FastAPI()
+    app.include_router(court_intel_bp)
+
+    def _wire_client(responses_fn, recorded_calls):
+        class _ScriptedIngestClient(CourtListenerClient):
+            def __init__(self, api_token=None):
+                super().__init__(api_token=api_token)
+                self._in_maintenance_window = lambda: False
+
+            async def _get_client(self):
+                class _H:
+                    is_closed = False
+
+                    async def get(self, url, params=None):
+                        recorded_calls.append((url, dict(params or {})))
+                        return responses_fn(url, params)
+
+                    async def aclose(self):
+                        return None
+
+                return _H()
+
+            async def close(self):
+                return None
+
+        monkeypatch.setattr("dashboard.services.courtlistener_client.CourtListenerClient", _ScriptedIngestClient)
+
+    # Case 1: Pre-exhausted quota -> run_ingestion fails, API returns 429, cron raises RuntimeError.
+    db1 = _OutcomeDB()
+    db1.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [clock[0] - 120.0] * MAX_REQUESTS_PER_HOUR,
+        "quota_revision": 0,
+    })
+    calls1 = []
+    _wire_client(lambda url, params: _Response(200, {"results": []}), calls1)
+
+    res1 = await run_ingestion(db1, days_back=7, states=["FL", "GA"])
+    assert res1["success"] is False
+    assert res1["skipped"] == "quota_exhausted"
+    assert res1["incomplete_coverage"] is True
+    assert res1["states_completed"] == []
+    assert res1["states_skipped_quota"] == ["FL", "GA"]
+    assert res1["ingested"] == 0
+    assert calls1 == []
+
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db1)
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db1)
+    api_resp1 = TestClient(app).post("/api/court-intel/ingest", json={"days_back": 7, "states": ["FL", "GA"]})
+    assert api_resp1.status_code == 429
+    assert api_resp1.json()["skipped"] == "quota_exhausted"
+    assert calls1 == []
+
+    with pytest.raises(RuntimeError, match="quota_exhausted"):
+        await _run_court_intel()
+    assert calls1 == []
+
+    # Case 2: Mid-loop partial exhaustion -> FL opinion persists, GA skipped -> still fails closed (429 + cron raises).
+    db2 = _OutcomeDB()
+    db2.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [clock[0] - 120.0] * (MAX_REQUESTS_PER_HOUR - 1),
+        "quota_revision": 0,
+    })
+    calls2 = []
+    _wire_client(
+        lambda url, params: _Response(
+            200,
+            {
+                "count": 1,
+                "results": [
+                    {
+                        "cluster_id": 7701,
+                        "court_id": "fla",
+                        "caseName": "State v. Doe",
+                        "docketNumber": "SC26-10",
+                        "dateFiled": "2026-11-20",
+                        "snippet": "Surety bond forfeiture and failure to appear.",
+                    }
+                ],
+            },
+        ),
+        calls2,
+    )
+
+    res2 = await run_ingestion(db2, days_back=7, states=["FL", "GA"])
+    assert res2["success"] is False
+    assert res2["skipped"] == "quota_exhausted"
+    assert res2["incomplete_coverage"] is True
+    assert res2["ingested"] == 1
+    assert res2["states_completed"] == ["FL"]
+    assert res2["states_skipped_quota"] == ["GA"]
+    assert len(calls2) == 1
+    assert len(db2.court_outcomes.docs) == 1
+
+    # Next API/cron attempt sees exhausted quota -> 429 and RuntimeError.
+    monkeypatch.setattr("dashboard.routers.court_dockets.get_db", lambda: db2)
+    monkeypatch.setattr("dashboard.extensions.get_db", lambda: db2)
+    api_resp2 = TestClient(app).post("/api/court-intel/ingest", json={"days_back": 7, "states": ["FL", "GA"]})
+    assert api_resp2.status_code == 429
+    assert api_resp2.json()["skipped"] == "quota_exhausted"
+    with pytest.raises(RuntimeError, match="quota_exhausted"):
+        await _run_court_intel()
+
+    # Case 3: Mid-state pagination exhaustion -> FL page 1 persists, page 2 hits quota -> state marked skipped_quota.
+    clock[0] = 3000.0
+    db3 = _OutcomeDB()
+    db3.federal_bond_risk_state.docs.append({
+        "_id": quota_id,
+        "timestamps": [clock[0] - 120.0] * (MAX_REQUESTS_PER_HOUR - 1),
+        "quota_revision": 0,
+    })
+    calls3 = []
+    _wire_client(
+        lambda url, params: _Response(
+            200,
+            {
+                "count": 2,
+                "next": "https://www.courtlistener.com/api/rest/v4/search/?cursor=p2",
+                "results": [
+                    {
+                        "cluster_id": 7702,
+                        "court_id": "fla",
+                        "caseName": "State v. Roe",
+                        "docketNumber": "SC26-11",
+                        "dateFiled": "2026-11-21",
+                        "snippet": "Revocation of pretrial release after warrant issued.",
+                    }
+                ],
+            },
+        ),
+        calls3,
+    )
+
+    res3 = await run_ingestion(db3, days_back=7, states=["FL"])
+    assert res3["success"] is False
+    assert res3["skipped"] == "quota_exhausted"
+    assert res3["incomplete_coverage"] is True
+    assert res3["ingested"] == 1
+    assert res3["states_completed"] == []
+    assert res3["states_skipped_quota"] == ["FL"]
+    assert len(calls3) == 1
+    assert len(db3.court_outcomes.docs) == 1
 

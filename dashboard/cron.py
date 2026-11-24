@@ -90,7 +90,14 @@ async def _run_docket_monitor():
     from dashboard.services.docket_monitor import run_docket_scan
     from dashboard.extensions import get_db
     result = await run_docket_scan(get_db(), limit=100)
-    logger.info("[DocketMonitor] ✅ %d bonds, %d events", result.get("bonds_scanned", 0), result.get("events_found", 0))
+    if result.get("quota_exhausted"):
+        logger.warning(
+            "[DocketMonitor] paused on quota_exhausted after %d bonds (%d events); cursor saved",
+            result.get("bonds_scanned", 0),
+            result.get("events_found", 0),
+        )
+    else:
+        logger.info("[DocketMonitor] ✅ %d bonds, %d events", result.get("bonds_scanned", 0), result.get("events_found", 0))
 
 def _alert_federal_bond_risk_outage(
     title: str,
@@ -200,6 +207,18 @@ async def _run_court_intel():
     from dashboard.services.court_data_ingestor import run_ingestion
     from dashboard.extensions import get_db
     result = await run_ingestion(get_db(), days_back=30)
+    if not result.get("success"):
+        reason = result.get("skipped") or result.get("error") or "incomplete_coverage"
+        logger.warning(
+            "[CourtIntel] incomplete/failed (%s): %d new, %d dupes, completed=%s, skipped_quota=%s, failed=%s",
+            reason,
+            result.get("ingested", 0),
+            result.get("duplicates", 0),
+            result.get("states_completed", []),
+            result.get("states_skipped_quota", []),
+            result.get("failed_states", []),
+        )
+        raise RuntimeError(f"CourtListener opinion ingestion incomplete: {reason}")
     logger.info("[CourtIntel] ✅ %d new, %d dupes", result.get("ingested", 0), result.get("duplicates", 0))
 
 async def _run_nlp_enrichment():
