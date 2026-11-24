@@ -4525,3 +4525,115 @@ async def test_deleted_in_window_entry_withdraws_link_but_out_of_window_entry_st
     assert by_filing["entry:7"]["match_status"] == "confirmed"
     assert by_filing["entry:7"]["auto_linked"] is True
     assert client.bond_case_id == "bond-1"
+
+
+@pytest.mark.asyncio
+async def test_enabling_multi_tenant_preserves_shamrock_source_ids_and_isolates_other_tenants(monkeypatch):
+    monkeypatch.setenv(FLAG, "1")
+    monkeypatch.setenv("COURTLISTENER_API_TOKEN", "test-token")
+    monkeypatch.delenv("SAAS_MULTI_TENANT", raising=False)
+    from dashboard.services.federal_bond_risk import (
+        _pending_slice_id,
+        _save_seed_offset,
+        _search_before_id,
+        _seed_cursor_id,
+        _seed_offset,
+    )
+    from dashboard.tenancy.context import bind_job_tenant
+    from dashboard.tenancy.scope import TenantScopedDatabase
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        entries=[{"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": today}],
+    )
+    raw = _DB()
+    raw.active_bonds.docs.append({
+        "_id": "shamrock-bond-1",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    raw.defendants.docs.append({
+        "_id": "shamrock-def-1",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    notifier = _Notifier()
+
+    # Phase 1: Single-tenant mode (SAAS_MULTI_TENANT off).
+    scan1 = await run_federal_bond_risk_scan(raw, client=court, notifier=notifier, pause_s=0)
+    assert scan1["confirmed"] == 1
+    assert len(notifier.calls) == 1
+    assert len(raw.docket_events.docs) == 1
+    assert raw.docket_events.docs[0]["source_id"] == "fl-federal:1001:warrant:entry:42:bond-1"
+    assert len(raw.notifications.docs) == 1
+    assert raw.notifications.docs[0]["claim_key"] == "fl-federal:1001:warrant:entry:42:bond-1:confirmed:0"
+    await _save_seed_offset(raw, 4)
+
+    # Phase 2: Backfill tenant_id="shamrock" on pre-tenancy rows (preserving source_id/claim_key/_id) and flip flag on.
+    for collection_name in (
+        "active_bonds",
+        "defendants",
+        "docket_events",
+        "notifications",
+        "audit_events",
+        "federal_bond_risk_state",
+    ):
+        for doc in getattr(raw, collection_name).docs:
+            doc["tenant_id"] = "shamrock"
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    db = TenantScopedDatabase(raw)
+
+    with bind_job_tenant("shamrock", "federal_bond_risk"):
+        assert _search_before_id("r") == "search_before:r"
+        assert _seed_cursor_id() == "seed_cursor"
+        assert _pending_slice_id() == "pending_slice"
+        assert await _seed_offset(db) == 4
+        scan2 = await run_federal_bond_risk_scan(db, client=court, notifier=notifier, pause_s=0)
+    assert scan2["rows_written"] == 0
+    assert scan2["slack_sent"] == 0
+    assert len(notifier.calls) == 1
+    assert len(raw.docket_events.docs) == 1
+    assert len(raw.notifications.docs) == 1
+    assert len(raw.audit_events.docs) == 1
+
+    # Phase 3: Second tenant on the same shared DB uses distinct tenant-scoped source_id / claim_key values.
+    raw.active_bonds.docs.append({
+        "_id": "alpha-bond-1",
+        "tenant_id": "alpha",
+        "Bond_Case_ID": "bond-1",
+        "Defendant_ID": "def-1",
+        "defendant_name": "John Smith",
+        "status": "active",
+    })
+    raw.defendants.docs.append({
+        "_id": "alpha-def-1",
+        "tenant_id": "alpha",
+        "Defendant_ID": "def-1",
+        "date_of_birth": "1985-01-15",
+    })
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        assert _search_before_id("r") == "search_before:r:alpha"
+        assert _seed_cursor_id() == "seed_cursor:alpha"
+        assert _pending_slice_id() == "pending_slice:alpha"
+        scan3 = await run_federal_bond_risk_scan(db, client=court, notifier=notifier, pause_s=0)
+    assert scan3["rows_written"] == 1
+    assert scan3["confirmed"] == 1
+    assert scan3["slack_sent"] == 1
+    assert {doc["source_id"] for doc in raw.docket_events.docs} == {
+        "fl-federal:1001:warrant:entry:42:bond-1",
+        "alpha:fl-federal:1001:warrant:entry:42:bond-1",
+    }
+    assert {doc["claim_key"] for doc in raw.notifications.docs} == {
+        "fl-federal:1001:warrant:entry:42:bond-1:confirmed:0",
+        "alpha:fl-federal:1001:warrant:entry:42:bond-1:confirmed:0",
+    }
+
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        scan4 = await run_federal_bond_risk_scan(db, client=court, notifier=notifier, pause_s=0)
+    assert scan4["rows_written"] == 0
+    assert scan4["slack_sent"] == 0
+    assert len(notifier.calls) == 2

@@ -1573,13 +1573,23 @@ def select_seed_batch(seeds: list[dict], offset: int, ceiling: int) -> tuple[lis
 
 
 def _tenant_scope_token() -> str:
-    """Empty while multi-tenant is off, so existing single-tenant keys stay put."""
+    """Empty while multi-tenant is off or for Shamrock (tenant #1).
+
+    Pre-tenancy rows belong to Shamrock and keep their unprefixed keys after
+    the tenancy backfill stamps ``tenant_id = "shamrock"``. Other tenants
+    receive their sanitized slug so globally unique keys (``_id``,
+    ``(source, source_id)``, ``(type, claim_key)``) never collide with
+    Shamrock or with one another.
+    """
+    from dashboard.tenancy.constants import SHAMROCK_TENANT_ID
     from dashboard.tenancy.context import current_tenant_id
     from dashboard.tenancy.flag import multi_tenant_enabled
 
     if not multi_tenant_enabled():
         return ""
-    tenant = re.sub(r"[^a-z0-9_-]", "", (current_tenant_id() or "unscoped").strip().lower())
+    tenant = re.sub(r"[^a-z0-9_-]", "", (current_tenant_id() or "").strip().lower())
+    if tenant == SHAMROCK_TENANT_ID:
+        return ""
     return tenant or "unscoped"
 
 
@@ -2303,7 +2313,7 @@ async def _claim_insert(db, document: dict) -> str:
 def _notification_claim_key(source_id: str, status: str, revision: int = 0) -> str:
     """One key per transition. A later return to the same status is a new key."""
     token = _tenant_scope_token()
-    prefix = f"{token}:" if token else ""
+    prefix = f"{token}:" if token and not source_id.startswith(f"{token}:") else ""
     return f"{prefix}{source_id}:{status}:{int(revision or 0)}"
 
 
