@@ -4637,3 +4637,174 @@ async def test_enabling_multi_tenant_preserves_shamrock_source_ids_and_isolates_
     assert scan4["rows_written"] == 0
     assert scan4["slack_sent"] == 0
     assert len(notifier.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_default_pause_and_inter_request_pacing_respect_courtlistener_minute_limit(monkeypatch):
+    import asyncio
+    import inspect
+    import dashboard.services.federal_bond_risk as fbr
+    from dashboard.cron import CRON_REGISTRY
+
+    _enable(monkeypatch)
+    sig = inspect.signature(fbr.run_federal_bond_risk_scan)
+    assert sig.parameters["pause_s"].default == fbr.DEFAULT_PAUSE_S
+    assert fbr.DEFAULT_PAUSE_S >= 12.0
+    assert fbr.MAX_REQUESTS_PER_MINUTE <= 5
+    assert fbr.MAX_REQUESTS_PER_HOUR <= 50
+    assert fbr.MAX_REQUESTS_PER_DAY <= 125
+    assert fbr.MAX_REQUESTS_PER_RUN <= 25
+    cron_job = next(row for row in CRON_REGISTRY if row.name == "federal_bond_risk")
+    assert cron_job.interval >= fbr.MAX_REQUESTS_PER_RUN * fbr.DEFAULT_PAUSE_S
+
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    today = datetime.now(timezone.utc).date().isoformat()
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        entries=[{"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": today}],
+    )
+    db = _DB()
+    result = await fbr.run_federal_bond_risk_scan(
+        db,
+        client=court,
+        notifier=_Notifier(),
+        pause_s=fbr.DEFAULT_PAUSE_S,
+        clients=[_client(dobs=["1985-01-15"])],
+    )
+    assert result["confirmed"] == 1
+    assert result["requests_made"] == 5
+    assert len(sleeps) == 4
+    assert all(delay >= 12.0 for delay in sleeps)
+
+
+@pytest.mark.asyncio
+async def test_per_run_request_budget_saves_pending_slice_and_drains_on_next_scan(monkeypatch):
+    _enable(monkeypatch)
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    class _TwoDocketCourt(_CourtListener):
+        def __init__(self):
+            super().__init__(parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}])
+            self.search_runs = 0
+
+        async def search_recent(self, **kwargs):
+            self.calls.append(("search_recent", kwargs))
+            if kwargs["search_type"] != "r":
+                return {"success": True, "results": [], "truncated": False}
+            self.search_runs += 1
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [
+                    _window_hit(3001, today, "Detention hearing", "2:24-cr-00301"),
+                    _window_hit(3002, today, "Detention hearing", "2:24-cr-00302"),
+                ],
+            }
+
+        async def get_docket_brief(self, docket_id):
+            self.calls.append(("brief", docket_id))
+            num = f"2:24-cr-00{docket_id - 2700}"
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {"id": docket_id, "court_id": "flmd", "docket_number": num, "case_name": "United States v. John Smith"},
+            }
+
+        async def list_docket_entries(self, docket_id, **kwargs):
+            self.calls.append(("entries", docket_id))
+            return {
+                "success": True,
+                "truncated": False,
+                "results": [{"id": docket_id + 10, "description": "Detention hearing", "date_filed": today}],
+            }
+
+    court = _TwoDocketCourt()
+    db = _DB()
+    notifier = _Notifier()
+    client = _client(dobs=["1985-01-15"])
+
+    scan1 = await run_federal_bond_risk_scan(
+        db, client=court, notifier=notifier, pause_s=0, clients=[client], max_requests=6,
+    )
+    assert scan1["success"] is True
+    assert scan1["truncated"] is True
+    assert scan1["incomplete_coverage"] is False
+    assert scan1["requests_made"] == 5
+    assert "request budget" in scan1["warning"]
+    assert {doc["docket_id"] for doc in db.docket_events.docs} == {"3001"}
+
+    # Scan 2 drains docket 3002 from pending_slice without re-searching CourtListener.
+    scan2 = await run_federal_bond_risk_scan(
+        db, client=court, notifier=notifier, pause_s=0, clients=[client], max_requests=6,
+    )
+    assert scan2["success"] is True
+    assert scan2["incomplete_coverage"] is False
+    assert scan2["requests_made"] == 3
+    assert court.search_runs == 1
+    assert {doc["docket_id"] for doc in db.docket_events.docs} == {"3001", "3002"}
+
+
+@pytest.mark.asyncio
+async def test_durable_hourly_and_daily_quota_defers_scans_without_http_calls_and_scopes_by_tenant(monkeypatch):
+    import time
+    from dashboard.services.federal_bond_risk import (
+        MAX_REQUESTS_PER_DAY,
+        MAX_REQUESTS_PER_HOUR,
+        _request_quota_id,
+    )
+    from dashboard.tenancy.context import bind_job_tenant
+
+    _enable(monkeypatch)
+    now = time.time()
+    court = _CourtListener(
+        hits=[_hit(recap_documents=[])],
+        parties=[{"name": "Smith, John", "extra_info": "DOB: 01/15/1985"}],
+        entries=[{"id": 42, "description": "Arrest warrant issued for John Smith", "date_filed": datetime.now(timezone.utc).date().isoformat()}],
+    )
+    db = _DB()
+
+    # Hourly quota exhausted (50 calls 10 seconds ago) -> skips with zero CourtListener HTTP calls.
+    db.federal_bond_risk_state.docs.append({
+        "_id": _request_quota_id(),
+        "timestamps": [now - 10.0] * MAX_REQUESTS_PER_HOUR,
+    })
+    hourly_blocked = await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert hourly_blocked["success"] is True
+    assert hourly_blocked["skipped"] == "quota_exhausted"
+    assert hourly_blocked["truncated"] is True
+    assert hourly_blocked["incomplete_coverage"] is False
+    assert hourly_blocked["requests_made"] == 0
+    assert court.calls == []
+
+    # Daily quota exhausted outside the 1-hour window (125 calls 2-10 hours ago) -> also skips with zero calls.
+    db.federal_bond_risk_state.docs[0]["timestamps"] = [
+        now - 7200.0 - (idx * 200.0) for idx in range(MAX_REQUESTS_PER_DAY)
+    ]
+    daily_blocked = await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert daily_blocked["success"] is True
+    assert daily_blocked["skipped"] == "quota_exhausted"
+    assert daily_blocked["truncated"] is True
+    assert daily_blocked["incomplete_coverage"] is False
+    assert daily_blocked["requests_made"] == 0
+    assert court.calls == []
+
+    # Once old timestamps fall outside the 24-hour window, the scan proceeds and records new requests.
+    db.federal_bond_risk_state.docs[0]["timestamps"] = [now - 90000.0] * MAX_REQUESTS_PER_DAY
+    recovered = await _scan(db, court, [_client(dobs=["1985-01-15"])])
+    assert recovered["skipped"] is None
+    assert recovered["confirmed"] == 1
+    assert recovered["requests_made"] == 5
+    assert len(db.federal_bond_risk_state.docs[0]["timestamps"]) == 5
+
+    # Tenant isolation keeps Shamrock unprefixed and scopes secondary tenants.
+    monkeypatch.setenv("SAAS_MULTI_TENANT", "1")
+    with bind_job_tenant("shamrock", "federal_bond_risk"):
+        assert _request_quota_id() == "request_quota"
+    with bind_job_tenant("alpha", "federal_bond_risk"):
+        assert _request_quota_id() == "request_quota:alpha"
