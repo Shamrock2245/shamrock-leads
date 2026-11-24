@@ -5709,20 +5709,21 @@ async def test_delayed_reserved_dispatch_preserves_spacing_for_following_sleeper
     sleep_log = []
     a_started_sleep = asyncio.Event()
     b_reserved = asyncio.Event()
-    a_resume = asyncio.Event()
+    a_dispatched = asyncio.Event()
 
     async def scripted_sleep(seconds):
         sleep_log.append((clock[0], seconds))
         if not a_started_sleep.is_set() and abs(seconds - 50.0) < 0.01:
             a_started_sleep.set()
-            await a_resume.wait()
+            await b_reserved.wait()
             # Simulate Sleeper A waking 10s late at 1060.0 (instead of 1050.0).
             clock[0] = 1060.0
             return
         if not b_reserved.is_set() and abs(seconds - 62.0) < 0.01:
             b_reserved.set()
-            a_resume.set()
-            clock[0] += float(seconds)
+            await a_dispatched.wait()
+            # Sleeper B wakes at its scheduled 1062.0 after A has already confirmed 1060.0.
+            clock[0] = max(clock[0], 1062.0)
             return
         clock[0] += float(seconds)
 
@@ -5732,6 +5733,8 @@ async def test_delayed_reserved_dispatch_preserves_spacing_for_following_sleeper
         allowed = await gate(0, 0.0)
         assert allowed is True
         dispatches.append((label, clock[0]))
+        if label == "A":
+            a_dispatched.set()
 
     gate_a = build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
     gate_b = build_courtlistener_request_gate(db, api_token="test-token", pause_s=DEFAULT_PAUSE_S)
